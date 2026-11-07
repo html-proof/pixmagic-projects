@@ -525,8 +525,8 @@ tests fail or pass wrongly; it gives no way to run code as ghmain.
 Labels alone wouldn't keep other jobs off it: any branch's workflow can ask for any label. Its job
 hook (`infra/runner/main-only-hook.js`, which the runner runs with its own Node before every job;
 a copy in `C:\ProgramData\bizinsights-runner`, administrators-only) fails every job before its first
-step unless GitHub says it is `ci.yml` for a push to `main`, or `aws-deploy.yml` from `main` started
-by a CI run or by hand. Those values come from the job's github context, which a workflow file can't
+step unless GitHub says it is `ci.yml` for a push to `main`, or `aws-deploy.yml` (or
+`ikorex-deploy.yml`, docs/ikorex-migration) from `main` started by a CI run or by hand. Those values come from the job's github context, which a workflow file can't
 change. A refused job's "Set up runner" step says why. The script writes the hook into the runner's
 `.env` before it registers the runner, so a job already queued for the label meets the hook too.
 It refuses a runner, hook or browsers folder that already exists and isn't an administrator's

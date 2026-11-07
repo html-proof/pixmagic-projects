@@ -12,7 +12,8 @@ The self-hosted deployment, built for the move off AWS (docs/ikorex-migration). 
 | `evolution/start.sh` | The WhatsApp service's start (as `infra/cdk/lib/whatsapp-stack.ts`'s) |
 | `monitoring/` | Scrape targets, alert rules, Alertmanager template, Grafana provisioning and dashboard, Loki, Alloy |
 | `env/*.example` | Every setting and secret, by file; the real `env/*.env` live only on the server (git-ignored) |
-| `scripts/ship.sh` | Build a commit here, send it, build the image on the server, deploy |
+| `scripts/ship.sh` | Build a commit here, send it, build the image on the server, deploy; or in two halves (`pack`, `send`), as Deploy to iKorex (`.github/workflows/ikorex-deploy.yml`) runs it |
+| `scripts/ssh-gate.sh` | On the server: all the deploy key may run (`receive`, `deploy`); installed as `~/bin/bizinsights-ssh-gate` |
 | `scripts/deploy.sh` | On the server: migrations, switch, health checks, automatic rollback |
 | `scripts/render-monitoring.sh` | On the server: Alertmanager's file from its template |
 | `scripts/export-env.mjs` | AWS's secrets straight into a file on the server, never on screen |

@@ -3,6 +3,23 @@
 What has been tested, how, and with what result. Only runs that happened are recorded here; a
 criterion with no run says so. Newest first.
 
+## 2026-11-07: Deploy to iKorex (the GitHub workflow), on the owner's PC
+
+Branch `claude/ssh-key-ikorex-server-663aff`, on top of the database copy's (below). Git Bash, Node 24,
+Windows 11; no server (SSH still waits for the administrator), so ssh, Docker and `deploy.sh` are
+stand-ins that record how they were called. What it is: [PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE.md#deploy-to-ikorex-github-actions).
+
+| Test | What it shows | Result |
+| --- | --- | --- |
+| `apps/aws/test/ikorexShip.test.ts` (17 tests) | `ship.sh pack` puts the bundle under `releases/<tag>/server` and `infra/ikorex` as committed at the top, never `env/*.env`, `.env` or the two rendered alert files, and refuses a checkout with changes; `ship.sh send` with the deploy key sends `receive` then `deploy` through the gate, with the config file and the pinned host key, and the server's `env/app.env` is untouched; the same with the owner's key as shell commands; another commit's release and an unknown project refused; the gate refuses an interactive login, a shell, other commands, other projects, bad tags, a `;` or `$( )` or a fourth word or a second line (nothing runs, nothing is created), keeps the server's settings whatever the archive holds, and deploys only a release it has received | **17 passed** (the first run found the archive carried an empty `infra/ikorex/` folder entry, as `ship.sh` did before: now only committed files go) |
+| Git Bash's ssh with the workflow's files | A key file and ssh_config in a temporary folder, the host key file by its Windows path: the key is loaded and offered and the host key checked (against github.com, so as not to spend one of the iKorex server's five failed logins) | **Works** |
+| The secret as written to the key file | A private key pasted with CRLF and a trailing newline still loads (`ssh-keygen -y`) | **Works** |
+| `infra/runner/main-only-hook.js` | `ikorex-deploy.yml` from main on `workflow_run` allowed, as `aws-deploy.yml`; another workflow, or a push event, refused | **As intended** |
+| The workflow file | Parses (js-yaml); its jobs, conditions and steps are as written | **Parses** (no actionlint on the PC; GitHub's own check is the first push) |
+| `apps/aws` suite, `tsc --noEmit`, `eslint` | Nothing else moved | **13 files passed** (121 tests); `copyDb.test.ts` can't load without a PostgreSQL URL on this PC (CI gives it one); clean |
+
+Not run: the workflow itself (it is off until the setup is done) and anything on the server.
+
 ## 2026-11-07: the database copy and the security audit, on the owner's PC
 
 Branch `claude/ikorex-db-copy-security`. PostgreSQL 18.6 (a throwaway local cluster), Node 24, Git
