@@ -1,0 +1,4 @@
+# The iKorex server's SSH host key (docs/ikorex-migration). Its fingerprint,
+# SHA256:5whPPmUOtct7uImi8hLLqyVU5vv1j470FAfLI5Or+TA, is the one in the administrator's SSH guide (5 Nov 2026);
+# infra/ikorex/scripts/copy-db.mjs checks it again before it connects. Public: a host key is not a secret.
+103.146.112.176 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP+xD9d/sr2VI3HK36a77pZDXStIUzJ9+rCPlFUh6NpD

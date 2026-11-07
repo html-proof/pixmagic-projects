@@ -87,6 +87,10 @@ services:
     logging: *logging
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    # The image's entrypoint starts as root to own the data folder, then becomes `postgres`: these
+    # five and nothing else (SECURITY_AUDIT.md).
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     stop_grace_period: 120s
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "/var/run/postgresql", "-U", "app", "-d", "app"]
@@ -110,6 +114,7 @@ services:
     logging: *logging
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     depends_on:
       postgres: { condition: service_healthy }
     mem_limit: 768m
@@ -171,6 +176,8 @@ services:
     logging: *logging
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
+    # Root inside its image, writing only what root owns (its migrations, /tmp): no capability needed.
+    cap_drop: [ALL]
     stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/assets/health',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]

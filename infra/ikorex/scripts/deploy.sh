@@ -18,6 +18,11 @@ compose() { docker compose -p "$project" "$@"; }
 for f in env/app.env env/owner.env env/postgres.env env/evolution.env env/cloudflared.env; do
   [ -f "$f" ] || { log "missing $f (env/*.example says what goes in it)"; exit 1; }
 done
+# A placeholder left from an env/*.example is a password anyone can read on GitHub (SECURITY_AUDIT.md).
+if placeholders="$(grep -l 'CHANGE_ME' env/*.env 2>/dev/null)"; then
+  log "placeholder values (CHANGE_ME) still in: $(echo $placeholders): give each its own value"
+  exit 1
+fi
 [ -f .env ] || printf 'APP_TAG=\nSCHEDULES=off\n' > .env
 docker image inspect "bizinsights:$tag" >/dev/null
 previous="$(sed -n 's/^APP_TAG=//p' .env)"

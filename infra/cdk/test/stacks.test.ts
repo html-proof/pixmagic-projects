@@ -93,6 +93,20 @@ describe("the data stack", () => {
     }
   });
 
+  it("lets the admin host write database dumps under db-export/ only, which the bucket deletes within two days", () => {
+    const role = Object.entries(t.data.findResources("AWS::IAM::Role")).find(([, r]) => r.Properties.RoleName === "insights-production-admin-host")![0];
+    const statements = Object.values(t.data.findResources("AWS::IAM::Policy"))
+      .filter((p) => JSON.stringify(p.Properties.Roles).includes(role))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown }>);
+    const puts = statements.filter((s) => [s.Action].flat().some((a) => a.startsWith("s3:Put")));
+    expect(puts).toHaveLength(1);
+    expect(JSON.stringify(puts[0]!.Resource)).toContain("/db-export/*");
+    t.data.hasResourceProperties("AWS::S3::Bucket", {
+      BucketName: Match.stringLikeRegexp("-artifacts-"),
+      LifecycleConfiguration: { Rules: Match.arrayWith([Match.objectLike({ Id: "db-export", Prefix: "db-export/", ExpirationInDays: 1, NoncurrentVersionExpiration: { NoncurrentDays: 1 } })]) },
+    });
+  });
+
   it("blocks public access to every bucket and requires TLS", () => {
     const buckets = Object.values(t.data.findResources("AWS::S3::Bucket"));
     expect(buckets).toHaveLength(3);

@@ -83,6 +83,24 @@ else
 fi
 groups
 
+# For SECURITY_AUDIT.md's open items: settings and names only, never a file's contents.
+section "security settings (read-only)"
+echo "-- sshd (password and root logins)"
+grep -hiE '^\s*(PasswordAuthentication|PermitRootLogin|PubkeyAuthentication|KbdInteractiveAuthentication|AllowUsers|AllowGroups)\b' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | sed 's/^\s*//'
+echo "-- docker group (root on this host for its members): $(getent group docker | cut -d: -f4)"
+docker info --format 'rootless={{.Rootless}} security={{.SecurityOptions}} cgroup={{.CgroupVersion}} logging={{.LoggingDriver}}' 2>&1 | head -1
+[ -r /etc/docker/daemon.json ] && echo "daemon.json keys: $(grep -oE '"[A-Za-z0-9_-]+"[[:space:]]*:' /etc/docker/daemon.json | tr -d '":' | tr -s ' \n' ' ')"
+echo "-- disks (crypto_LUKS = encrypted at rest)"
+lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINTS 2>/dev/null || lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINT
+echo "-- automatic security updates"
+systemctl is-active unattended-upgrades 2>/dev/null || echo "unattended-upgrades: not running"
+grep -hE 'Unattended-Upgrade|Update-Package-Lists' /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null
+echo "fail2ban: $(systemctl is-active fail2ban 2>/dev/null || echo unknown)"
+echo "-- programs running as $(id -un) (names and counts)"
+ps -u "$(id -u)" -o comm= 2>/dev/null | sort | uniq -c | sort -rn | head -25
+echo "-- files under ~ that every user can read, by kind (counts only)"
+echo ".env files: $(find ~ -maxdepth 4 -name '*.env' -perm -o=r 2>/dev/null | wc -l), key files: $(find ~ -maxdepth 4 \( -name 'id_*' ! -name '*.pub' -o -name '*.pem' -o -name '*.key' \) -perm -o=r 2>/dev/null | wc -l)"
+
 section "deployer's home (names and sizes only)"
 ls -la ~ 2>/dev/null
 du -sh ~/* 2>/dev/null | sort -h | tail -20

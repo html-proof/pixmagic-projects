@@ -3,6 +3,23 @@
 What has been tested, how, and with what result. Only runs that happened are recorded here; a
 criterion with no run says so. Newest first.
 
+## 2026-11-07: the database copy and the security audit, on the owner's PC
+
+Branch `claude/ikorex-db-copy-security`. PostgreSQL 18.6 (a throwaway local cluster), Node 24, Git
+Bash, Windows 11; Docker's CLI only (its engine not running). Details:
+[DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md), [SECURITY_AUDIT.md](SECURITY_AUDIT.md).
+
+| Test | What it shows | Result |
+| --- | --- | --- |
+| `apps/aws/test/copyDb.test.ts` (6 tests) | `copy-db.sh` on the real schema (65 migrations, 155 tables, 149 under row-level security, 293 policies) and a database owned by its own role: the dump's counts are its snapshot's while inserts keep arriving (3,037 rows in the snapshot, 14,467 live by the end); the restore equals the snapshot table by table, row-level security and policies included, the second database's tables owned by its role; refusals (wrong checksum before any change, a target with tables, another session connected); the rehearsal's databases dropped | **6 passed** |
+| `infra/ikorex/scripts/copy-db-lib.test.mjs` (8 tests) | The pinned host key's fingerprint is the guide's; settings can't break out of their quotes; the comparison catches a missing, extra or different table, lost row-level security, a changed policy; the admin host's script carries no password | **8 passed** |
+| `apps/aws/test/ikorexCompose.test.ts` (8 tests) | What `docker compose config` makes of both projects (14 services, every profile): no published port, host network or privileged container; every capability dropped, `postgres` given back its entrypoint's five; memory and CPU limits on all; the Docker socket only in the optional log collector, read-only; `deploy.sh` and `render-monitoring.sh` refuse `CHANGE_ME` placeholders | **8 passed** (the capability test fails on the files before this change) |
+| `infra/cdk` tests | The admin host may write under `db-export/*` only; that prefix expires in a day | **184 passed** |
+| `apps/aws` suite with PostgreSQL, `tsc --noEmit`, `eslint` | Nothing else moved | **14 files, 123 tests passed; clean** |
+
+Not run: anything on AWS or the server (the AWS session had expired; SSH waits for the
+administrator). The copy's first real run is the stage B rehearsal.
+
 ## 2026-11-07: stage A live on AWS; the SMS events bridge
 
 Stage A (#348) merged as `b7e9ef3e`; its Deploy to AWS passed (unit tests, `cdk deploy`, the
@@ -69,10 +86,10 @@ capacity claim); everything that touches production (stages D-F).
 | 12 | Scheduled jobs work | **Code tested** (a real tick ran in the smoke test); on the server: not yet |
 | 13 | File uploads and downloads work | Blob store tested (above); there are no customer file uploads in the app |
 | 14 | Customer permissions work | Unchanged code and database roles; not yet tested on the server |
-| 15 | Historical analytics intact | Not yet (stage D: row counts table by table) |
+| 15 | Historical analytics intact | The copy and its table-by-table check tested against PostgreSQL ([DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md)); against RDS: not yet (stage B rehearsal, stage D) |
 | 16 | Backups and restore tested | Scripts written; not yet run (stage C) |
 | 17 | Monitoring and alerting work | Configured; not yet run (stage C) |
-| 18 | No cross-tenant leakage | The new tables carry no tenant data and the tenant role has no rights on them (checked); row-level security unchanged; on the server: not yet |
+| 18 | No cross-tenant leakage | The new tables carry no tenant data and the tenant role has no rights on them (checked); the copy carries every table's row-level security and policies unchanged (tested); on the server: not yet |
 | 19 | Existing iKorex websites keep working | Not yet (nothing has run on the server) |
 | 20 | n8n and the CCTV tunnel keep working | Not yet |
 | 21 | Rollback documented and tested | Documented ([ROLLBACK_PLAN.md](ROLLBACK_PLAN.md)); `deploy.sh`'s automatic rollback not yet run |

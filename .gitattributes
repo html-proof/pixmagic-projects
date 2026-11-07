@@ -1,2 +1,4 @@
 # Shell scripts run on Linux (CI): never CRLF.
 *.sh text eol=lf
+# Read by OpenSSH (ship.sh, copy-db.mjs): one key per line, never CRLF.
+infra/ikorex/known_hosts text eol=lf

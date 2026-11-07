@@ -19,10 +19,17 @@ x-common: &common
   logging: *logging
   restart: unless-stopped
   security_opt: ["no-new-privileges:true"]
+  # Each runs as an unprivileged user of its image: no Linux capability at all.
+  cap_drop: [ALL]
+
+# Writes only to its volume: the rest of its filesystem read-only.
+x-read-only: &read-only
+  read_only: true
+  tmpfs: ["/tmp"]
 
 services:
   prometheus:
-    <<: *common
+    <<: [*common, *read-only]
     image: prom/prometheus:v3.16.0
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -37,7 +44,7 @@ services:
     cpus: 0.5
 
   alertmanager:
-    <<: *common
+    <<: [*common, *read-only]
     image: prom/alertmanager:v0.34.2
     command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
     volumes:
@@ -61,7 +68,7 @@ services:
 
   # The host's CPU, memory, disk and network (read-only views of / and /proc).
   node-exporter:
-    <<: *common
+    <<: [*common, *read-only]
     image: prom/node-exporter:v1.12.1
     command: ["--path.rootfs=/host", "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+)($|/)"]
     pid: host
@@ -70,7 +77,7 @@ services:
     cpus: 0.2
 
   postgres-exporter:
-    <<: *common
+    <<: [*common, *read-only]
     image: prometheuscommunity/postgres-exporter:v0.20.1
     env_file: [env/postgres-exporter.env]
     mem_limit: 64m

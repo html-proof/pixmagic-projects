@@ -244,11 +244,17 @@ export class DataStack extends Stack {
       removalPolicy: RemovalPolicy.RETAIN,
     });
     // Database dumps for moves and restores (kept 30 days), and anything else the deploy hands over.
+    // db-export/: the dumps the admin host makes for the move to the iKorex server
+    // (infra/ikorex/scripts/copy-db.mjs deletes every version once the copy is checked). If it
+    // can't, the bucket does: a day as the current version, a day more as an old one.
     this.artifacts = new s3.Bucket(this, "Artifacts", {
       ...privateBucket,
       ...loggedBucket(`${prefix}-artifacts-${cfg.account}`, accessLogs),
       versioned: true,
-      lifecycleRules: [{ expiration: Duration.days(30), noncurrentVersionExpiration: Duration.days(7), abortIncompleteMultipartUploadAfter: Duration.days(1) }],
+      lifecycleRules: [
+        { expiration: Duration.days(30), noncurrentVersionExpiration: Duration.days(7), abortIncompleteMultipartUploadAfter: Duration.days(1) },
+        { id: "db-export", prefix: "db-export/", expiration: Duration.days(1), noncurrentVersionExpiration: Duration.days(1) },
+      ],
       removalPolicy: RemovalPolicy.RETAIN,
     });
     for (const bucket of [this.payloads, this.artifacts]) bucket.node.addDependency(this.accessLogs.policy!);
@@ -263,6 +269,8 @@ export class DataStack extends Stack {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore")],
     });
     this.artifacts.grantRead(adminRole);
+    // Writes only there: the dumps for the iKorex server (copy-db.mjs).
+    this.artifacts.grantPut(adminRole, "db-export/*");
     this.dbSecret.grantRead(adminRole);
     this.systemDbSecret.grantRead(adminRole);
     this.appSecret.grantRead(adminRole);
