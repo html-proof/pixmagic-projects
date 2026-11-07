@@ -6,17 +6,18 @@
  *  - campaigns started when due, completed when nothing is left;
  *  - once a day: inactive and VIP customer rules, senders re-checked with AWS, retention;
  *  - AWS's opt-out lists (STOP replies, numbers opted out in the console) onto the stores'
- *    suppression lists.
+ *    suppression lists (Twilio's STOP replies come by webhook instead, core/sms/twilio.ts);
+ *  - Twilio's prices, which its status reports don't carry.
  * Each step runs on its own: one that throws is logged and the rest still run.
  */
 import { systemDb, type SmsContact } from "@app/db";
-import { billingMonth, FINAL_EVENT_WAIT_MS } from "@app/shared/sms";
+import { ACCEPTED_STATUSES, billingMonth, FINAL_EVENT_WAIT_MS } from "@app/shared/sms";
 import { logger } from "../logger.js";
 import { parseRule, runSmsRules, segmentFilterOf } from "./automations.js";
 import { completeCampaigns, contactConditionsWhere, segmentWhere, startDueCampaigns } from "./campaigns.js";
 import { smsMode, smsRegion, type SmsDeps } from "./common.js";
 import { suppressNumber } from "./contacts.js";
-import { checkBudget } from "./delivery.js";
+import { applySmsCost, checkBudget } from "./delivery.js";
 import { enqueueSmsSend, settleStuckSends } from "./messages.js";
 import { verifySender } from "./senders.js";
 import { ensureSmsWebhooks } from "./events.js";
@@ -52,9 +53,49 @@ export async function sweepSms(deps: SmsDeps, now = new Date()) {
   const started = await tick("campaigns", () => startDueCampaigns(deps, now));
   const completed = await tick("complete", () => completeCampaigns());
   const optOuts = await tick("opt-outs", () => syncOptOuts(deps));
+  const costs = deps.sms.messageCost ? await tick("costs", () => syncCosts(deps, now)) : null;
   let daily: Awaited<ReturnType<typeof dailySms>> | null = null;
   if (await deps.coord.acquire(`sms:daily:${now.toISOString().slice(0, 10)}`, 26 * 3600_000)) daily = await tick("daily", () => dailySms(deps, now));
-  return { senders: any, stuck, queued, unknown, started, completed, optOuts, daily };
+  return { senders: any, stuck, queued, unknown, started, completed, optOuts, costs, daily };
+}
+
+/** How long after acceptance a text's price is asked for: Twilio prices it once the carrier has it, "not immediately". */
+const COST_AFTER_MS = 2 * 60_000;
+const COST_FOR_MS = 3 * 86_400_000;
+
+/**
+ * The prices of texts the provider accepted whose status reports carried none (Twilio's, ids
+ * "SM…"), asked for in the 3 days after they went; until then the estimate counts against the
+ * budget, as for AWS before its event.
+ */
+async function syncCosts(deps: SmsDeps, now: Date): Promise<number> {
+  if (!deps.sms.messageCost) return 0;
+  const jobs = await systemDb.smsMessageJob.findMany({
+    where: {
+      priceUsd: null,
+      providerMessageId: { startsWith: "SM" },
+      status: { in: [...ACCEPTED_STATUSES] },
+      acceptedAt: { gt: new Date(now.getTime() - COST_FOR_MS), lt: new Date(now.getTime() - COST_AFTER_MS) },
+    },
+    orderBy: { acceptedAt: "asc" },
+    take: 200,
+    select: { id: true, providerMessageId: true },
+  });
+  let n = 0;
+  let failed = 0;
+  for (const j of jobs) {
+    let cost: { priceUsd: number; parts: number | null } | null;
+    try {
+      cost = await deps.sms.messageCost(j.providerMessageId!);
+    } catch (err) {
+      // One message the provider can't find shouldn't hold up the rest; an outage stops the step.
+      if (++failed >= 3) throw err;
+      logger.warn({ err, jobId: j.id }, "sms price lookup failed");
+      continue;
+    }
+    if (cost && (await applySmsCost(j.id, cost.priceUsd, cost.parts, deps))) n++;
+  }
+  return n;
 }
 
 /** Scheduled texts due within the next 15 minutes that aren't on the queue (or whose queue message is overdue). */

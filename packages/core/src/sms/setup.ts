@@ -37,6 +37,7 @@ import { senderOf, smsAudit, SmsError, smsMode, smsRegion, type SmsDeps } from "
 import type { SmsIdentityInfo } from "./provider.js";
 import { identityAllowed, saveSender, setSending, verifySender, WORKSPACE_TAG } from "./senders.js";
 import { approveLatestVersion, createTemplate, templateAction, updateTemplate, type Actor } from "./templates.js";
+import { twilioInboundUrl } from "./twilio.js";
 
 /** The template and rule the Automatic SMS step made for each event. */
 export type SetupAutomationMap = Partial<Record<SmsTrigger, { templateId?: string | null; ruleId?: string | null }>>;
@@ -235,7 +236,7 @@ export async function checkSetupSender(store: Pick<Store, "id" | "workspaceId">,
     info = await lookUp(store, row, deps);
   } catch (err) {
     logger.warn({ err, storeId: store.id }, "sms setup sender lookup failed");
-    throw new SmsError("AWS didn't answer. Nothing changed: try again in a few minutes.", 409, "provider_error");
+    throw new SmsError("The SMS provider didn't answer. Nothing changed: try again in a few minutes.", 409, "provider_error");
   }
   const mine = !!info && (support === "none" || identityAllowed(info, store.workspaceId, row.senderName!));
   // Where the country requires registration, a sender ID AWS reports nothing about isn't registered.
@@ -280,7 +281,7 @@ export async function requestSetupSender(store: Pick<Store, "id" | "workspaceId"
   return { status: "requested", registration: null, label: null };
 }
 
-/** The request, to the platform owner: what to create in AWS, and how to tag it so only this workspace can use it. */
+/** The request, to the platform owner: what to create at the SMS provider, and how to tag it so only this workspace can use it. */
 async function tellPlatformOwner(store: Pick<Store, "id" | "workspaceId" | "shopDomain" | "name">, row: SmsSetup, requester: string | null, deps: Pick<SmsDeps, "mailer">) {
   const support = senderIdSupport(row.country);
   const country = row.country!;
@@ -288,10 +289,27 @@ async function tellPlatformOwner(store: Pick<Store, "id" | "workspaceId" | "shop
   logger.info({ storeId: store.id, workspaceId: store.workspaceId, senderName: row.senderName, country, support }, "sms sender requested in setup");
   const to = env().SMS_SENDER_REQUESTS_TO.trim();
   if (!to) return;
+  const twilio = env().SMS_PROVIDER === "twilio";
   const tag = `Key=${WORKSPACE_TAG},Value=${store.workspaceId}`;
+  // Twilio has no tags: the friendly name carries them (core/sms/twilio.ts twilioTags).
+  const twilioTag = `${WORKSPACE_TAG}=${store.workspaceId}`;
   const who = [`Store: ${store.name ?? store.shopDomain} (${store.shopDomain})`, `Workspace: ${store.workspaceId}`, `Asked by: ${requester ?? "a team member"}`];
-  const steps =
-    support === "none"
+  const steps = twilio
+    ? support === "none"
+      ? [
+          `${country} doesn't show sender names. Buy the store a number that can text ${country} (Twilio console → Phone Numbers → Buy a number; US: toll-free with its verification, or 10DLC), then set its Friendly Name to:`,
+          `  ${twilioTag}`,
+          `and its "A message comes in" webhook to ${twilioInboundUrl()} (HTTP POST), so STOP replies reach bizinsights.`,
+        ]
+      : [
+          `1. Check the name is theirs to use (their business or brand name, not someone else's).`,
+          support === "registered" || support === "unknown"
+            ? `2. ${country} ${support === "registered" ? "requires" : "may require"} the name's registration with Twilio (console → Messaging → Regulatory Compliance → Sender ID registration, with the merchant's business details). Wait until Twilio shows it approved for ${country}.`
+            : `2. ${country} needs no registration of the name.`,
+          `3. Twilio console → Messaging → Services → Create: Friendly Name exactly "${twilioTag}". Sender Pool → Add Senders → Alpha Sender ID: ${row.senderName}. Integration → Incoming messages: Send a webhook to ${twilioInboundUrl()}.`,
+          `4. The name is approved for them as soon as the service has it, so add it only after step 2.`,
+        ]
+    : support === "none"
       ? [
           `${country} doesn't show sender names. Get the store a number that can text ${country} (AWS console, ${region} → Phone numbers → Request originator; US: a toll-free number with its verification, or 10DLC), then tag it:`,
           `  aws pinpoint-sms-voice-v2 tag-resource --region ${region} --resource-arn <the number's ARN> --tags ${tag}`,
@@ -312,7 +330,7 @@ async function tellPlatformOwner(store: Pick<Store, "id" | "workspaceId" | "shop
     "",
     ...steps,
     "",
-    'Nothing more to do in bizinsights: the merchant\'s "Check status" finds it at AWS by its tag and makes it their sender (docs/sms.md, "Sender names from Set up SMS").',
+    `Nothing more to do in bizinsights: the merchant's "Check status" finds it at ${twilio ? "Twilio" : "AWS"} by its tag and makes it their sender (docs/sms.md, "Sender names from Set up SMS").`,
   ].join("\n");
   await deps.mailer.send(to, subject, text, undefined, { idempotencyKey: `sms-sender-request:${store.id}:${row.senderName ?? "number"}:${country}` }).catch((err: unknown) => logger.error({ err, storeId: store.id }, "sms sender request email failed"));
 }
@@ -327,7 +345,7 @@ export async function useSharedSender(store: Pick<Store, "id" | "workspaceId">, 
     info = await deps.sms.identity(smsRegion(null), shared, row.country);
   } catch (err) {
     logger.warn({ err, storeId: store.id }, "sms shared sender lookup failed");
-    throw new SmsError("AWS didn't answer. Try again in a few minutes.", 409, "provider_error");
+    throw new SmsError("The SMS provider didn't answer. Try again in a few minutes.", 409, "provider_error");
   }
   if (!info || !identityAllowed(info, store.workspaceId, shared)) throw new SmsError("The shared sender isn't available right now.", 409, "no_shared_sender");
   const country = row.country ?? info.country;

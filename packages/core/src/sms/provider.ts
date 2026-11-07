@@ -1,7 +1,12 @@
 /**
  * The SMS provider, behind an interface like the mailer and the queues: AWS End User Messaging
- * SMS on AWS (apps/aws/src/smsProvider.ts, the pinpoint-sms-voice-v2 API), a fake in tests and on
- * the local server, and "not configured" anywhere else. Core never names the vendor's SDK.
+ * SMS (apps/aws/src/smsProvider.ts, the pinpoint-sms-voice-v2 API) or Twilio
+ * (apps/aws/src/twilioSmsProvider.ts), chosen by SMS_PROVIDER; a fake in tests and on the local
+ * server, and "not configured" anywhere else. Core never names the vendor's SDK.
+ *
+ * The words are AWS's, where this started: an "origination identity", an exception name and a
+ * Reason on a refusal, "TEXT_*" delivery events. Twilio's adapter answers in the same words
+ * (core/sms/twilio.ts maps its error codes and statuses), so the send path has one vocabulary.
  */
 import type { SenderType } from "@app/shared/sms";
 
@@ -78,7 +83,7 @@ export interface SmsOptedOutNumber {
 }
 
 export interface SmsProvider {
-  readonly name: "aws" | "fake" | "none";
+  readonly name: "aws" | "twilio" | "fake" | "none";
   send(req: SmsSendRequest): Promise<SmsSendResult>;
   account(region: string): Promise<SmsAccountInfo>;
   /** The origination identity (ARN or id), or null when AWS has none by that name. */
@@ -89,9 +94,15 @@ export interface SmsProvider {
   optedOut(region: string, optOutList: string, since: Date | null): Promise<SmsOptedOutNumber[]>;
   /** AWS's sandbox verification of a test number: create it, send it a code, check the code. */
   createVerifiedNumber(region: string, e164: string, tags: Record<string, string>): Promise<{ id: string; status: string }>;
-  sendVerificationCode(region: string, verifiedId: string, originationIdentity: string | null, configurationSet: string | null): Promise<void>;
+  /** `e164`: the number itself, for a provider that texts the code from bizinsights (Twilio); AWS knows it by the id. */
+  sendVerificationCode(region: string, verifiedId: string, originationIdentity: string | null, configurationSet: string | null, e164?: string): Promise<void>;
   verifyNumber(region: string, verifiedId: string, code: string): Promise<{ status: string }>;
   deleteVerifiedNumber(region: string, verifiedId: string): Promise<void>;
+  /**
+   * What a sent text cost (US$) and its parts, for a provider whose delivery events don't carry
+   * the price (Twilio): asked by the 15-minute sweep. Null while the provider hasn't priced it.
+   */
+  messageCost?(messageId: string): Promise<{ priceUsd: number; parts: number | null } | null>;
 }
 
 const notConfigured = () => new SmsProviderError("NotConfigured", null, null, true, "SMS isn't configured in this environment");

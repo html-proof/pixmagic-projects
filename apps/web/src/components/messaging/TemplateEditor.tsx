@@ -110,13 +110,13 @@ function Prices({ base, draft }: { base: string; draft: Draft }) {
                 <td className="px-3 py-2">{countryName(r.country)}</td>
                 {r.perPartUsd === null ? (
                   <td className="px-3 py-2 text-xs text-muted" colSpan={3}>
-                    No price yet: AWS reports the price with each delivery.
+                    No price yet: the SMS provider reports the price with each delivery.
                   </td>
                 ) : (
                   <>
                     <td className="px-3 py-2 text-right tabular-nums">
                       {fmtUsd(r.perPartUsd)}
-                      <span className="block text-[11px] text-muted">{r.source === "aws_billed" ? "what AWS billed you" : "AWS price list"}</span>
+                      <span className="block text-[11px] text-muted">{r.source === "aws_billed" ? "what the provider billed you" : "the provider's price list"}</span>
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(r.estimateUsd)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{fmtUsd(r.worstUsd)}</td>
@@ -127,7 +127,7 @@ function Prices({ base, draft }: { base: string; draft: Draft }) {
           </tbody>
         </table>
       </div>
-      <p className="mt-1 text-xs text-muted">Estimates in US dollars. AWS charges per part and reports the real price with each delivery; carriers in some countries add a fee.</p>
+      <p className="mt-1 text-xs text-muted">Estimates in US dollars. The SMS provider charges per part and reports the real price with each delivery; carriers in some countries add a fee.</p>
     </div>
   );
 }
@@ -348,7 +348,7 @@ export function TemplateEditor({ id: initialId, onClose, onChanged }: { id: stri
           </dl>
           <p className="text-xs text-muted">
             {now.segments ? `${fmtNum(now.remaining)} more character${now.remaining === 1 ? "" : "s"} fit in the last part. ` : ""}
-            {now.encoding === "GSM" ? "One part holds 160 characters (153 each when there are several)." : "Unicode parts hold 70 characters (67 each when there are several)."} AWS bills each part.
+            {now.encoding === "GSM" ? "One part holds 160 characters (153 each when there are several)." : "Unicode parts hold 70 characters (67 each when there are several)."} The SMS provider bills each part.
           </p>
           {now.nonGsm.length > 0 && (
             <SoftBox>

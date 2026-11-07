@@ -19,7 +19,7 @@ import { s3Blobs } from "./s3Blobs.js";
 import { loadSecrets } from "./secrets.js";
 import { APP_SETTINGS } from "./settings.js";
 import { chooseMailer } from "./mailers.js";
-import { awsSmsProvider } from "./smsProvider.js";
+import { chooseSmsProvider } from "./smsProviders.js";
 import { parseQueueUrls, sqsApi, sqsQueues } from "./sqsQueues.js";
 import { staticSite } from "./staticSite.js";
 
@@ -81,16 +81,17 @@ function workerDeps(): WorkerDeps {
   const credentials = roleCredentials();
   const urls = parseQueueUrls(process.env.QUEUE_URLS);
   const bucket = process.env.PAYLOADS_BUCKET;
+  const coord = coordinator();
   return {
-    coord: coordinator(),
+    coord,
     queues: urls ? sqsQueues(urls, { region, credentials, fetchImpl: withTimeout((i, init) => fetch(i, init), 10_000) }) : droppedQueues(),
     payloads: bucket ? s3Blobs({ bucket, region, credentials }) : memoryBlobs(),
     mailer: chooseMailer(process.env, credentials, fetch),
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
     fetchImpl: withTimeout((input, init) => fetch(input, init)),
     smtpConnect: nodeSmtpConnect,
-    // Customer Messaging: AWS End User Messaging SMS with the function's role (region per call).
-    sms: awsSmsProvider({ credentials, fetchImpl: withTimeout((i, init) => fetch(i, init), 10_000) }),
+    // Customer Messaging (SMS_PROVIDER): AWS End User Messaging SMS with the function's role (region per call), or Twilio.
+    sms: chooseSmsProvider({ credentials, coord, fetchImpl: withTimeout((i, init) => fetch(i, init), 10_000) }),
   };
 }
 

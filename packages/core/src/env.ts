@@ -226,6 +226,19 @@ const schema = z.object({
   SMS_PARTS_PER_SECOND: z.coerce.number().int().min(1).max(1000).default(1),
   /** Most recipients one campaign may have. */
   SMS_CAMPAIGN_MAX_RECIPIENTS: z.coerce.number().int().min(1).max(1_000_000).default(2000),
+  /**
+   * Who sends the texts (docs/sms.md, "Twilio"): "aws" (End User Messaging SMS, with the function's
+   * role) or "twilio" (needs TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN; its webhooks come back to
+   * API_URL).
+   */
+  SMS_PROVIDER: z.enum(["aws", "twilio"]).default("aws"),
+  /** The Twilio account (AC…): not a secret. */
+  TWILIO_ACCOUNT_SID: z.string().optional().default(""),
+  /**
+   * The account's Auth Token: the API calls' password, and the key Twilio signs its webhooks with
+   * (an API key can't do the second, nor read the account's type, so there is none).
+   */
+  TWILIO_AUTH_TOKEN: z.string().optional().default(""),
   EMAIL_FROM: z.string().default("bizinsights <no-reply@localhost>"),
   /**
    * The senders of the codes (OTP_*: sign-up, sign-in, verification and password-reset codes), of
@@ -321,7 +334,7 @@ const PUBLIC_SECRET_MARKERS = [
 ];
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
 /** Secrets that may be left empty (then another one is used), but never set to a public value. */
-const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS"] as const;
+const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS", "TWILIO_AUTH_TOKEN"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
 export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, "CUSTOMER_HASH_KEY" | (typeof OPTIONAL_SECRET_VARS)[number]>>): string[] {

@@ -62,10 +62,10 @@ export const SENDER_STATUS: Record<string, { tone: Tone; label: string; help: st
   requested: {
     tone: "warn",
     label: "Requested",
-    help: "bizinsights has your request and sets the name up with AWS, registering it where your customers' country requires that. Press Check status any time: it turns Approved only once AWS confirms it.",
+    help: "bizinsights has your request and sets the name up with the SMS provider, registering it where your customers' country requires that. Press Check status any time: it turns Approved only once the provider confirms it.",
   },
-  pending: { tone: "warn", label: "Pending approval", help: "AWS has the name for you; the country's registration isn't approved yet. Texts can't use it until it is." },
-  approved: { tone: "good", label: "Approved", help: "AWS confirms the name is set up for your store. Your texts use it." },
+  pending: { tone: "warn", label: "Pending approval", help: "The SMS provider has the name for you; the country's registration isn't approved yet. Texts can't use it until it is." },
+  approved: { tone: "good", label: "Approved", help: "The SMS provider confirms the name is set up for your store. Your texts use it." },
   needs_changes: { tone: "danger", label: "Needs changes", help: "The registration was sent back or closed. Contact bizinsights support to see what the regulator asked for." },
   unavailable: { tone: "danger", label: "Not available", help: "Another business already has this name. Choose a different one." },
 };
@@ -80,7 +80,7 @@ const CONNECTION: Record<SmsSetupState["connection"]["status"], { tone: Tone; la
 const CONNECTION_ERROR: Record<string, { what: string; fix: string }> = {
   platform_off: { what: "SMS isn't switched on for bizinsights yet.", fix: "Nothing to fix on your side: bizinsights switches SMS on platform-wide. You can still prepare your sender name and messages." },
   not_configured: { what: "This bizinsights environment has no SMS provider.", fix: "Contact bizinsights support." },
-  aws_unreachable: { what: "AWS didn't answer.", fix: "Usually brief. Try Connect again in a few minutes." },
+  aws_unreachable: { what: "The SMS provider didn't answer.", fix: "Usually brief. Try Connect again in a few minutes." },
 };
 
 const BASIS: Record<Exclude<SmsTransactionalBasis, "none">, { label: string; help: string }> = {
@@ -93,8 +93,8 @@ const BASIS: Record<Exclude<SmsTransactionalBasis, "none">, { label: string; hel
 
 /** Suggested fixes for a test text that didn't arrive, by AWS's delivery status or bizinsights' reason. */
 const TEST_FIX: Record<string, string> = {
-  destination_not_verified: "In test mode AWS only texts numbers verified with a code: verify this number first.",
-  sandbox_unverified: "In test mode AWS only texts numbers verified with a code: verify this number first.",
+  destination_not_verified: "In test mode, texts only go to numbers verified with a code: verify this number first.",
+  sandbox_unverified: "In test mode, texts only go to numbers verified with a code: verify this number first.",
   invalid_number: "Check the number and its country.",
   INVALID: "Check the number and its country.",
   UNREACHABLE: "Make sure the phone is on and has signal, then try again in a few minutes.",
@@ -102,13 +102,13 @@ const TEST_FIX: Record<string, string> = {
   BLOCKED: "The phone blocks texts from this sender. Check the phone's blocked senders and spam filter.",
   CARRIER_BLOCKED: "The carrier blocked it. Carriers block unregistered sender names: check your sender name's approval in step 2.",
   SPAM: "The carrier treated it as spam. Avoid link shorteners and say who you are in the message.",
-  UNROUTABLE: "AWS can't reach this country from your sender. Contact bizinsights support.",
-  country_blocked: "AWS can't reach this country from your sender. Contact bizinsights support.",
+  UNROUTABLE: "The SMS provider can't reach this country from your sender. Contact bizinsights support.",
+  country_blocked: "The SMS provider can't reach this country from your sender. Contact bizinsights support.",
   TTL_EXPIRED: "It couldn't be delivered in time. Try again later.",
   account_limit: "bizinsights' monthly SMS limit is reached. Contact bizinsights support.",
-  aws_spend_limit: "AWS's monthly SMS limit is reached. Contact bizinsights support.",
+  aws_spend_limit: "The SMS provider's monthly SMS limit is reached. Contact bizinsights support.",
   sender_not_ready: "Your sender isn't ready: finish step 2.",
-  sender_not_found: "AWS doesn't have your sender any more: check step 2.",
+  sender_not_found: "The SMS provider doesn't have your sender any more: check step 2.",
   sender_not_allowed: "Your sender isn't set up for your store: check step 2.",
   over_max_price: "Texts to this country cost more than bizinsights allows per text. Contact bizinsights support.",
 };
@@ -385,7 +385,7 @@ export function SmsSetup() {
     <div className="space-y-4">
       <PageHeader
         title="Set up SMS"
-        sub="Text your customers order updates in five short steps. No AWS account, keys or technical setup needed."
+        sub="Text your customers order updates in five short steps. No provider account, keys or technical setup needed."
         actions={
           manage ? (
             <>
@@ -416,17 +416,17 @@ export function SmsSetup() {
 
           {current === "connect" && (
             <>
-              <StepHeader n={1} title="Connect your SMS provider" question="bizinsights sends your texts through Amazon Web Services' SMS service.">
-                You don&apos;t need an AWS account, API keys or passwords: bizinsights connects with its own secure access, which never reaches your browser.
+              <StepHeader n={1} title="Connect your SMS provider" question="bizinsights sends your texts through its SMS provider.">
+                You don&apos;t need a provider account, API keys or passwords: bizinsights connects with its own secure access, which never reaches your browser.
               </StepHeader>
               <div className="flex flex-wrap items-center gap-4 rounded bg-home-soft p-4">
                 <span aria-hidden className="flex h-12 w-12 items-center justify-center rounded bg-accent/10 text-accent">
                   <Cloud className="h-6 w-6" />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="font-semibold">AWS End User Messaging SMS</p>
+                  <p className="font-semibold">SMS provider</p>
                   <p className="text-sm text-muted">
-                    Amazon&apos;s SMS service, region {data.connection.region}
+                    The SMS service bizinsights uses, region {data.connection.region}
                     {data.connection.connectedAt ? ` · connected ${fmtWhen(data.connection.connectedAt, store?.timezone)}` : ""}
                   </p>
                 </div>
@@ -437,7 +437,7 @@ export function SmsSetup() {
                   <strong>{CONNECTION_ERROR[data.connection.error]?.what ?? "The connection failed."}</strong> {CONNECTION_ERROR[data.connection.error]?.fix ?? "Try again in a few minutes."}
                 </Alert>
               )}
-              {data.connection.status === "connected" && <Hint>Connected means AWS answered for bizinsights. Your own sender name comes next, and texts start only when you turn them on in step 5.</Hint>}
+              {data.connection.status === "connected" && <Hint>Connected means the SMS provider answered for bizinsights. Your own sender name comes next, and texts start only when you turn them on in step 5.</Hint>}
               {manage && (
                 <button
                   type="button"
@@ -449,7 +449,7 @@ export function SmsSetup() {
                       "connect",
                       async () => {
                         const r = await api<{ result: { connected: boolean }; setup: SmsSetupState }>(`${base}/setup/connect`, { method: "POST", body: {} });
-                        if (r.result.connected) toast("success", "Connected to AWS End User Messaging SMS.");
+                        if (r.result.connected) toast("success", "Connected to the SMS provider.");
                         return r.setup;
                       },
                     )
@@ -564,7 +564,7 @@ export function SmsSetup() {
               )}
               <Hint>
                 A sender name isn&apos;t always possible. Some countries only show names registered with a regulator, others show a phone number or a shared short code instead, and the length and
-                characters allowed differ by country and by AWS. bizinsights never shows a name as approved until AWS confirms it.
+                characters allowed differ by country and by provider. bizinsights never shows a name as approved until the SMS provider confirms it.
               </Hint>
 
               {country && (
@@ -578,7 +578,7 @@ export function SmsSetup() {
                   {senderReady && data.sender && (
                     <p className="text-sm">
                       <Check aria-hidden className="mr-1 inline h-4 w-4 text-good" />
-                      Texts now come from <strong>{data.sender.identityLabel}</strong>, approved by AWS.
+                      Texts now come from <strong>{data.sender.identityLabel}</strong>, approved by the SMS provider.
                     </p>
                   )}
                   {manage && (
@@ -596,7 +596,7 @@ export function SmsSetup() {
                                 await saveDraft();
                                 return (await api<{ setup: SmsSetupState }>(`${base}/setup/sender/request`, { method: "POST", body: {} })).setup;
                               },
-                              "Requested. bizinsights sets it up with AWS for you.",
+                              "Requested. bizinsights sets it up with the SMS provider for you.",
                             )
                           }
                         >
@@ -609,14 +609,14 @@ export function SmsSetup() {
                           className="btn-secondary"
                           disabled={!!busy}
                           onClick={() =>
-                            void run("check", "check with AWS", async () => {
+                            void run("check", "check the sender name", async () => {
                               const r = await api<{ result: { status: string }; setup: SmsSetupState }>(`${base}/setup/sender/check`, { method: "POST", body: {} });
-                              toast(r.result.status === "approved" ? "success" : "info", `AWS check: ${SENDER_STATUS[r.result.status]?.label ?? r.result.status}.`);
+                              toast(r.result.status === "approved" ? "success" : "info", `Sender check: ${SENDER_STATUS[r.result.status]?.label ?? r.result.status}.`);
                               return r.setup;
                             })
                           }
                         >
-                          {busy === "check" ? "Checking with AWS…" : "Check status"}
+                          {busy === "check" ? "Checking…" : "Check status"}
                         </button>
                       )}
                       {s.sharedAvailable && !senderReady && (
@@ -677,7 +677,7 @@ export function SmsSetup() {
                       Monthly spending limit (US$)
                     </label>
                     <input id="setup-budget" className="input" type="number" inputMode="decimal" min={0} max={100000} step="1" value={budget} disabled={readOnly} onChange={(e) => setBudget(e.target.value)} />
-                    <p className="mt-1 text-xs text-muted">Texts stop for the month when it&apos;s reached. AWS charges per SMS part, in US dollars.</p>
+                    <p className="mt-1 text-xs text-muted">Texts stop for the month when it&apos;s reached. The SMS provider charges per SMS part, in US dollars.</p>
                   </div>
                   <fieldset className="min-w-0" disabled={readOnly}>
                     <legend className="label">How did customers agree to order updates by text?</legend>
@@ -1002,7 +1002,7 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
       <StepHeader n={4} title="Send a test SMS" question="Check how your message arrives on your own phone." />
       {!senderReady && (
         <Alert kind="info">
-          A test needs a sender approved by AWS.{" "}
+          A test needs a sender approved by the SMS provider.{" "}
           <button type="button" className="font-medium underline" onClick={onGoSender}>
             Go to step 2
           </button>
@@ -1015,7 +1015,7 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
       {manage && (
         <div className="space-y-3 rounded border border-home-line p-4">
           <p className="font-semibold">1. Your mobile number</p>
-          <p className="text-sm text-muted">AWS texts it a code first, so tests only ever go to a phone you have in your hand.</p>
+          <p className="text-sm text-muted">We text it a code first, so tests only ever go to a phone you have in your hand.</p>
           {verified.length > 0 && (
             <fieldset className="space-y-2">
               <legend className="sr-only">Send the test to</legend>
@@ -1032,7 +1032,7 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
             <div key={t.id} className="flex flex-wrap items-end gap-2 rounded bg-home-soft p-3">
               <div className="min-w-0 flex-1 text-sm">
                 <p className="font-mono">{t.number}</p>
-                <p className="text-xs text-muted">Enter the code AWS texted to this number.</p>
+                <p className="text-xs text-muted">Enter the code we texted to this number.</p>
               </div>
               <label className="sr-only" htmlFor={`setup-code-${t.id}`}>
                 Code for {t.number}
@@ -1083,7 +1083,7 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
                   await api(`${base}/test-numbers`, { method: "POST", body: { number: number.trim(), country } });
                   setNumber("");
                   await refresh();
-                  toast("success", "AWS is texting you a code.");
+                  toast("success", "We're texting you a code.");
                 });
               }}
             >
@@ -1140,7 +1140,7 @@ function TestStep({ data, base, manage, senderReady, onChange, onGoSender }: { d
             </p>
             <p className="mt-1 font-medium">{outcome.said}</p>
             {outcome.fix && <p className="mt-1 text-muted">What to do: {outcome.fix}</p>}
-            {message.providerMessageId && <p className="mt-1 font-mono text-[11px] text-muted">AWS message ID {message.providerMessageId}</p>}
+            {message.providerMessageId && <p className="mt-1 font-mono text-[11px] text-muted">Message ID {message.providerMessageId}</p>}
           </div>
         )}
       </div>
@@ -1156,7 +1156,7 @@ export function testOutcome(m: SmsMessage): { said: string; fix: string | null }
     case "sending":
       return { said: "Sending…", fix: null };
     case "accepted":
-      return { said: "AWS accepted the text. Waiting for the carrier's delivery report: this doesn't yet mean it reached the phone.", fix: null };
+      return { said: "The SMS provider accepted the text. Waiting for the carrier's delivery report: this doesn't yet mean it reached the phone.", fix: null };
     case "pending":
       return { said: "The carrier has it and is still delivering it.", fix: null };
     case "delivered":
@@ -1164,13 +1164,13 @@ export function testOutcome(m: SmsMessage): { said: string; fix: string | null }
     case "carrier_accepted":
       return { said: "The carrier accepted it. This network doesn't confirm delivery to the phone: check your phone.", fix: null };
     case "failed":
-      return { said: `Not delivered${m.providerExplanation ? `: ${m.providerExplanation}` : m.reasonLabel ? `: ${m.reasonLabel}` : "."}`, fix: fix ?? "Try again in a few minutes. If it keeps failing, contact bizinsights support with the AWS message ID." };
+      return { said: `Not delivered${m.providerExplanation ? `: ${m.providerExplanation}` : m.reasonLabel ? `: ${m.reasonLabel}` : "."}`, fix: fix ?? "Try again in a few minutes. If it keeps failing, contact bizinsights support with the message ID." };
     case "uncertain":
-      return { said: "The call to AWS broke off without an answer. It isn't sent again on its own.", fix: "Check your phone before sending another." };
+      return { said: "The call to the SMS provider broke off without an answer. It isn't sent again on its own.", fix: "Check your phone before sending another." };
     case "unknown":
       return { said: "The carrier never said whether it arrived.", fix: "Check your phone." };
     case "opted_out":
-      return { said: "Not sent: this number is on AWS's opt-out list for this sender.", fix: "Use another number, or contact bizinsights support to take it off the list." };
+      return { said: "Not sent: this number is on the SMS provider's opt-out list for this sender.", fix: "Use another number, or contact bizinsights support to take it off the list." };
     default:
       return { said: m.reasonLabel ? `Not sent: ${m.reasonLabel}.` : "Not sent.", fix };
   }

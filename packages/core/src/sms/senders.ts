@@ -129,7 +129,7 @@ export async function setSending(store: Pick<Store, "id" | "workspaceId">, o: { 
   const s = await systemDb.smsSenderConfiguration.findUnique({ where: { storeId: store.id } });
   if (!s) throw new SmsError("Set up the sender first.", 409, "no_sender");
   if (o.sending || o.marketing) {
-    if (s.identityCheck !== "verified") throw new SmsError("Verify the sender with AWS first (Sender configuration → Check with AWS).", 409, "sender_unverified");
+    if (s.identityCheck !== "verified") throw new SmsError("Check the sender first (Sender configuration → Check sender).", 409, "sender_unverified");
     if (!(Number(s.monthlyBudgetUsd) > 0)) throw new SmsError("Set a monthly budget first: nothing is sent with a budget of 0.", 409, "no_budget");
   }
   if (o.marketing && !(o.sending ?? s.sendingEnabled)) throw new SmsError("Turn sending on first.", 409, "sending_off");
@@ -177,23 +177,26 @@ export async function readiness(store: Pick<Store, "id">, deps: Pick<SmsDeps, "s
 }
 
 // ---------------------------------------------------------------------------
-// Test numbers (AWS's sandbox delivers only to numbers verified with it)
+// Test numbers: a phone the member holds, proven by a code texted to it (AWS's sandbox delivers
+// only to numbers verified with it; on Twilio bizinsights texts and checks the code itself)
 // ---------------------------------------------------------------------------
 
 function providerMessage(err: unknown, what: string): SmsError {
   if (err instanceof SmsProviderError) {
     if (err.type === "NotConfigured") return new SmsError("SMS isn't switched on for bizinsights yet.", 409, "platform_off");
-    if (err.type === "ValidationException" && /CODE/i.test(err.reason ?? "")) return new SmsError("That code isn't right. Check the latest text from AWS and try again.", 400, "wrong_code");
-    if (err.type === "ServiceQuotaExceededException") return new SmsError("AWS's limit on test numbers is reached. Remove one you no longer use.", 409, "quota");
-    if (err.type === "ThrottlingException") return new SmsError("AWS asked to slow down. Try again in a minute.", 429, "throttled");
+    if (err.type === "ValidationException" && /EXPIRED/i.test(err.reason ?? "")) return new SmsError("That code has expired. Send a new one and enter it within 10 minutes.", 400, "code_expired");
+    if (err.type === "ValidationException" && /CODE/i.test(err.reason ?? "")) return new SmsError("That code isn't right. Check the latest text and try again.", 400, "wrong_code");
+    if (/NO_ORIGINATION_IDENTITIES_FOUND/.test(err.reason ?? "")) return new SmsError("Check your SMS sender first (Sender configuration): the code is texted from it.", 409, "sender_unverified");
+    if (err.type === "ServiceQuotaExceededException") return new SmsError("The SMS provider's limit on test numbers is reached. Remove one you no longer use.", 409, "quota");
+    if (err.type === "ThrottlingException") return new SmsError("The SMS provider asked to slow down. Try again in a minute.", 429, "throttled");
   }
   logger.warn({ err }, `sms ${what} failed`);
-  return new SmsError(`AWS couldn't ${what} right now. Try again in a few minutes.`, 409, "provider_error");
+  return new SmsError(`The SMS provider couldn't ${what} right now. Try again in a few minutes.`, 409, "provider_error");
 }
 
-/** Add a test number: AWS texts it a code, which the member types in to verify it. */
+/** Add a test number: it is texted a code, which the member types in to verify it. */
 export async function addTestNumber(store: Pick<Store, "id" | "workspaceId">, raw: string, country: string | null, deps: Pick<SmsDeps, "sms">, actor: Actor) {
-  if (smsMode() === "off") throw new SmsError("SMS isn't switched on for bizinsights yet, so AWS can't text a code.", 409, "platform_off");
+  if (smsMode() === "off") throw new SmsError("SMS isn't switched on for bizinsights yet, so no code can be texted.", 409, "platform_off");
   const phone = normalizePhone(raw, country);
   if (!phone) throw new SmsError("Enter a mobile number with its country code, such as +61 412 345 678.", 400, "invalid_number");
   const sender = await systemDb.smsSenderConfiguration.findUnique({ where: { storeId: store.id } });
@@ -211,7 +214,7 @@ export async function addTestNumber(store: Pick<Store, "id" | "workspaceId">, ra
             data: { workspaceId: store.workspaceId, storeId: store.id, phoneHash: hash, phoneEnc: smsEncrypt(store.id, "test_phone", phone.e164), phoneMasked: maskPhone(phone.e164), country: phone.country, awsVerifiedId: created.id, status: created.status === "VERIFIED" ? "verified" : "pending", createdBy: actor.userId },
           });
     }
-    if (row.status !== "verified") await deps.sms.sendVerificationCode(region, row.awsVerifiedId!, sender?.identityCheck === "verified" ? sender.originationIdentity : null, configurationSetFor(region));
+    if (row.status !== "verified") await deps.sms.sendVerificationCode(region, row.awsVerifiedId!, sender?.identityCheck === "verified" ? sender.originationIdentity : null, configurationSetFor(region), phone.e164);
   } catch (err) {
     throw providerMessage(err, "send a verification code");
   }
@@ -225,7 +228,7 @@ export async function verifyTestNumber(store: Pick<Store, "id" | "workspaceId">,
   const sender = await systemDb.smsSenderConfiguration.findUnique({ where: { storeId: store.id } });
   try {
     const r = await deps.sms.verifyNumber(smsRegion(sender), row.awsVerifiedId, code.trim());
-    if (r.status !== "VERIFIED") throw new SmsError("That code isn't right. Check the latest text from AWS and try again.", 400, "wrong_code");
+    if (r.status !== "VERIFIED") throw new SmsError("That code isn't right. Check the latest text and try again.", 400, "wrong_code");
   } catch (err) {
     if (err instanceof SmsError) throw err;
     throw providerMessage(err, "check the code");

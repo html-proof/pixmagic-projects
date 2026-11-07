@@ -23,11 +23,11 @@ import { TestNumbers } from "./TestNumbers";
 import type { PublicSender, SenderResponse } from "./types";
 
 const CHECK: Record<string, { tone: Tone; label: string; help: string }> = {
-  unchecked: { tone: "neutral", label: "Not checked yet", help: "Check it with AWS before sending can be turned on." },
-  verified: { tone: "good", label: "Verified with AWS", help: "AWS knows this identity and it is set up for your workspace." },
-  not_found: { tone: "danger", label: "Not found in AWS", help: "AWS has no such identity in this region. Check the ARN or id, or ask bizinsights support." },
+  unchecked: { tone: "neutral", label: "Not checked yet", help: "Check it with the SMS provider before sending can be turned on." },
+  verified: { tone: "good", label: "Verified with the SMS provider", help: "The SMS provider knows this identity and it is set up for your workspace." },
+  not_found: { tone: "danger", label: "Not found at the SMS provider", help: "The SMS provider has no such identity in this region. Check the ARN or id, or ask bizinsights support." },
   not_allowed: { tone: "danger", label: "Not set up for your workspace", help: "The identity exists but isn't tagged for your workspace, so it can't send for you." },
-  error: { tone: "warn", label: "Couldn't check", help: "AWS didn't answer. Try again in a few minutes." },
+  error: { tone: "warn", label: "Couldn't check", help: "The SMS provider didn't answer. Try again in a few minutes." },
 };
 
 const REGISTRATION: Record<string, string> = {
@@ -153,7 +153,7 @@ function SenderForm({ data, onSaved }: { data: SenderResponse; onSaved: () => Pr
     try {
       await api(`${base}/sender`, { method: "PUT", body: parsed.input });
       await onSaved();
-      toast("success", s ? "Saved." : "Saved. Now check it with AWS.");
+      toast("success", s ? "Saved." : "Saved. Now check the sender.");
     } catch (e) {
       setError(smsError(e, "save the sender"));
     } finally {
@@ -200,8 +200,8 @@ function SenderForm({ data, onSaved }: { data: SenderResponse; onSaved: () => Pr
             ) : (
               <input id="snd-identity" className="input" value={s?.identityLabel ?? "Hidden"} readOnly />
             )}
-            <p className="mt-1 text-xs text-muted">Registered by bizinsights in AWS and tagged for your workspace. Ask bizinsights support for yours; an identity tagged for another workspace can&apos;t be used.</p>
-            {identityChanged && s?.sendingEnabled && <p className="mt-1 text-xs text-warn">Changing it turns sending off until the new identity is checked with AWS.</p>}
+            <p className="mt-1 text-xs text-muted">Registered by bizinsights with the SMS provider and tagged for your workspace. Ask bizinsights support for yours; an identity tagged for another workspace can&apos;t be used.</p>
+            {identityChanged && s?.sendingEnabled && <p className="mt-1 text-xs text-warn">Changing it turns sending off until the new identity is checked.</p>}
           </div>
         </div>
 
@@ -209,13 +209,13 @@ function SenderForm({ data, onSaved }: { data: SenderResponse; onSaved: () => Pr
           label="Countries this sender texts"
           value={d.countries}
           onChange={(countries) => set({ countries })}
-          help="India needs a sender of its own (AWS sends Indian traffic from Mumbai); it can't share one with other countries."
+          help="India needs a sender of its own (the SMS provider sends Indian traffic from Mumbai); it can't share one with other countries."
         />
         {d.countries.length > 0 && (
           <ul className="space-y-1 rounded bg-home-soft px-4 py-3 text-xs text-muted">
             {d.countries.map((c) => (
               <li key={c}>
-                <strong className="text-text">{countryName(c)}:</strong> {COUNTRY_RULES[c]?.registration ?? "Check AWS's requirements for this country before sending there."}
+                <strong className="text-text">{countryName(c)}:</strong> {COUNTRY_RULES[c]?.registration ?? "Check the SMS provider's requirements for this country before sending there."}
               </li>
             ))}
           </ul>
@@ -346,10 +346,10 @@ export function SenderConfiguration() {
   const verified = s?.identityCheck === "verified";
   const held = s?.heldUntil && new Date(s.heldUntil).getTime() > Date.now();
   const verify = () =>
-    run("verify", "check the sender with AWS", async () => {
+    run("verify", "check the sender", async () => {
       const r = await api<{ sender: PublicSender }>(`${base}/sender/verify`, { method: "POST", body: {} });
       await reload();
-      return r.sender.identityCheck === "verified" ? "Verified with AWS." : `AWS check: ${CHECK[r.sender.identityCheck]?.label ?? r.sender.identityCheck}.`;
+      return r.sender.identityCheck === "verified" ? "Verified with the SMS provider." : `Sender check: ${CHECK[r.sender.identityCheck]?.label ?? r.sender.identityCheck}.`;
     });
   const toggle = (kind: "sending" | "marketing", on: boolean) =>
     run(kind, on ? "turn it on" : "turn it off", async () => {
@@ -362,7 +362,7 @@ export function SenderConfiguration() {
 
   return (
     <div className="space-y-4">
-      <PageHeader title="SMS Sender" sub="Which AWS number or sender ID your texts come from, the countries it reaches, your budget and limits, and the switches that let texts go out." />
+      <PageHeader title="SMS Sender" sub="Which number or sender ID your texts come from, the countries it reaches, your budget and limits, and the switches that let texts go out." />
       <ModeBanner mode={data.mode} showLive />
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -374,22 +374,22 @@ export function SenderConfiguration() {
           action={
             s && manage ? (
               <button type="button" className={verified ? "btn-secondary" : "btn-primary"} disabled={!!busy} onClick={() => void verify()}>
-                {busy === "verify" ? "Checking…" : "Check with AWS"}
+                {busy === "verify" ? "Checking…" : "Check sender"}
               </button>
             ) : undefined
           }
         >
           {!s ? (
-            <p className="text-muted">Fill in the settings below and save, then check the sender with AWS.</p>
+            <p className="text-muted">Fill in the settings below and save, then check the sender.</p>
           ) : (
             <>
               <p className="text-muted">{check.help}</p>
               <FactList label="The sender">
                 <Fact icon={<BadgeCheck />}>Shows as {s.identityLabel ?? "—"}</Fact>
                 <Fact icon={<ShieldCheck />}>Registration: {REGISTRATION[s.registrationStatus] ?? s.registrationStatus}</Fact>
-                <Fact icon={<Globe />}>AWS region {s.awsRegion}</Fact>
+                <Fact icon={<Globe />}>Region {s.awsRegion}</Fact>
                 <Fact icon={<Reply />}>{s.twoWay ? "Two-way: customers can reply STOP" : "One-way: opt-out link only"}</Fact>
-                {s.identityStatus && <Fact icon={<Info />}>Status at AWS: {s.identityStatus}</Fact>}
+                {s.identityStatus && <Fact icon={<Info />}>Status at the provider: {s.identityStatus}</Fact>}
                 <Fact icon={<Wallet />}>{s.monthlyBudgetUsd > 0 ? `Budget ${fmtUsd(s.monthlyBudgetUsd)} a month` : "No monthly budget yet: nothing is sent while it is 0"}</Fact>
                 <Fact icon={<Moon />}>
                   Quiet hours {fmtHour(s.quietStart)} to {fmtHour(s.quietEnd)} for campaigns and Send SMS
@@ -413,27 +413,27 @@ export function SenderConfiguration() {
 
         <ChannelPanel
           id="snd-aws"
-          title="AWS account"
+          title="SMS account"
           icon={<Cloud className="h-5 w-5" />}
-          status={account ? account.sandbox ? <Badge tone="warn">SMS sandbox</Badge> : <Badge tone="good">Production</Badge> : undefined}
+          status={account ? account.sandbox ? <Badge tone="warn">Trial mode</Badge> : <Badge tone="good">Production</Badge> : undefined}
         >
           {data.mode === "off" ? (
             <p className="text-muted">Not checked while SMS isn&apos;t switched on for bizinsights.</p>
           ) : !account ? (
-            <p className="text-warn">AWS didn&apos;t answer the account check. Try again in a few minutes.</p>
+            <p className="text-warn">The SMS provider didn&apos;t answer the account check. Try again in a few minutes.</p>
           ) : (
-            <FactList label="The AWS account">
-              <Fact icon={<ShieldCheck />}>Access: {account.sandbox ? "SMS sandbox" : "Production"}</Fact>
+            <FactList label="The SMS account">
+              <Fact icon={<ShieldCheck />}>Access: {account.sandbox ? "Trial mode" : "Production"}</Fact>
               <Fact icon={<Hash />}>Tier: {account.tier || "—"}</Fact>
               {account.spendLimitUsd !== undefined && account.spendLimitUsd !== null && (
                 <Fact icon={<Wallet />}>
-                  AWS monthly spend limit: {fmtUsd(account.spendLimitUsd)}
+                  Account monthly spend limit: {fmtUsd(account.spendLimitUsd)}
                   {account.spendLimitMaxUsd ? <span className="text-muted"> (up to {fmtUsd(account.spendLimitMaxUsd)})</span> : null}
                 </Fact>
               )}
             </FactList>
           )}
-          {data.account?.sandbox && <p className="text-xs text-muted">In the sandbox AWS only delivers to verified test numbers, whatever else is set up.</p>}
+          {data.account?.sandbox && <p className="text-xs text-muted">While the SMS account is still being verified, texts only reach verified test numbers, whatever else is set up.</p>}
           <SoftBox>
             <span className="text-xs text-muted">Delivery reports (configuration set): </span>
             {data.configurationSet ?? <span className="text-warn">none set, so delivery reports and prices won&apos;t arrive</span>}
@@ -443,7 +443,7 @@ export function SenderConfiguration() {
 
       {s && (
         <Card id="snd-switch" title="Switches">
-          <p className="text-sm text-muted">Both are off until you turn them on. They need a sender verified with AWS and a budget above 0.</p>
+          <p className="text-sm text-muted">Both are off until you turn them on. They need a verified sender and a budget above 0.</p>
           <ul className="mt-2 divide-y divide-home-line">
             {(
               [
@@ -461,7 +461,7 @@ export function SenderConfiguration() {
                     <p className="text-xs text-muted">{help}</p>
                     {blocked && manage && (
                       <p className="mt-0.5 text-xs text-warn">
-                        {!verified ? "Check the sender with AWS first." : !(s.monthlyBudgetUsd > 0) ? "Set a monthly budget first." : "Turn sending on first."}
+                        {!verified ? "Check the sender first." : !(s.monthlyBudgetUsd > 0) ? "Set a monthly budget first." : "Turn sending on first."}
                       </p>
                     )}
                   </div>

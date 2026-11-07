@@ -22,7 +22,7 @@ import { pgCoord } from "./pgCoord.js";
 import { pgQueues, pruneDead, queueConcurrency, queueStats, startQueueRunner } from "./pgQueues.js";
 import { pruneTicks, startSchedules, type Schedule } from "./schedules.js";
 import { APP_SETTINGS } from "./settings.js";
-import { awsSmsProvider } from "./smsProvider.js";
+import { chooseSmsProvider } from "./smsProviders.js";
 import { bridgeCall, startSqsBridge } from "./sqsBridge.js";
 import { staticSite } from "./staticSite.js";
 
@@ -85,16 +85,17 @@ export interface SelfHostDeps extends WorkerDeps {
 
 export function selfHostDeps(pool: pg.Pool, env: NodeJS.ProcessEnv = process.env): SelfHostDeps {
   const credentials = roleCredentials(env);
+  const coord = pgCoord(pool);
   return {
-    coord: pgCoord(pool),
+    coord,
     queues: pgQueues(pool),
     payloads: fsBlobs(env.BLOB_DIR || "/data/blobs"),
     mailer: chooseMailer(env, credentials, fetch),
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
     fetchImpl: withTimeout((input, init) => fetch(input, init)),
     smtpConnect: nodeSmtpConnect,
-    // Customer Messaging: AWS End User Messaging SMS, with an IAM user's keys (AWS_ACCESS_KEY_ID ...).
-    sms: awsSmsProvider({ credentials, fetchImpl: withTimeout((i, init) => fetch(i, init), 10_000) }),
+    // Customer Messaging (SMS_PROVIDER): Twilio, or AWS End User Messaging SMS with an IAM user's keys (AWS_ACCESS_KEY_ID ...).
+    sms: chooseSmsProvider({ credentials, coord, fetchImpl: withTimeout((i, init) => fetch(i, init), 10_000) }),
   };
 }
 

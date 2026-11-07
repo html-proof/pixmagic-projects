@@ -69,6 +69,9 @@ const PUBLIC = new Set([
   "POST /webhooks/whatsapp",
   // Evolution API's webhook: a JWT made from that connection's own key (core whatsapp/webhook.ts).
   "POST /webhooks/whatsapp/evolution/:instance",
+  // Twilio's SMS status reports and replies: X-Twilio-Signature with the account's Auth Token (routes/smsTwilio.ts).
+  "POST /webhooks/sms/twilio/status",
+  "POST /webhooks/sms/twilio/inbound",
   "POST /pixel/:key",
   "OPTIONS /pixel/:key",
   "POST /v1/events",
