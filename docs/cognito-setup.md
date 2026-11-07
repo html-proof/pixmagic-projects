@@ -418,6 +418,56 @@ code emailed after the password) follows the same rules, enforced by the API on 
   has expired. Request a new code.", "A new verification code has been sent.", "Too many attempts.
   Please try again later." and "Email verified successfully."
 
+## 9. Leaving Cognito: the app's own sign-in
+
+The owner decided on 2026-11-07 to close the AWS account (docs/ikorex-migration), so Cognito goes
+too. The app's own sign-in takes its place behind the same interface (`CognitoAuth`), so the routes,
+the session cookies and `auth_identities` don't change. The setting `AUTH_MODE` picks who answers
+(`apps/aws/src/app.ts`):
+
+| `AUTH_MODE` | Who checks sign-ins |
+| --- | --- |
+| `cognito` (default) | Cognito, as described above |
+| `migrating` | The app's own (`apps/api/src/localAuth.ts`), with Cognito behind it (`migratingAuth.ts`). Each Cognito user moves over at their next sign-in |
+| `local` | The app's own only, once Cognito is gone |
+
+**What the app's own sign-in keeps:** `auth_accounts` (one row per sign-in identity, under the same
+sub Cognito gave it, so `auth_identities` and every session keep matching) and `auth_refresh_tokens`
+(only a SHA-256 of each). Passwords are argon2id from `node:crypto` (`passwords.ts`); authenticator
+secrets are encrypted with `TOKEN_ENCRYPTION_KEYS` (`totp.ts`, the same 6 digits and 30 seconds).
+ID and access tokens are JWTs signed with a key derived from `SESSION_SECRET`, one hour, never sent to
+a browser. Codes (sign-up, reset, address change) are emailed through Resend with the templates
+Cognito's email function used (`@app/core` `authEmail`); five wrong guesses end a code.
+
+**Google:** straight from Google on the app's own OAuth client (`GOOGLE_SIGNIN_CLIENT_ID` and
+`GOOGLE_SIGNIN_CLIENT_SECRET`, the client Cognito's Google already used), with PKCE and a nonce, and
+Google's ID token checked against Google's keys. Before switching, add
+`https://bizinsights.io/auth/callback` to that client's **Authorized redirect URIs** in Google Cloud
+(APIs & Services, Credentials). Someone who used Google through Cognito keeps their sub: Cognito
+named them `google_<Google's sub>`, and `auth_identities` remembers it. Until both settings are there,
+`migrating` still sends Google through Cognito.
+
+**The move (`migrating`):**
+
+- **Password sign-in:** an account that has a password here decides alone. Otherwise Cognito checks
+  the password once. If it agrees, the account is made here with that password, Cognito's refresh
+  token is handed back, and the session runs on the app's tokens from then on.
+- **Two-step verification:** someone with an authenticator app answers its code at Cognito, then
+  comes over with two-step verification off, because Cognito never gives out the secret. They are
+  emailed to set it up again; the emailed code after the password still applies meanwhile.
+- **Here only:** sign-up, emailed codes and Google.
+- **"Forgot password?":** answered here, which moves the person too. If the app never saw them sign
+  in, Cognito is asked who they are.
+- **Sessions from before the switch:** they run on Cognito's tokens until that person next signs in.
+
+**Closing (`local`):** everyone who signed in during the move has an account here. Anyone else
+(`auth_identities` only) is found by their address or Google account and gets in through "Forgot
+password?" or Google, under the same sub. Before Cognito is deleted, they are emailed a reset (stage F,
+docs/ikorex-migration/ROLLBACK_PLAN.md).
+
+Tests: `apps/api/test/localAuth.test.ts` (the same answers fakeCognito.ts models),
+`migratingAuth.test.ts`, `authStore.test.ts` (PostgreSQL).
+
 ## Troubleshooting
 
 - **Every sign-in says "We can't reach the sign-in service"**: `COGNITO_USER_POOL_ID` /

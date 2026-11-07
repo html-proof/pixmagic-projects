@@ -77,6 +77,20 @@ const schema = z.object({
    * signed with a key published on GitHub, so production refuses to start with it set.
    */
   COGNITO_ENDPOINT: z.string().optional().default(""),
+  /**
+   * Who checks sign-ins (docs/ikorex-migration: leaving AWS). "cognito": Amazon Cognito, as before.
+   * "migrating": the app's own sign-in (apps/api/src/localAuth.ts), which moves each Cognito user
+   * over at their next sign-in (migratingAuth.ts) while Cognito still runs. "local": the app's own
+   * only, once Cognito is gone; who never moved signs in again through "Forgot password?" or Google.
+   */
+  AUTH_MODE: z.enum(["cognito", "migrating", "local"]).optional().default("cognito"),
+  /**
+   * Google sign-in on the app's own OAuth client (AUTH_MODE "migrating" or "local"; with "cognito"
+   * Cognito holds Google). Its redirect URI is APP_URL + /auth/callback. Empty: no Google there.
+   */
+  GOOGLE_SIGNIN_CLIENT_ID: z.string().optional().default(""),
+  /** That client's secret (a secret: insights/<env>/app on AWS, where Cognito's Google already reads it). */
+  GOOGLE_SIGNIN_CLIENT_SECRET: z.string().optional().default(""),
   SHOPIFY_API_KEY: z.string().default(""),
   SHOPIFY_API_SECRET: z.string().default(""),
   SHOPIFY_SCOPES: z.string().default("read_orders,read_products"),
@@ -321,7 +335,7 @@ const PUBLIC_SECRET_MARKERS = [
 ];
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
 /** Secrets that may be left empty (then another one is used), but never set to a public value. */
-const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS"] as const;
+const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "GOOGLE_SIGNIN_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
 export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, "CUSTOMER_HASH_KEY" | (typeof OPTIONAL_SECRET_VARS)[number]>>): string[] {
