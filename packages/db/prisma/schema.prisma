@@ -100,6 +100,62 @@ model AuthIdentity {
   @@map("auth_identities")
 }
 
+/// The app's own sign-in directory (apps/api/src/localAuth.ts), which takes over from Cognito's
+/// user pool (docs/ikorex-migration): one row per sign-in identity, under the sub Cognito gave it
+/// when it came from there (auth_identities.subject), so moving someone over changes nothing else.
+model AuthAccount {
+  sub              String             @id
+  /// What admin calls and refreshes address it by: the sub for a password account, "google_<Google
+  /// sub>" for a Google one (Cognito's own names, kept).
+  username         String             @unique
+  /// Password accounts only, lower case: what a sign-in with an address finds.
+  loginEmail       String?            @unique @map("login_email")
+  email            String
+  emailVerified    Boolean            @default(false) @map("email_verified")
+  /// A new address waiting for its code.
+  pendingEmail     String?            @map("pending_email")
+  name             String?
+  picture          String?
+  /// "password" or "google".
+  method           String
+  /// argon2id (a PHC string, apps/api/src/passwords.ts). Null for Google accounts, and for a
+  /// password account moved over before it has one here (it gets one at "Forgot password?").
+  passwordHash     String?            @map("password_hash")
+  googleSub        String?            @unique @map("google_sub")
+  /// false until the sign-up code (Cognito's UNCONFIRMED).
+  confirmed        Boolean            @default(false)
+  enabled          Boolean            @default(true)
+  /// Two-step verification: the authenticator app's secret, encrypted with TOKEN_ENCRYPTION_KEYS,
+  /// and a new one waiting for its first code.
+  totpSecret       String?            @map("totp_secret")
+  totpPending      String?            @map("totp_pending")
+  totpEnabled      Boolean            @default(false) @map("totp_enabled")
+  /// Refresh tokens issued before this are refused (sign out everywhere).
+  tokensValidAfter DateTime           @default(now()) @map("tokens_valid_after")
+  /// "cognito": moved over from the user pool, at movedAt.
+  movedFrom        String?            @map("moved_from")
+  movedAt          DateTime?          @map("moved_at")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+  refreshTokens    AuthRefreshToken[]
+
+  @@map("auth_accounts")
+}
+
+/// A refresh token the app's own sign-in issued: only its SHA-256 is kept.
+model AuthRefreshToken {
+  tokenHash String      @id @map("token_hash")
+  sub       String
+  createdAt DateTime    @default(now()) @map("created_at")
+  expiresAt DateTime    @map("expires_at")
+  revokedAt DateTime?   @map("revoked_at")
+  account   AuthAccount @relation(fields: [sub], references: [sub], onDelete: Cascade)
+
+  @@index([sub])
+  @@index([expiresAt])
+  @@map("auth_refresh_tokens")
+}
+
 /// Account-level security events (sign-in identity linked, password or email changed, signed out
 /// everywhere, account deleted). Workspace actions go to audit_logs.
 model AuthEvent {
