@@ -39,7 +39,7 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 | Fargate Evolution + Cloud Map + Route 53 | `evolution` container | `EVOLUTION_API_URL` = `http://evolution:8080`; webhook URL to `app` on the internal network | Its `evolution` database (sessions) with the app's | Linked numbers still connected after the window | Sessions tied to the old webhook URL: Evolution's instances re-pointed at start |
 | CloudWatch | Prometheus, Alertmanager, Grafana + external uptime check (Loki: off, decision 7) | **Done**: `/metrics` on `web` and `worker` (`metrics.ts`), `infra/ikorex/docker-compose.monitoring.yml`, 16 alert rules, a dashboard | — | Each alert fired once (stage C) | Monitoring on the same server: covered by the external check |
 | GuardDuty, CloudTrail, Cost Explorer, Budgets | Stay while AWS has resources; GuardDuty off at stage F | — | — | — | — |
-| CDK + Deploy to AWS | `ship.sh` + `deploy.sh` over SSH | **Done** (scripts); the GitHub workflow comes with stage B | — | A deploy with a failing migration or health check rolls back (stage B) | The PC runner and its SSH key: restricted to the deploy command |
+| CDK + Deploy to AWS | `ship.sh` + `deploy.sh` over SSH; the workflow Deploy to iKorex | **Done**: the scripts, and `.github/workflows/ikorex-deploy.yml` (built 2026-11-07, off until stage B's setup: `IKOREX_STAGING`, then `IKOREX_PRODUCTION` at the cutover) | — | A deploy with a failing migration or health check rolls back (stage B) | The deploy key: its own, in GitHub's secret only, limited on the server to `ssh-gate.sh` (receive, deploy) |
 
 ## Cognito: the three ways
 

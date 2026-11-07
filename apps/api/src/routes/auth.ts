@@ -181,9 +181,15 @@ function withParam(path: string, key: string, value: string) {
 const UNAVAILABLE = "We can't reach the sign-in service right now. Please try again in a moment.";
 const CODE_SENT = "If that address can receive email, a code is on its way. It expires in a few minutes.";
 
-/** Federated providers switched on for this deployment (COGNITO_IDENTITY_PROVIDERS, plus a domain). */
+/**
+ * Federated providers switched on for this deployment: Google on the app's own client once the
+ * app's own sign-in runs and the client is configured (AUTH_MODE, localAuth.ts); otherwise
+ * COGNITO_IDENTITY_PROVIDERS, plus a domain.
+ */
 export function enabledProviders(): Set<FederatedProvider> {
   const e = env();
+  if (e.AUTH_MODE !== "cognito" && e.GOOGLE_SIGNIN_CLIENT_ID && e.GOOGLE_SIGNIN_CLIENT_SECRET) return new Set(["Google"]);
+  if (e.AUTH_MODE === "local") return new Set();
   if (!e.COGNITO_DOMAIN) return new Set();
   return new Set(
     e.COGNITO_IDENTITY_PROVIDERS.split(",")

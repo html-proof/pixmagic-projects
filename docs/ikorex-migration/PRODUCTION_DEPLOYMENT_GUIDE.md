@@ -89,6 +89,85 @@ Monitoring, once:
 cd ~/bizinsights && scripts/render-monitoring.sh && docker compose -f docker-compose.monitoring.yml up -d
 ```
 
+## Deploy to iKorex (GitHub Actions)
+
+`.github/workflows/ikorex-deploy.yml` deploys `main`'s commits by itself once CI has passed on them,
+like Deploy to AWS: to staging while the repository variable `IKOREX_STAGING` is `on`, then to
+production while `IKOREX_PRODUCTION` is `on` (from the cutover). **Both are off until the setup below
+is done**, and until then every run skips (grey, not red). By hand: Actions → Deploy to iKorex → Run
+workflow, from `main`, target staging or production (its variable must be on too).
+
+It runs `ship.sh` in two halves. The `build` job installs every dependency and runs
+`ship.sh pack` (the bundle with the UI, and `infra/ikorex` as committed); it never sees the key. The
+`deploy` job installs nothing, gets the key, and runs `ship.sh send` to staging and then, only if
+staging passed, to production. On the server `deploy.sh` does what it does by hand: migrations
+first, then the switch, the health checks, and the previous release back if any check fails.
+
+The key is not the owner's. It is a key of its own, kept only in GitHub's secret, so the owner's key
+(with its passphrase) never leaves the PC ([SECURITY_AUDIT.md](SECURITY_AUDIT.md), D13). On the
+server its line in `authorized_keys` runs nothing but `scripts/ssh-gate.sh`: `receive` a release,
+`deploy` it, for `bizinsights` or `bizinsights-staging`. No shell, terminal, port forwarding or agent
+(`restrict`), and every other request refused and logged. That is not a sandbox: a release is code
+that runs under Docker, and Docker is root on the host (the audit's O1). The gate stops a stolen key
+from quietly opening a shell or a tunnel, not from deploying. So the key lives in one place, only the
+`deploy` job gets it, and deleting its line on the server revokes it.
+
+Setup, once, after the first deploy by hand above has worked (stage B). In Git Bash on the PC:
+
+1. The key. No passphrase: the runner uses it unattended.
+
+   ```bash
+   ssh-keygen -t ed25519 -N "" -C bizinsights-deploy -f ~/ikorex-deploy-key
+   ```
+
+2. **The administrator's OK** for a second key on `deployer`, limited to the gate. Send them the line
+   step 3 adds and its fingerprint (`ssh-keygen -lf ~/ikorex-deploy-key.pub`).
+3. The gate, then the key's line, with the owner's own key (the passphrase is asked for):
+
+   ```bash
+   ssh deployer@103.146.112.176 'mkdir -p ~/bin && cat > ~/bin/bizinsights-ssh-gate && chmod 755 ~/bin/bizinsights-ssh-gate' < infra/ikorex/scripts/ssh-gate.sh
+   ```
+
+   ```bash
+   (printf 'restrict,command="$HOME/bin/bizinsights-ssh-gate" '; cat ~/ikorex-deploy-key.pub) | ssh deployer@103.146.112.176 'umask 077; cat >> ~/.ssh/authorized_keys'
+   ```
+
+   The installed gate doesn't update itself: run the first command again whenever `ssh-gate.sh`
+   changes.
+4. GitHub: the environment `ikorex`, its secret, and the private key gone from the PC:
+
+   ```bash
+   gh api -X PUT repos/html-proof/pixmagic-projects/environments/ikorex
+   ```
+
+   ```bash
+   gh secret set IKOREX_SSH_KEY --env ikorex < ~/ikorex-deploy-key
+   ```
+
+   ```bash
+   rm ~/ikorex-deploy-key
+   ```
+
+5. Staging on, and a first run by hand. The run's "Deploy to staging" step shows `deploy.sh`'s log:
+
+   ```bash
+   gh variable set IKOREX_STAGING --body on
+   ```
+
+   ```bash
+   gh workflow run ikorex-deploy.yml --ref main -f target=staging
+   ```
+
+6. At the cutover (stage D, step 6): `gh variable set IKOREX_PRODUCTION --body on`.
+
+The host and user are the guide's (`deployer@103.146.112.176`); the variable `IKOREX_SSH_TARGET`
+(`user@host`) changes them. The host key is always the pinned one in `infra/ikorex/known_hosts`.
+The workflow runs on the runner Deploy to AWS uses: the runner for main if there is one
+(`SELF_HOSTED_MAIN_RUNNER`), otherwise the PC's shared one. The runner for main's hook
+(`infra/runner/main-only-hook.js`) lets this workflow through too. No runner for main was
+installed on 2026-11-07. One installed later from this commit gets the new hook; one installed
+before it needs the file copied again into `C:\ProgramData\bizinsights-runner` (elevated PowerShell).
+
 ## Everyday commands (on the server, in ~/bizinsights)
 
 | Task | Command |
@@ -163,4 +242,5 @@ difference: the cutover stops there (ROLLBACK_PLAN.md). The report (counts only)
 
 Stages D-F, with their steps and the way back from each: [AWS_TO_IKOREX_MIGRATION_MATRIX.md](AWS_TO_IKOREX_MIGRATION_MATRIX.md)
 ("Cutover") and [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md). At the cutover CLAUDE.md's rule "every change
-goes live on AWS" is rewritten for the server, and the GitHub workflow runs `ship.sh` from `main`.
+goes live on AWS" is rewritten for the server, and Deploy to iKorex's production target is switched
+on (`IKOREX_PRODUCTION=on`, above).

@@ -137,7 +137,7 @@ describe("the system role", () => {
       expect(p.check).toBe(p.qual);
     }
     const any = policies.filter((p) => p.policy === "system_any").map((p) => p.table);
-    expect(any.sort()).toEqual(["auth_events", "auth_identities", "email_otps", "pixel_events_seen", "user_sessions", "users"]);
+    expect(any.sort()).toEqual(["auth_accounts", "auth_events", "auth_identities", "auth_refresh_tokens", "email_otps", "pixel_events_seen", "user_sessions", "users"]);
     expect(policies.filter((p) => p.policy !== "system_all" && p.policy !== "system_any")).toEqual([]);
   });
 
