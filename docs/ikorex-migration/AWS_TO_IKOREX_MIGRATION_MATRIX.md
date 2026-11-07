@@ -8,10 +8,10 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 
 | Stage | What | Touches production? | Approval |
 | --- | --- | --- | --- |
-| A | Code: the self-hosted entry point and adapters (queue, schedules, coordinator, blobs, metrics), Dockerfile, Compose file, backup/restore/deploy scripts. Merged to `main`; AWS keeps running the same code. **Built and tested 2026-11-06** ([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md)) | No | — |
+| A | Code: the self-hosted entry point and adapters (queue, schedules, coordinator, blobs, metrics), Dockerfile, Compose file, backup/restore/deploy scripts. Merged to `main`; AWS keeps running the same code. **Built and tested 2026-11-06, live on AWS 2026-11-07 (#348, release 167)**; the SMS events bridge followed on 2026-11-07 ([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md)) | No | — |
 | B | Server: `~/bizinsights-staging` on iKorex, a copy of production data, schedules off, no webhooks, mail to a sink, behind Cloudflare Access | No (reads a dump) | Server administrator's OK |
 | C | Backups to R2, restore test, monitoring and alerts, external uptime check | No | — |
-| D | Cutover in a maintenance window (below) | **Yes** | **Owner, for the date** |
+| D | Cutover in a maintenance window (below): a Sunday, 20:00-21:00 Melbourne time | **Yes** | **Owner, for the date** |
 | E | Rollback period, 14 days: AWS kept with schedules off | No | — |
 | F | AWS decommissioned, one resource at a time | **Yes** | **Owner, separately** |
 
@@ -23,7 +23,7 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 | SQS + Lambda `jobs` | `worker` + PostgreSQL queue | **Done**: `pgQueues.ts` (implements `Queues`; SQS's contract: delays, receive counts, holds, dead-letter after 10), runner in `selfhost.ts`, `admin queues/dlq/redrive` | Queues drained to empty before the window; nothing carried over | Integration tests against PostgreSQL (retry, backoff, dead-letter, worker dying mid-job, two claimers, time limit) | A handler that assumed SQS batch semantics: none do (they get one message at a time on both) |
 | EventBridge Scheduler + `cron` | Schedules in `worker` (`schedule_ticks`); admin command | **Done**: `schedules.ts` (cron with time zones, one run per tick across workers, catch-up, retries), `admin.ts` | — | Ticks recorded; two workers run a tick once; failed tick retried | A missed tick during the window: the 15-minute jobs catch up by design |
 | SNS alarms | Alertmanager | Rules + email config | — | One test alert | — |
-| SNS sms-events → SQS | SNS HTTPS subscription → app route → `smsEvents` queue (only if SMS stays on AWS) | Route with SNS signature check | — | Sandbox SMS shows "delivered" | Unsigned or replayed events: signature and timestamp checked |
+| SNS sms-events → SQS | **Stays on AWS** (SMS kept, 2026-11-07); the server's worker long-polls the `smsEvents` SQS queue into its own | **Done**: `sqsBridge.ts` (`SMS_EVENTS_QUEUE_URL`, only with `SCHEDULES=on`); deleted from SQS only once in PostgreSQL | — (events wait in SQS up to 4 days) | Sandbox SMS shows "delivered" on staging-turned-live | Two readers at once (the `jobs` function and the server): the function's `smsEvents` trigger is turned off in the window, before `SCHEDULES=on` |
 | DynamoDB `coord` | PostgreSQL table `coord_entries` | **Done**: `pgCoord.ts` (implements `Coord`), `admin import-coord` | The 12 items (signed-out sessions among them) copied with `admin import-coord` | `Coord` contract tests against PostgreSQL | — |
 | S3 `payloads` | Volume + nightly prune | **Done**: `fsBlobs.ts` (implements `BlobStore`) | — (transient, drained) | Unit tests incl. keys that would leave the folder | Disk fills: alert at 80 % |
 | S3 `site` | Served by `app` | Production static handler (`staticSite.ts` exists) with cache headers | — | Pages, hashed files cached by Cloudflare | — |
@@ -32,12 +32,12 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 | Cognito | **Keep** (recommended) | Admin calls with an IAM user key (today: the function's role) | — | Password, email code, Google, reset, sign-out | Long-lived IAM key: limited to this pool, rotated |
 | Cognito email Lambda + KMS | Keep with Cognito | — | — | Reset code arrives | — |
 | SES | Nothing (Resend sends) | — | — | — | — |
-| End User Messaging SMS | Keep (or another provider) | IAM user key | — | Sandbox send | — |
+| End User Messaging SMS | **Keep** (decided 2026-11-07) | IAM user key: `sms-voice:SendTextMessage`, and `sqs:ReceiveMessage`/`sqs:DeleteMessage` on the `smsEvents` queue | — | Sandbox send | — |
 | Secrets Manager + SSM | `.env` on the server + encrypted copy | `loadSecrets` skipped when the values are present | Exported by a script that prints names only | `config` action shows every provider configured | A secret in a log: the script never prints values |
 | CloudFront + WAF | Cloudflare proxy + Tunnel + Cloudflare rules | — | — | Client IP, geo, rate limit, outage behaviour | Cloudflare Free has less WAF than AWS's managed groups (see the cost audit, change 6) |
 | EC2 NAT + admin host | — | — | — | Outbound calls work from the server | — |
 | Fargate Evolution + Cloud Map + Route 53 | `evolution` container | `EVOLUTION_API_URL` = `http://evolution:8080`; webhook URL to `app` on the internal network | Its `evolution` database (sessions) with the app's | Linked numbers still connected after the window | Sessions tied to the old webhook URL: Evolution's instances re-pointed at start |
-| CloudWatch | Prometheus, Alertmanager, Grafana, Loki + external uptime check | **Done**: `/metrics` on `web` and `worker` (`metrics.ts`), `infra/ikorex/docker-compose.monitoring.yml`, 15 alert rules, a dashboard | — | Each alert fired once (stage C) | Monitoring on the same server: covered by the external check |
+| CloudWatch | Prometheus, Alertmanager, Grafana + external uptime check (Loki: off, decision 7) | **Done**: `/metrics` on `web` and `worker` (`metrics.ts`), `infra/ikorex/docker-compose.monitoring.yml`, 16 alert rules, a dashboard | — | Each alert fired once (stage C) | Monitoring on the same server: covered by the external check |
 | GuardDuty, CloudTrail, Cost Explorer, Budgets | Stay while AWS has resources; GuardDuty off at stage F | — | — | — | — |
 | CDK + Deploy to AWS | `ship.sh` + `deploy.sh` over SSH | **Done** (scripts); the GitHub workflow comes with stage B | — | A deploy with a failing migration or health check rolls back (stage B) | The PC runner and its SSH key: restricted to the deploy command |
 
@@ -58,13 +58,15 @@ only reach users with one.
 ## Cutover (stage D), in the window
 
 1. Announce the window. Stage B's staging has passed every check.
-2. On AWS: schedules off; webhooks answered `503` (Shopify retries them for hours); queues drained
-   to empty; final `counts`.
+2. On AWS: schedules off; webhooks answered `503` (Shopify retries them for hours); the `jobs`
+   function's `smsEvents` trigger off (SMS events then wait in SQS for the server); the other queues
+   drained to empty; final `counts`.
 3. `pg_dump` both databases from RDS, restore on iKorex, `counts` compared table by table.
 4. Copy the coordinator's items; start `app`, `worker`, `evolution` with production settings.
 5. Cloudflare: `bizinsights.io` and `www` move from CloudFront to the tunnel (proxied, takes effect
    in seconds).
-6. Smoke tests; sign in; a test webhook; WhatsApp numbers connected; schedules on.
+6. Smoke tests; sign in; a test webhook; WhatsApp numbers connected; `SMS_EVENTS_QUEUE_URL` set
+   and schedules on (`SCHEDULES=on` also starts reading the SMS events waiting in SQS).
 7. Webhooks queued at Shopify arrive at iKorex.
 
 The window is the only write freeze. The rollback for each step is in [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md).

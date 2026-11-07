@@ -4,10 +4,14 @@ The owner's brief of 2026-11-06: run bizinsights on the existing iKorex server (
 instead of AWS, keeping every feature, record and integration, without disturbing the websites, n8n
 and the CCTV tunnel already on that server.
 
-**Status (2026-11-06):** discovery done on the AWS side (#347). **Stage A done:** the self-hosted
-runtime and the server's files are built and tested on this PC ([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md)).
-The server is not inspected yet, because this PC has no SSH key for it. Nothing has changed on the
-server, and AWS keeps running everything (its only change: four empty tables the runtime uses).
+**Status (2026-11-07):** discovery done on the AWS side (#347). **Stage A done and live on AWS**
+(#348, release 167): the self-hosted runtime and the server's files, built and tested on this PC
+([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md)). **The owner's decisions are made**
+([the list](IKOREX_INFRASTRUCTURE_ARCHITECTURE.md#decisions-2026-11-07)): Cognito and SMS stay on AWS,
+backups to R2, one server accepted, the cutover on a Sunday 20:00-21:00 Melbourne time, no logs
+profile. The server is not inspected yet: this PC's SSH key waits for the administrator. Nothing has
+changed on the server, and AWS keeps running everything (its only change: four empty tables the
+runtime uses).
 
 ## The pages
 
@@ -45,6 +49,4 @@ GST, at the price of one server instead of a failover database, and of running i
 
 1. **SSH access**: a key for this PC, added by the server's administrator (guide steps 2-4), and
    their agreement to host bizinsights there.
-2. The owner's decisions listed at the end of the architecture page (Cognito, SMS, backup
-   destination, single server, cutover window).
-3. The capacity test's result (go / tight / no go).
+2. The capacity test's result (go / tight / no go).
