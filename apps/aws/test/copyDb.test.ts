@@ -268,12 +268,15 @@ describe.skipIf(!adminUrl || !bash || !hasPgTools)("database copy to the iKorex 
     const appTarget = `copy_rdsapp_${id}`;
     const evoTarget = `copy_rdsevo_${id}`;
     made.push(appTarget, evoTarget);
-    await admin.query(`CREATE ROLE ${master} LOGIN CREATEDB CREATEROLE NOSUPERUSER NOBYPASSRLS`);
+    // A password of its own: CI's server takes SCRAM logins only (PGREQUIREAUTH), as RDS does.
+    const password = randomUUID();
+    await admin.query(`CREATE ROLE ${master} LOGIN CREATEDB CREATEROLE NOSUPERUSER NOBYPASSRLS PASSWORD '${password}'`);
     await admin.query(`CREATE ROLE ${service} NOLOGIN`);
     await admin.query(`GRANT ${service} TO ${master}`);
     try {
       const env = {
         PGUSER: master,
+        PGPASSWORD: password,
         PGDATABASE: "postgres",
         DBS: "app evolution",
         SOURCE_app: `${work}/app.dump`,
@@ -287,11 +290,11 @@ describe.skipIf(!adminUrl || !bash || !hasPgTools)("database copy to the iKorex 
       };
       const fresh = await run("restore", { ...env, MODE: "fresh" });
       expect(fresh.stderr).not.toContain("REFUSED");
-      expect(fresh.code).toBe(0);
+      expect(fresh.code, fresh.stderr).toBe(0);
       // The rollback: both exist with tables, and are replaced.
       const replaced = await run("restore", { ...env, MODE: "replace" });
       expect(replaced.stderr).not.toContain("REFUSED");
-      expect(replaced.code).toBe(0);
+      expect(replaced.code, replaced.stderr).toBe(0);
       for (const out of [fresh, replaced]) {
         expect(out.result!.app!.facts).toEqual(dumped.app!.facts);
         expect(out.result!.evolution!.facts).toEqual(dumped.evolution!.facts);
