@@ -10,12 +10,18 @@ export const uniqueEmail = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.
 /** The password `signUp` gives every account it creates. */
 export const PASSWORD = "correct-horse-battery";
 
+/** The subject of each kind of code email (@app/core authEmails.ts). */
+const CODE_SUBJECT = { confirm: /verification code/i, verify: /verification code/i, reset: /^Reset your bizinsights password$/i } as const;
+
 /**
- * The newest code the Cognito emulator "emailed" to an address (sign-up, password reset, email
- * verification): it keeps them in its database, and writes that a moment after answering.
+ * The newest code emailed to an address: a sign-up's ("confirm"), an address check's ("verify") or a
+ * password reset's ("reset"). Who sends it follows AUTH_MODE (apps/aws/src/settings.ts, which the
+ * e2e server starts from): the app's own sign-in emails it through the mailer, read here from the
+ * mail stand-in; the Cognito emulator keeps it in its database instead, written a moment after it
+ * answers. `after`: the id of a code email that came before (newestMailId), never the one wanted.
  */
-export async function latestCode(email: string, kind: "confirm" | "verify" = "confirm"): Promise<string> {
-  for (let i = 0; i < 60; i++) {
+export async function latestCode(email: string, kind: keyof typeof CODE_SUBJECT = "confirm", after: string | null = null): Promise<string> {
+  for (let i = 0; i < 150; i++) {
     try {
       const pool = JSON.parse(readFileSync(join(E2E_COGNITO_DATA, ".cognito/db/local_insights.json"), "utf8")) as {
         Users: Record<string, { Attributes: Array<{ Name: string; Value: string }>; ConfirmationCode?: string; AttributeVerificationCode?: string }>;
@@ -26,6 +32,12 @@ export async function latestCode(email: string, kind: "confirm" | "verify" = "co
     } catch {
       /* mid-write: try again */
     }
+    const newest = (await mailTo(email)).find((m) => CODE_SUBJECT[kind].test(m.Subject));
+    if (newest && newest.ID !== after) {
+      const full = (await (await fetch(`${E2E_MAILPIT_URL}/api/v1/message/${newest.ID}`)).json()) as { Text?: string };
+      const code = /\b(\d{6})\b/.exec(full.Text ?? "")?.[1];
+      if (code) return code;
+    }
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error(`no ${kind} code for ${email}`);
@@ -34,6 +46,7 @@ export async function latestCode(email: string, kind: "confirm" | "verify" = "co
 /**
  * Cognito marks a sign-up's address verified when its emailed code is confirmed; the emulator
  * doesn't. Mark it verified in the emulator first, so confirming leaves the account as Cognito would.
+ * An account of the app's own sign-in isn't in the emulator, and its code verifies the address.
  */
 export async function verifiedOnConfirm(email: string) {
   const res = await fetch(`http://127.0.0.1:${E2E_COGNITO_PORT}/`, {
@@ -41,7 +54,9 @@ export async function verifiedOnConfirm(email: string) {
     headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AWSCognitoIdentityProviderService.AdminUpdateUserAttributes" },
     body: JSON.stringify({ UserPoolId: "local_insights", Username: email, UserAttributes: [{ Name: "email", Value: email.toLowerCase() }, { Name: "email_verified", Value: "true" }] }),
   });
-  expect(res.ok, await res.text()).toBe(true);
+  const text = await res.text();
+  if (!res.ok && text.includes("UserNotFoundException")) return;
+  expect(res.ok, text).toBe(true);
 }
 
 /**
@@ -125,8 +140,9 @@ export async function fillCode(scope: Page | Locator, code: string) {
 /** A signed-in account whose email isn't verified sits on /verify-email: send the code and enter it. */
 export async function verifyEmail(page: Page, email: string) {
   await expect(page).toHaveURL(/verify-email/);
+  const before = await newestMailId(email);
   await page.getByRole("button", { name: "Email me a verification code" }).click();
-  await fillCode(page, await latestCode(email, "verify"));
+  await fillCode(page, await latestCode(email, "verify", before));
 }
 
 /**
