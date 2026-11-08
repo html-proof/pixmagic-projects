@@ -55,7 +55,8 @@ export async function verifiedOnConfirm(email: string) {
     body: JSON.stringify({ UserPoolId: "local_insights", Username: email, UserAttributes: [{ Name: "email", Value: email.toLowerCase() }, { Name: "email_verified", Value: "true" }] }),
   });
   const text = await res.text();
-  if (!res.ok && text.includes("UserNotFoundException")) return;
+  // The emulator answers an address it doesn't have with "User not authorized".
+  if (!res.ok && /UserNotFoundException|User not authorized/.test(text)) return;
   expect(res.ok, text).toBe(true);
 }
 
