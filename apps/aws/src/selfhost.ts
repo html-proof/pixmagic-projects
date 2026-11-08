@@ -10,7 +10,6 @@ import { logger, reportUnscopedSystemQueries, warnHalfConfigured, withTimeout } 
 import { disconnectDb } from "@app/db";
 import { apiDeps } from "./app.js";
 import { roleCredentials } from "./awsClient.js";
-import { costReportDeps, sendCostReport } from "./costReport.js";
 import { pruneEvolutionData } from "./evolutionDb.js";
 import { fsBlobs } from "./fsBlobs.js";
 import { chooseMailer } from "./mailers.js";
@@ -38,8 +37,9 @@ import { staticSite } from "./staticSite.js";
  * In place of the AWS services: PostgreSQL holds the jobs, the schedule ticks and the coordinator;
  * large webhook bodies and WhatsApp media are files under BLOB_DIR (a volume both roles mount);
  * settings and secrets come from the environment (Compose's env file), not Secrets Manager. Email
- * (Resend), sign-in (Cognito) and SMS (AWS End User Messaging) are reached as before, with keys from
- * the environment where AWS used the function's role.
+ * goes through Resend; sign-in is the app's own (AUTH_MODE), with Cognito behind it until the AWS
+ * account closes; SMS through Twilio (SMS_PROVIDER), or AWS's while it lasts. What still reaches AWS
+ * uses keys from the environment where AWS used the function's role.
  */
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -152,7 +152,7 @@ export function selfHostSchedules(deps: SelfHostDeps, pool: pg.Pool, env: NodeJS
       return null;
     }
   };
-  const list: Schedule[] = [
+  return [
     { name: "every15min", cron: CRON.refreshTokens, timeZone: "UTC", catchUpMinutes: 14, run: () => runScheduled(CRON.refreshTokens, deps) },
     {
       name: "nightly",
@@ -175,17 +175,8 @@ export function selfHostSchedules(deps: SelfHostDeps, pool: pg.Pool, env: NodeJS
       },
     },
   ];
-  // The owner's daily AWS cost email, while there is an AWS bill to report (07:00 Melbourne, as on AWS).
-  if (env.COST_REPORT_TO) {
-    list.push({
-      name: "costreport",
-      cron: "0 7 * * *",
-      timeZone: "Australia/Melbourne",
-      catchUpMinutes: 6 * 60,
-      run: () => sendCostReport({ ...costReportDeps(env, roleCredentials(env)), invocationId: `selfhost-${new Date().toISOString().slice(0, 10)}` }),
-    });
-  }
-  return list;
+  // No AWS cost email here: AWS's own schedule sends it while there is an AWS bill, and the account
+  // closes after the move (docs/ikorex-migration, decision 4b).
 }
 
 export interface Running {

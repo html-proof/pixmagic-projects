@@ -137,7 +137,10 @@ test("signing up checks the form, confirms the emailed code, refuses a taken ema
   await fillCode(page, code === "000000" ? "111111" : "000000");
   await expect(alert(page)).toContainText("The verification code is incorrect");
   await fillCode(page, code);
-  await verifyEmail(page, email);
+  // The Cognito emulator leaves a confirmed sign-up's address unverified (Cognito doesn't), so it is
+  // checked once more on /verify-email; with the app's own sign-in the code verified it already.
+  await expect(page).toHaveURL(/verify-email|onboarding/);
+  if (page.url().includes("verify-email")) await verifyEmail(page, email);
   await expect(page).toHaveURL(/onboarding/);
   // Refreshing keeps the account signed in.
   await page.reload();
@@ -202,7 +205,7 @@ test("forgot password: a code by email, a new password, then signing in with it"
   await page.getByLabel("Email Address").fill(email);
   await page.getByRole("button", { name: "Send reset code" }).click();
   await expect(page.getByRole("heading", { name: "Choose a new password" })).toBeVisible();
-  await fillCode(page, await latestCode(email));
+  await fillCode(page, await latestCode(email, "reset"));
   await page.getByLabel("New password", { exact: true }).fill("a-brand-new-password");
   await page.getByLabel("Confirm new password", { exact: true }).fill("a-brand-new-password");
   await page.getByRole("button", { name: "Reset password" }).click();

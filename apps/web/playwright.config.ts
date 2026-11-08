@@ -24,7 +24,8 @@ export const E2E_EVOLUTION_URL = `http://127.0.0.1:${E2E_EVOLUTION_PORT}`;
 export const E2E_COGNITO_DATA = resolve(import.meta.dirname, ".e2e/cognito");
 export const E2E_MAILPIT_URL = process.env.E2E_MAILPIT_URL ?? "http://localhost:8025";
 const COGNITO_ENDPOINT = `http://127.0.0.1:${E2E_COGNITO_PORT}`;
-const CLIENT = { id: "insightslocalwebclient00", secret: "insights-local-client-secret" };
+/** The emulator's app client (infra/cognito-local/seed, test-only secret). */
+export const CLIENT = { id: "insightslocalwebclient00", secret: "insights-local-client-secret" };
 
 // TEST_PG_PORT points e2e at another Postgres server (e.g. a throwaway container); default 5434.
 const PG_PORT = process.env.TEST_PG_PORT ?? "5434";

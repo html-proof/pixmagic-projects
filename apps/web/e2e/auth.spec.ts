@@ -1,6 +1,7 @@
+import { createHmac } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
-import { E2E_ENV } from "../playwright.config";
+import { CLIENT, E2E_COGNITO_PORT, E2E_ENV } from "../playwright.config";
 import { asNewVisitor, fillCode, fillSignUp, latestCode, latestMailCode, latestMailSender, logIn, mailSubjects, newestMailId, PASSWORD, poolMfa, signOutFromMenu, signUp, totpCode, uniqueEmail, verifiedOnConfirm } from "./helpers";
 
 /**
@@ -26,6 +27,18 @@ async function createWorkspace(page: Page, name: string) {
     const r = await fetch("/api/workspaces", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: n }) });
     if (!r.ok) throw new Error(`POST /workspaces failed: ${r.status}`);
   }, name);
+}
+
+/** A call to the Cognito emulator's API (it checks no credentials, admin calls included). */
+async function cognitoApi<T>(target: string, body: object): Promise<T> {
+  const res = await fetch(`http://127.0.0.1:${E2E_COGNITO_PORT}/`, {
+    method: "POST",
+    headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": `AWSCognitoIdentityProviderService.${target}` },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  expect(res.ok, text).toBe(true);
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 /** "Continue with Google" on the stand-in: the person types which Google account they are. */
@@ -55,6 +68,44 @@ test("signing up: the emailed code signs the new account in by itself", async ({
   expect(((await res.json()) as { user?: { email: string } }).user?.email).toBe(email.toLowerCase());
   await expect(page).toHaveURL(/\/onboarding/);
   expect(logins).toEqual([]);
+  await page.reload();
+  await expect(page).toHaveURL(/\/onboarding/);
+});
+
+test("an account from before the app's own sign-in moves over from Cognito at its next sign-in, and then signs in without Cognito", async ({ page }) => {
+  const email = uniqueEmail("moved");
+  // Made the way every account was until 2026-11-08: signed up and confirmed at Cognito, known to the app by its sub.
+  const { UserSub: sub } = await cognitoApi<{ UserSub: string }>("SignUp", {
+    ClientId: CLIENT.id,
+    SecretHash: createHmac("sha256", CLIENT.secret).update(email + CLIENT.id).digest("base64"),
+    Username: email,
+    Password: PASSWORD,
+    UserAttributes: [{ Name: "email", Value: email }, { Name: "name", Value: "Moved User" }],
+  });
+  await cognitoApi("AdminConfirmSignUp", { UserPoolId: "local_insights", Username: email });
+  await verifiedOnConfirm(email);
+  const { Username: username } = await cognitoApi<{ Username: string }>("AdminGetUser", { UserPoolId: "local_insights", Username: email });
+  const userId = `moved${Date.now()}`;
+  await db.query("INSERT INTO users (id, email, email_verified, display_name, updated_at) VALUES ($1, $2, true, 'Moved User', now())", [userId, email]);
+  await db.query("INSERT INTO auth_identities (id, user_id, provider, subject, username, method, email) VALUES ($1, $1, 'cognito', $2, $3, 'password', $4)", [userId, sub, username, email]);
+  const moved = async () => (await db.query("SELECT sub, moved_from, password_hash IS NOT NULL AS hashed FROM auth_accounts WHERE email = $1", [email])).rows;
+  expect(await moved()).toEqual([]);
+
+  // The next sign-in: Cognito checks the password once; the account is kept here under the same sub.
+  await page.goto("/login");
+  await logIn(page, email);
+  await expect(page).toHaveURL(/\/onboarding/);
+  expect(await moved()).toEqual([{ sub, moved_from: "cognito", hashed: true }]);
+  expect((await db.query("SELECT user_id FROM auth_identities WHERE subject = $1", [sub])).rows).toEqual([{ user_id: userId }]);
+
+  // Cognito forgets them, as it will when the AWS account closes: the password signs in here alone.
+  await page.context().clearCookies();
+  await cognitoApi("AdminDeleteUser", { UserPoolId: "local_insights", Username: email });
+  await page.goto("/login");
+  await logIn(page, email, "not-the-password-1");
+  await expect(alert(page)).toContainText("Please check your credentials and try again.");
+  await logIn(page, email);
+  await expect(page).toHaveURL(/\/onboarding/);
   await page.reload();
   await expect(page).toHaveURL(/\/onboarding/);
 });

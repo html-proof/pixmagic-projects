@@ -431,6 +431,11 @@ the session cookies and `auth_identities` don't change. The setting `AUTH_MODE` 
 | `migrating` | The app's own (`apps/api/src/localAuth.ts`), with Cognito behind it (`migratingAuth.ts`). Each Cognito user moves over at their next sign-in |
 | `local` | The app's own only, once Cognito is gone |
 
+**In production: `migrating` since 2026-11-08** (`AUTH_MODE` in `apps/aws/src/settings.ts`), Google
+still through Cognito until `GOOGLE_SIGNIN_CLIENT_ID` is set there too (below). The e2e suite runs
+the same mode, since its server starts from those settings: its helpers read the codes the app
+emails from the mail stand-in.
+
 **What the app's own sign-in keeps:** `auth_accounts` (one row per sign-in identity, under the same
 sub Cognito gave it, so `auth_identities` and every session keep matching) and `auth_refresh_tokens`
 (only a SHA-256 of each). Passwords are argon2id from `node:crypto` (`passwords.ts`); authenticator

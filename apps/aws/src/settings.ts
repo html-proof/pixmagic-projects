@@ -93,6 +93,13 @@ export const APP_SETTINGS = {
   // Meta's App Review reviewers, who can't read its inbox (docs/ads-review-packs.md). Empty it
   // again once Meta has decided.
   "AUTH_LOGIN_CODE_EXEMPT": "",
+  // Who checks sign-ins (docs/cognito-setup.md, "Leaving Cognito"): "migrating" since 2026-11-08, the
+  // app's own sign-in in front and Cognito behind it, so each person moves over at their next
+  // password sign-in, reset or sign-up (the AWS account closes after the iKorex cutover). Google
+  // stays on Cognito until GOOGLE_SIGNIN_CLIENT_ID is set here, which waits on the owner adding
+  // https://bizinsights.io/auth/callback to that client's redirect URIs (Google answered
+  // redirect_uri_mismatch on 2026-11-08). Going back to "cognito" locks out whoever signed up since.
+  "AUTH_MODE": "migrating",
   // Ad accounts ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"
   // on Settings → Ad accounts). Empty until the apps exist: the buttons then say the platform isn't
   // set up. GOOGLE_ADS_CLIENT_ID is the Google Cloud OAuth client "Insights web" (project
