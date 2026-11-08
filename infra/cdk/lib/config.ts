@@ -15,15 +15,16 @@ export interface EnvConfig {
    * RDS instance class, e.g. "t4g.micro" (1 GB memory, ~80 connections) or "t4g.small" (2 GB,
    * ~200; with Multi-AZ ~US$37/month more). Production is on t4g.micro to keep the bill within
    * US$50-80 (2026-10-18); its alarms (db-free-memory, db-connections, db-cpu) say when it's
-   * time for t4g.small. With Multi-AZ, a change costs one failover (about a minute).
-   * Production's instance is paid by a 1-year reserved instance (db.t4g.micro PostgreSQL Multi-AZ,
-   * No Upfront, until 2027-10-18): it is size-flexible, so on t4g.small it still pays half.
+   * time for t4g.small. With Multi-AZ, a change costs one failover (about a minute); single-AZ, a
+   * reboot of a few minutes. On demand: the two reserved-instance orders of 2026-10-18 ended
+   * payment-failed, so none is active (docs/aws-deployment.md, Cost).
    */
   dbInstanceType: string;
   /**
    * A standby in the second Availability Zone with automatic failover (about a minute), which
-   * doubles the instance and storage price. On in production since 2026-10-17 (docs/aws-deployment.md,
-   * Fault tolerance).
+   * doubles the instance and storage price. Production had it from 2026-10-17 to 2026-11-08, when
+   * the owner gave it up to cut the bill until the move to iKorex (docs/aws-deployment.md, Fault
+   * tolerance). Turning it off or on again happens in place, without downtime.
    */
   dbMultiAz: boolean;
   dbAllocatedStorageGb: number;
@@ -31,10 +32,17 @@ export interface EnvConfig {
   dbBackupDays: number;
   /**
    * How many NAT instances (nat-instances.ts): 2 = one per AZ, each AZ's functions going out
-   * through their own; 1 = both through the first AZ's, so an outage there cuts every function off
-   * from Shopify, Cognito, Google, Meta and SMTP (Trusted Advisor's "Single AZ Application Check").
+   * through their own; 1 = both through one (`natAz`'s, else the first AZ's), so an outage there
+   * cuts every function off from Shopify, Cognito, Google, Meta and SMTP (Trusted Advisor's "Single
+   * AZ Application Check").
    */
   natGateways: number;
+  /**
+   * With fewer NAT instances than AZs, the AZ they go in. Production's is the database's
+   * (ap-southeast-2b since 2026-10-17), so with one of each, only an outage of that AZ stops the
+   * app, instead of an outage of either. Unset: the first AZ.
+   */
+  natAz?: string;
   /** EC2 type of each NAT instance, e.g. "t4g.nano" (~US$8/month with its public IPv4 and disk). */
   natInstanceType: string;
   logRetentionDays: number;
@@ -151,11 +159,16 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "migrateBeforeLive
     account: ACCOUNT,
     region: REGION,
     dbInstanceType: "t4g.micro",
-    dbMultiAz: true,
+    // Single-AZ and one NAT instance since 2026-11-08, the owner's yes to cut the bill until the move to
+    // iKorex (docs/aws-migration/AWS_MIGRATION_PLAN.md, changes 8 and 9): ~US$30 a month less. Back to
+    // high availability: `dbMultiAz: true`, `natGateways: 2` (docs/aws-deployment.md, Fault tolerance).
+    dbMultiAz: false,
     dbAllocatedStorageGb: 20,
     dbMaxStorageGb: 100,
     dbBackupDays: 14,
-    natGateways: 2,
+    natGateways: 1,
+    // The database's AZ: the instance there (insights-production-nat-b) stays, nat-a goes.
+    natAz: "ap-southeast-2b",
     natInstanceType: "t4g.nano",
     logRetentionDays: 90,
     // On Fargate Spot since 2026-11-06 (the owner's yes; docs/aws-migration/AWS_MIGRATION_PLAN.md, change 5):

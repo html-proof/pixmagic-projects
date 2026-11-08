@@ -31,8 +31,14 @@ const { API_PATH_PATTERNS } = await import("../../../apps/aws/src/paths.js");
 /** Production's Google sign-in client (config.ts). */
 const GOOGLE_CLIENT_ID = "567753266621-ltq5j5kij5s3em8gr0err3tbrh5fqciq.apps.googleusercontent.com";
 
+/**
+ * The Region's AZ names, as a deploy reads them (cdk.context.json): without them CDK makes up
+ * dummy1a/dummy1b, and production's natAz (ap-southeast-2b) would name no subnet.
+ */
+const CDK_CONTEXT: Record<string, unknown> = JSON.parse(readFileSync(join(import.meta.dirname, "../cdk.context.json"), "utf8"));
+
 function synth(context: Record<string, string> = {}) {
-  const app = new App({ context });
+  const app = new App({ context: { ...CDK_CONTEXT, ...context } });
   const cfg = envConfig((k) => app.node.tryGetContext(k));
   const env = { account: cfg.account, region: cfg.region };
   const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
@@ -43,6 +49,12 @@ function synth(context: Record<string, string> = {}) {
   const ci = new CiStack(app, "C", cfg, { env });
   const audit = new AuditStack(app, "T", cfg, { env, accessLogsBucketName: data.accessLogs.bucketName });
   return { edge: Template.fromStack(edge), data: Template.fromStack(data), app: Template.fromStack(appStack), auth: Template.fromStack(auth), ci: Template.fromStack(ci), audit: Template.fromStack(audit) };
+}
+
+/** Production's data stack with some of its settings changed, e.g. back to high availability. */
+function synthData(change: Partial<ReturnType<typeof envConfig>>) {
+  const cfg = { ...envConfig(() => undefined), ...change };
+  return Template.fromStack(new DataStack(new App({ context: CDK_CONTEXT }), "D", cfg, { env: { account: cfg.account, region: cfg.region } }));
 }
 
 let t: ReturnType<typeof synth>;
@@ -59,16 +71,20 @@ function distributions(app: Template): { main: Json; fallback: Json } {
 }
 
 describe("the data stack", () => {
-  it("keeps the database private, encrypted, backed up and protected, with a standby in the other AZ", () => {
+  it("keeps the database private, encrypted, backed up and protected, in one AZ (since 2026-11-08) unless dbMultiAz", () => {
     t.data.hasResourceProperties("AWS::RDS::DBInstance", {
       PubliclyAccessible: false,
       StorageEncrypted: true,
       DeletionProtection: true,
       BackupRetentionPeriod: 14,
-      MultiAZ: true,
+      MultiAZ: false,
       DBInstanceClass: "db.t4g.micro",
       Engine: "postgres",
     });
+    // Never pinned to an AZ: CloudFormation can't set AvailabilityZone on a Multi-AZ instance, and a
+    // change of it moves the instance. RDS keeps the primary where it is when the standby goes.
+    t.data.hasResourceProperties("AWS::RDS::DBInstance", { AvailabilityZone: Match.absent() });
+    synthData({ dbMultiAz: true }).hasResourceProperties("AWS::RDS::DBInstance", { MultiAZ: true, AvailabilityZone: Match.absent() });
     t.data.hasResource("AWS::RDS::DBInstance", { DeletionPolicy: "Snapshot" });
     // Point-in-time backups outlive the instance.
     t.data.hasResourceProperties("AWS::RDS::DBInstance", { DeleteAutomatedBackups: false });
@@ -135,14 +151,48 @@ describe("the data stack", () => {
     });
   });
 
-  it("goes out through a NAT instance in each AZ, not a NAT gateway, and has no SSH key anywhere", () => {
+  const natInstances = (data: Template) => Object.entries(data.findResources("AWS::EC2::Instance", { Properties: { SourceDestCheck: false } }));
+  const defaultRoutes = (data: Template) => Object.values(data.findResources("AWS::EC2::Route", { Properties: { DestinationCidrBlock: "0.0.0.0/0", InstanceId: Match.anyValue() } }));
+
+  it("goes out through one NAT instance, in the database's AZ, every app subnet through it (since 2026-11-08)", () => {
+    const nats = natInstances(t.data);
+    expect(nats).toHaveLength(1);
+    const [id, nat] = nats[0]!;
+    // The instance that was already in that AZ (its construct path is its subnet's): it stays as it is,
+    // and only nat-a goes.
+    expect(id).toMatch(/^VpcpublicSubnet2NatInstance/);
+    expect(nat.Properties.AvailabilityZone).toBe("ap-southeast-2b");
+    const routes = defaultRoutes(t.data);
+    expect(routes).toHaveLength(2);
+    for (const route of routes) expect(route.Properties.InstanceId).toEqual({ Ref: id });
+  });
+
+  it("goes back to a NAT instance per AZ, each app subnet through its own, with natGateways: 2", () => {
+    const data = synthData({ natGateways: 2, natAz: undefined });
+    const nats = natInstances(data);
+    expect(nats).toHaveLength(2);
+    // The same construct paths as before 2026-11-08: going back adds nat-a and keeps nat-b.
+    expect(nats.map(([id]) => id.replace(/NatInstance.*/, "")).sort()).toEqual(["VpcpublicSubnet1", "VpcpublicSubnet2"]);
+    const azOf = (props: { AvailabilityZone?: string }) => props.AvailabilityZone;
+    expect(new Set(nats.map(([, r]) => azOf(r.Properties))).size).toBe(2);
+    // Each private (app) subnet's default route goes to the NAT instance in its own AZ.
+    const routes = defaultRoutes(data);
+    expect(routes).toHaveLength(2);
+    const subnets = data.findResources("AWS::EC2::Subnet");
+    const tables = data.findResources("AWS::EC2::SubnetRouteTableAssociation");
+    for (const route of routes) {
+      const instanceAz = azOf(Object.fromEntries(nats)[route.Properties.InstanceId.Ref]!.Properties);
+      const assoc = Object.values(tables).find((a) => a.Properties.RouteTableId.Ref === route.Properties.RouteTableId.Ref)!;
+      expect(subnets[assoc.Properties.SubnetId.Ref]!.Properties.AvailabilityZone).toBe(instanceAz);
+    }
+  });
+
+  it("uses NAT instances, not a NAT gateway, replaced only once NAT is up, and has no SSH key anywhere", () => {
     t.data.resourceCountIs("AWS::EC2::NatGateway", 0);
     t.data.resourceCountIs("AWS::EC2::EIP", 0);
     t.data.allResourcesProperties("AWS::EC2::Instance", { KeyName: Match.absent() });
-    const nats = Object.entries(t.data.findResources("AWS::EC2::Instance", { Properties: { SourceDestCheck: false } }));
-    expect(nats).toHaveLength(2);
-    const azOf = (props: { AvailabilityZone?: string }) => props.AvailabilityZone;
-    expect(new Set(nats.map(([, r]) => azOf(r.Properties))).size).toBe(2);
+    const nats = natInstances(t.data);
+    expect(nats.length).toBeGreaterThan(0);
     for (const [, r] of nats) {
       // Routes move to a new instance only once it says NAT is up.
       expect(r.CreationPolicy).toEqual({ ResourceSignal: { Timeout: "PT15M" } });
@@ -150,16 +200,6 @@ describe("the data stack", () => {
       expect(JSON.stringify(r.Properties.UserData)).toContain("cfn-signal");
       // dnf is killed for lack of memory on a t4g.nano without swap.
       expect(JSON.stringify(r.Properties.UserData)).toContain("swapon /swapfile");
-    }
-    // Each private (app) subnet's default route goes to the NAT instance in its own AZ.
-    const routes = Object.values(t.data.findResources("AWS::EC2::Route", { Properties: { DestinationCidrBlock: "0.0.0.0/0", InstanceId: Match.anyValue() } }));
-    expect(routes).toHaveLength(2);
-    const subnets = t.data.findResources("AWS::EC2::Subnet");
-    const tables = t.data.findResources("AWS::EC2::SubnetRouteTableAssociation");
-    for (const route of routes) {
-      const instanceAz = azOf(Object.fromEntries(nats)[route.Properties.InstanceId.Ref]!.Properties);
-      const assoc = Object.values(tables).find((a) => a.Properties.RouteTableId.Ref === route.Properties.RouteTableId.Ref)!;
-      expect(subnets[assoc.Properties.SubnetId.Ref]!.Properties.AvailabilityZone).toBe(instanceAz);
     }
     // IMDSv2 only, set on the instances: no launch templates, whose names would collide.
     for (const [, r] of nats) expect(r.Properties.MetadataOptions).toEqual({ HttpTokens: "required" });
@@ -181,18 +221,19 @@ describe("the data stack", () => {
 
   it("recovers or reboots a failed NAT instance and tells the alarm topic", () => {
     const topic = `arn:aws:sns:ap-southeast-2:605411278365:insights-production-alarms`;
-    for (const az of ["a", "b"]) {
-      t.data.hasResourceProperties("AWS::CloudWatch::Alarm", {
-        AlarmName: `insights-production-nat-${az}-system-check`,
-        MetricName: "StatusCheckFailed_System",
-        AlarmActions: [{ "Fn::Join": ["", ["arn:", { Ref: "AWS::Partition" }, ":automate:ap-southeast-2:ec2:recover"]] }, topic],
-      });
-      t.data.hasResourceProperties("AWS::CloudWatch::Alarm", {
-        AlarmName: `insights-production-nat-${az}-instance-check`,
-        MetricName: "StatusCheckFailed_Instance",
-        AlarmActions: [{ "Fn::Join": ["", ["arn:", { Ref: "AWS::Partition" }, ":automate:ap-southeast-2:ec2:reboot"]] }, topic],
-      });
-    }
+    // The one instance's, in 2b (nat-a's went with it on 2026-11-08): recover, reboot, busy.
+    const names = Object.values(t.data.findResources("AWS::CloudWatch::Alarm")).map((a) => a.Properties.AlarmName as string);
+    expect(names.filter((n) => n.startsWith("insights-production-nat-")).sort()).toEqual(["insights-production-nat-b-cpu", "insights-production-nat-b-instance-check", "insights-production-nat-b-system-check"]);
+    t.data.hasResourceProperties("AWS::CloudWatch::Alarm", {
+      AlarmName: "insights-production-nat-b-system-check",
+      MetricName: "StatusCheckFailed_System",
+      AlarmActions: [{ "Fn::Join": ["", ["arn:", { Ref: "AWS::Partition" }, ":automate:ap-southeast-2:ec2:recover"]] }, topic],
+    });
+    t.data.hasResourceProperties("AWS::CloudWatch::Alarm", {
+      AlarmName: "insights-production-nat-b-instance-check",
+      MetricName: "StatusCheckFailed_Instance",
+      AlarmActions: [{ "Fn::Join": ["", ["arn:", { Ref: "AWS::Partition" }, ":automate:ap-southeast-2:ec2:reboot"]] }, topic],
+    });
   });
 
   it("snapshots every EBS disk daily and keeps a week, a replaced disk's snapshots included", () => {
@@ -216,11 +257,12 @@ describe("the data stack", () => {
   });
 
   it("snapshots each instance's disk as soon as the instance exists, and deletes only those snapshots", () => {
-    // The daily policy waits a day before a new disk's first snapshot; a new image replaces all three.
+    // The daily policy waits a day before a new disk's first snapshot; a new image replaces them all
+    // (the NAT instance and the admin host).
     const instances = Object.keys(t.data.findResources("AWS::EC2::Instance"));
-    expect(instances).toHaveLength(3);
+    expect(instances).toHaveLength(2);
     const launch = Object.values(t.data.findResources("Custom::AWS"));
-    expect(launch).toHaveLength(3);
+    expect(launch).toHaveLength(2);
     const instanceOf = (r: (typeof launch)[number]) => JSON.stringify(r.Properties.Create).match(/"Ref":"(\w+)"/)?.[1];
     expect(new Set(launch.map(instanceOf))).toEqual(new Set(instances));
     for (const r of launch) {
@@ -999,7 +1041,7 @@ describe("Cognito sign-in", () => {
   type Resource = { Properties: Record<string, any>; Condition?: string; DependsOn?: string[] }; // eslint-disable-line @typescript-eslint/no-explicit-any
   /** The Auth stack alone, for a configuration the context can't express. */
   function synthAuth(override: Partial<import("../lib/config.js").EnvConfig>) {
-    const app = new App();
+    const app = new App({ context: CDK_CONTEXT });
     const cfg = { ...envConfig((k) => app.node.tryGetContext(k)), ...override };
     const env = { account: cfg.account, region: cfg.region };
     const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
@@ -1454,7 +1496,7 @@ describe("the WhatsApp stack (Evolution API)", () => {
   let a: Template;
   beforeAll(async () => {
     const { WhatsappStack } = await import("../lib/whatsapp-stack.js");
-    const app = new App();
+    const app = new App({ context: CDK_CONTEXT });
     const cfg = envConfig((k) => app.node.tryGetContext(k));
     const env = { account: cfg.account, region: cfg.region };
     const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
@@ -1498,7 +1540,7 @@ describe("the WhatsApp stack (Evolution API)", () => {
     // From a capacity provider back to the launch type, CloudFormation replaces the service, and its fixed
     // name makes that fail ("already exists"; tried on a throwaway stack, 2026-11-06).
     const { WhatsappStack } = await import("../lib/whatsapp-stack.js");
-    const app = new App();
+    const app = new App({ context: CDK_CONTEXT });
     const base = envConfig((k) => app.node.tryGetContext(k));
     const cfg = { ...base, whatsapp: { ...base.whatsapp, spot: false } };
     const env = { account: cfg.account, region: cfg.region };
