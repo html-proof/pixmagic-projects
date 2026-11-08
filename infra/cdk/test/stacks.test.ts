@@ -1701,7 +1701,7 @@ fs.writeSync(1, '{"level":50,"msg":"KEPT-pino"}\\n');
 
   it("keeps everything but the task with -c whatsapp=off, and raises no alarm for the task it doesn't run", async () => {
     const { WhatsappStack } = await import("../lib/whatsapp-stack.js");
-    const app = new App({ context: { whatsapp: "off" } });
+    const app = new App({ context: { ...CDK_CONTEXT, whatsapp: "off" } });
     const cfg = envConfig((k) => app.node.tryGetContext(k));
     const env = { account: cfg.account, region: cfg.region };
     const data = new DataStack(app, "D", cfg, { env });
