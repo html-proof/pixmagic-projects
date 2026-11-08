@@ -61,7 +61,7 @@ export function SmsBillingPage() {
     <div className="space-y-4">
       <PageHeader
         title="Messaging costs & limit"
-        sub="AWS prices each text in US dollars when it reports the delivery. Texts it hasn't priced yet count at their estimate until it does, so you see them against the budget straight away. Months are calendar months in UTC, as AWS bills them."
+        sub="The SMS provider prices each text in US dollars when it reports the delivery. Texts it hasn't priced yet count at their estimate until it does, so you see them against the budget straight away. Months are calendar months in UTC, as the provider bills them."
         actions={
           <label className="flex items-center gap-2 text-sm">
             <span className="text-muted">Month</span>
@@ -113,9 +113,9 @@ export function SmsBillingPage() {
           </Card>
 
           <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="This month">
-            <FigureTile testId="billing-billed" title="Billed by AWS" value={fmtUsd(data.billedUsd)} sub="Prices AWS reported with each delivery" />
-            <FigureTile testId="billing-pending" title="Waiting for AWS's price" value={fmtUsd(data.pendingUsd)} sub="Estimates for texts AWS hasn't priced yet" />
-            <FigureTile testId="billing-texts" title="Texts accepted by AWS" value={fmtNum(data.messages)} sub={data.quota ? `of a ${fmtNum(data.quota)} monthly limit` : "No monthly text limit set"} />
+            <FigureTile testId="billing-billed" title="Billed by the SMS provider" value={fmtUsd(data.billedUsd)} sub="Prices the provider reported with each delivery" />
+            <FigureTile testId="billing-pending" title="Waiting for the provider's price" value={fmtUsd(data.pendingUsd)} sub="Estimates for texts the provider hasn't priced yet" />
+            <FigureTile testId="billing-texts" title="Texts accepted by the SMS provider" value={fmtNum(data.messages)} sub={data.quota ? `of a ${fmtNum(data.quota)} monthly limit` : "No monthly text limit set"} />
             <FigureTile
               testId="billing-hard-stop"
               title="When the budget runs out"
@@ -140,9 +140,9 @@ export function SmsBillingPage() {
             <CostTable id="b-workflow" title="By workflow" empty="No workflow texts billed this month." rows={data.byRule.map((r) => ({ key: r.id ?? r.name, label: r.name, messages: r.messages, costUsd: r.costUsd }))} />
           </div>
 
-          <TableCard id="b-rec" title="Latest charges" aside="Each line is one text as AWS priced it; the 50 most recent this month.">
+          <TableCard id="b-rec" title="Latest charges" aside="Each line is one text as the SMS provider priced it; the 50 most recent this month.">
             {!data.records.length ? (
-              <p className="px-5 pb-5 text-sm text-muted sm:px-6">AWS hasn&apos;t billed any text this month.</p>
+              <p className="px-5 pb-5 text-sm text-muted sm:px-6">The SMS provider hasn&apos;t billed any text this month.</p>
             ) : (
               <table className="w-full min-w-[36rem] text-sm">
                 <TableHead>

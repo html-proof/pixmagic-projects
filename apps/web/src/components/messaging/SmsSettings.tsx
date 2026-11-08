@@ -26,7 +26,7 @@ import type { ReadinessItem, SmsOverview, SmsSetupState } from "./types";
 
 const CONNECTION: Record<SmsSetupState["connection"]["status"], { tone: Tone; label: string; help: string }> = {
   not_connected: { tone: "neutral", label: "Not connected", help: "Connect to start setting up SMS." },
-  connected: { tone: "good", label: "Connected", help: "bizinsights reaches the SMS provider (AWS End User Messaging SMS) for you. No keys are stored in your account or your browser." },
+  connected: { tone: "good", label: "Connected", help: "bizinsights reaches the SMS provider for you. No keys are stored in your account or your browser." },
   failed: { tone: "danger", label: "Connection failed", help: "The provider didn't answer the last check, or SMS isn't switched on for bizinsights yet. Try again in a few minutes." },
   disconnected: { tone: "neutral", label: "Disconnected", help: "Nothing is sent. Your sender name, messages and history are kept: reconnect any time." },
 };

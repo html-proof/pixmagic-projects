@@ -72,6 +72,9 @@ const SHAPES = {
   ZAPIER_CLIENT_SECRET: [/^[A-Za-z0-9_-]{40,}$/, "a Zapier client secret (at least 40 letters, digits, - or _; docs/zapier.md says how to make one)"],
   // The one before it, still accepted while a rotation is under way (docs/RUNBOOK.md, "Rotate the Zapier client secret").
   ZAPIER_CLIENT_SECRET_PREVIOUS: [/^[A-Za-z0-9_-]{40,}$/, "a Zapier client secret (at least 40 letters, digits, - or _)"],
+  // Texts through Twilio (docs/sms.md, "Twilio"): the Console's Account info shows the Auth Token.
+  // The account SID (AC…) isn't a secret: it is TWILIO_ACCOUNT_SID in apps/aws/src/settings.ts.
+  TWILIO_AUTH_TOKEN: [/^[0-9a-f]{32}$/, "a Twilio Auth Token (32 letters and digits, Console → Account info)"],
 };
 
 /** A secret whose replaced value is kept under another name, still accepted until the rotation is finished. */

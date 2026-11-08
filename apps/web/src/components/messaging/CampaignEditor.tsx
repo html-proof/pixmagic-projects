@@ -84,7 +84,7 @@ function Reach({ base, d }: { base: string; d: Draft }) {
         {e.unpricedRecipients > 0 && (
           <span className="text-muted">
             {" "}
-            {e.recipients - e.unpricedRecipients > 0 ? "plus" : "for"} {fmtNum(e.unpricedRecipients)} customer{e.unpricedRecipients === 1 ? "" : "s"} in countries AWS hasn&apos;t priced for you yet (no estimate).
+            {e.recipients - e.unpricedRecipients > 0 ? "plus" : "for"} {fmtNum(e.unpricedRecipients)} customer{e.unpricedRecipients === 1 ? "" : "s"} in countries the SMS provider hasn&apos;t priced for you yet (no estimate).
           </span>
         )}
       </p>

@@ -65,7 +65,7 @@ export function DeliveryAnalytics() {
     <div className="space-y-5">
       <PageHeader
         title="Delivery Analytics"
-        sub={`What was sent, what AWS and the carriers reported, what it cost and the orders that followed. Days are the store's (${store?.timezone ?? "store time"}); test texts aren't counted.`}
+        sub={`What was sent, what the SMS provider and the carriers reported, what it cost and the orders that followed. Days are the store's (${store?.timezone ?? "store time"}); test texts aren't counted.`}
       />
       <section className="space-y-2" aria-label="Filters">
         <FilterBar>
@@ -123,19 +123,19 @@ export function DeliveryAnalytics() {
       ) : (
         <>
           <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Totals">
-            <FigureTile title="Accepted by AWS" value={fmtNum(t.accepted)} sub={t.pending ? `${fmtNum(t.pending)} still waiting for the carrier` : `Of ${fmtNum(t.requested)} requested`} />
+            <FigureTile title="Accepted by the SMS provider" value={fmtNum(t.accepted)} sub={t.pending ? `${fmtNum(t.pending)} still waiting for the carrier` : `Of ${fmtNum(t.requested)} requested`} />
             <FigureTile title="Delivery rate" value={fmtPct(t.deliveryRate)} sub="Of texts with a final outcome, delivered or accepted by the carrier. Texts still waiting don't count either way." />
             <FigureTile title="Orders that followed" value={fmtNum(data.attribution.orders)} sub="Orders that followed a text: followed, not caused" />
-            <FigureTile title="Cost" value={fmtUsd(data.costUsd)} sub="What AWS billed, in US dollars (texts it hasn't priced yet aren't included)" />
+            <FigureTile title="Cost" value={fmtUsd(data.costUsd)} sub="What the SMS provider billed, in US dollars (texts it hasn't priced yet aren't included)" />
           </section>
 
           <Card id="a-counts" title="Every text, by what happened" testId="analytics-counts">
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               <Count label="Requested" value={fmtNum(t.requested)} note="Every text something asked for, sent or not" />
-              <Count label="Accepted by AWS" value={fmtNum(t.accepted)} note={t.pending ? `${fmtNum(t.pending)} still waiting for the carrier` : "—"} />
+              <Count label="Accepted by the SMS provider" value={fmtNum(t.accepted)} note={t.pending ? `${fmtNum(t.pending)} still waiting for the carrier` : "—"} />
               <Count label="Delivered" value={fmtNum(t.delivered)} note="The phone confirmed it" tone={t.delivered ? "good" : undefined} />
               <Count label="Accepted by carrier" value={fmtNum(t.carrierAccepted)} note="Networks that give no phone receipt" />
-              <Count label="Failed" value={fmtNum(t.failed)} tone={t.failed ? "danger" : undefined} note="AWS or the carrier refused it" />
+              <Count label="Failed" value={fmtNum(t.failed)} tone={t.failed ? "danger" : undefined} note="The SMS provider or the carrier refused it" />
               <Count label="Unknown outcome" value={fmtNum(t.unknown)} tone={t.unknown ? "warn" : undefined} note="No final word within 72 hours" />
               <Count label="Opted out / not sent" value={`${fmtNum(t.optedOut)} / ${fmtNum(t.notSent)}`} note="Opt-out lists; consent, quiet hours, limits…" />
               <Count label="Dry runs" value={fmtNum(t.dryRun)} note="Recorded, never sent" />

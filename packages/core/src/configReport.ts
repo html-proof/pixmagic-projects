@@ -51,7 +51,7 @@ export interface ConfigReport {
   /** Sign-in: the Cognito pool and app client, "Continue with Google", Cognito's passwordless codes, and the app's emailed code after the password. */
   auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean; loginCodeExempt: number };
   /** Customer Messaging: the platform's mode (off | sandbox | live), the marketing switch, and whether the delivery events' configuration set and a shared sender are set. */
-  sms: { mode: string; marketing: boolean; configurationSet: boolean; sharedSender: boolean };
+  sms: { mode: string; provider: string; marketing: boolean; configurationSet: boolean; sharedSender: boolean; twilio: boolean };
   /** Zapier (docs/zapier.md): its OAuth client fully set up (id, secret, redirect URI), and whether Connect has an invite link to open. */
   zapier: { configured: boolean; inviteUrl: boolean };
   credentials: ProviderCredentials[];
@@ -186,7 +186,8 @@ export function configReport(): ConfigReport {
       // How many addresses skip that code (never which).
       loginCodeExempt: e.AUTH_LOGIN_CODE_EXEMPT.split(",").filter((a) => a.trim()).length,
     },
-    sms: { mode: e.SMS_MODE, marketing: switchedOn(e.SMS_MARKETING_ENABLED), configurationSet: !!e.SMS_CONFIGURATION_SET.trim(), sharedSender: !!e.SMS_SHARED_SENDER.trim() },
+    // twilio: both of Twilio's settings are there (never their values).
+    sms: { mode: e.SMS_MODE, provider: e.SMS_PROVIDER, marketing: switchedOn(e.SMS_MARKETING_ENABLED), configurationSet: !!e.SMS_CONFIGURATION_SET.trim(), sharedSender: !!e.SMS_SHARED_SENDER.trim(), twilio: !!e.TWILIO_ACCOUNT_SID.trim() && !!e.TWILIO_AUTH_TOKEN.trim() },
     zapier: { configured: zapierConfig().configured, inviteUrl: zapierConfig().settings.ZAPIER_INVITE_URL },
     credentials,
     halfConfigured: credentials.filter(isHalf).map((c) => c.provider),

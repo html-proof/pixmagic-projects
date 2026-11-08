@@ -224,6 +224,8 @@ export const LIMITS = {
    * and no longer logged. Meta's own (signed) deliveries aren't counted.
    */
   waUnsignedIp: { max: 300, windowSec: 60 },
+  /** Twilio webhook deliveries (SMS status reports, replies) whose signature doesn't verify, per IP: as for WhatsApp's. */
+  smsUnsignedIp: { max: 300, windowSec: 60 },
   /**
    * Password resets tried with one address's code, per address, whichever IPs they come from
    * (auth.ts, POST /auth/password/reset): codeVerifyIp alone lets guesses spread over many IPs,

@@ -200,7 +200,7 @@ async function tripCircuit(region: string, deps: Pick<SmsDeps, "coord">) {
   const n = await deps.coord.hit(`sms:failures:${region}`, 300);
   if (n >= CIRCUIT_FAILURES) {
     await deps.coord.put(`sms:circuit:${region}`, "1", CIRCUIT_OPEN_S);
-    logger.error({ region, failures: n }, "sms circuit opened: repeated AWS failures, texts wait 10 minutes");
+    logger.error({ region, failures: n }, "sms circuit opened: repeated provider failures, texts wait 10 minutes");
   }
 }
 
@@ -446,15 +446,18 @@ async function handleSendError(job: SmsMessageJob, store: Store, attempts: numbe
       await end("failed", code);
       if (code === "invalid_number" && job.purpose !== "test") await suppressNumber(store, e164, "all", "invalid_number", { evidence: { jobId: job.id } });
       return "failed";
-    case "opt_out":
-      await end("opted_out", "aws_opt_out");
-      if (job.purpose !== "test") await suppressNumber(store, e164, "all", "aws_opt_out", { evidence: { jobId: job.id, source: "SendTextMessage ConflictException" } });
+    case "opt_out": {
+      // AWS: the number is on its opt-out list. Twilio: it replied STOP to this sender (21610).
+      const reason = deps.sms.name === "twilio" ? "keyword_stop" : "aws_opt_out";
+      await end("opted_out", reason);
+      if (job.purpose !== "test") await suppressNumber(store, e164, "all", reason, { evidence: { jobId: job.id, source: `${deps.sms.name} ${facts.type} ${facts.reason ?? ""}`.trim() } });
       return "opted_out";
+    }
     case "hold_account": {
       await deps.coord.put(ACCOUNT_HOLD_KEY, "1", 3600);
       await back(new Date(now.getTime() + 3600_000), { attempts: { decrement: 1 } });
-      logger.error({ jobId: job.id }, "sms held: AWS's monthly SMS spending limit is reached");
-      await raiseAlert({ workspaceId: store.workspaceId, storeId: store.id, severity: "critical", code: "sms_account_limit", message: "AWS refused texts: account monthly spend limit reached" }, deps.mailer, deps.fetchImpl).catch(() => {});
+      logger.error({ jobId: job.id }, "sms held: the SMS account's monthly spending limit is reached");
+      await raiseAlert({ workspaceId: store.workspaceId, storeId: store.id, severity: "critical", code: "sms_account_limit", message: "The SMS provider refused texts: the account's monthly spending limit is reached" }, deps.mailer, deps.fetchImpl).catch(() => {});
       return "held";
     }
     case "hold_sender": {
@@ -462,7 +465,7 @@ async function handleSendError(job: SmsMessageJob, store: Store, attempts: numbe
       await systemDb.smsSenderConfiguration.updateMany({ where: { storeId: store.id }, data: { heldUntil: until, heldReason: code, ...(code === "sender_not_found" ? { identityCheck: "not_found" } : {}) } });
       await back(until, { attempts: { decrement: 1 } });
       await tripCircuit(region, deps);
-      await raiseAlert({ workspaceId: store.workspaceId, storeId: store.id, severity: "warning", code: "sms_sender_problem", message: `AWS refused the sender (${code})` }, deps.mailer, deps.fetchImpl).catch(() => {});
+      await raiseAlert({ workspaceId: store.workspaceId, storeId: store.id, severity: "warning", code: "sms_sender_problem", message: `The SMS provider refused the sender (${code})` }, deps.mailer, deps.fetchImpl).catch(() => {});
       return "held";
     }
     case "uncertain":
@@ -517,14 +520,14 @@ export async function sendTestSms(store: Store, templateId: string, testNumberId
   }
   const tn = await systemDb.smsTestNumber.findFirst({ where: { id: testNumberId, storeId: store.id } });
   if (!tn) throw new SmsError("Test number not found.", 404, "not_found");
-  if (tn.status !== "verified") throw new SmsError("Verify this number with the code AWS texted it first.", 409, "test_number_unverified");
+  if (tn.status !== "verified") throw new SmsError("Verify this number with the code we texted it first.", 409, "test_number_unverified");
   const t = await systemDb.smsTemplate.findFirst({ where: { id: templateId, storeId: store.id } });
   if (!t) throw new SmsError("Template not found.", 404, "not_found");
   // A test may try the latest version, approved or not: that is what reviewing it needs. It goes only to the team's own number.
   const v = await systemDb.smsTemplateVersion.findUnique({ where: { templateId_version: { templateId, version: t.latestVersion } } });
   if (!v) throw new SmsError("Template not found.", 404, "not_found");
   const sender = await senderOf(store.id);
-  if (!sender || sender.identityCheck !== "verified") throw new SmsError("Verify the sender with AWS first (Sender configuration).", 409, "sender_unverified");
+  if (!sender || sender.identityCheck !== "verified") throw new SmsError("Check the sender first (Sender configuration).", 409, "sender_unverified");
   if ((await deps.coord.hit(`sms:test-repeat:${tn.id}:${templateId}`, TEST_REPEAT_WAIT_S)) > 1) {
     throw new SmsError(`A test text just went to this number. Wait ${TEST_REPEAT_WAIT_S} seconds and check your phone before sending another.`, 429, "test_repeat");
   }

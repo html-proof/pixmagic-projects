@@ -48,8 +48,8 @@ test("an owner sets up a sender, verifies a test number, writes a template and t
   const saved = await call(page, "PUT", `${base}/sender`, { senderType: "sender_id", originationIdentity: "LOCALTEST", countries: ["AU"], monthlyBudgetUsd: 5, hardStop: true, transactionalBasis: "checkout_notice", quietStart: 0, quietEnd: 0, maxPerCustomerDay: 3, maxMarketingPerWeek: 2 });
   expect(saved.status).toBe(200);
   await page.goto("/messaging/sender");
-  await page.getByRole("button", { name: "Check with AWS" }).click();
-  await expect(page.getByText("Verified with AWS").first()).toBeVisible();
+  await page.getByRole("button", { name: "Check sender" }).click();
+  await expect(page.getByText("Verified with the SMS provider").first()).toBeVisible();
 
   // A test number, verified with the code AWS "texted" it.
   const added = await call(page, "POST", `${base}/test-numbers`, { number: "0412 345 678", country: "AU" });

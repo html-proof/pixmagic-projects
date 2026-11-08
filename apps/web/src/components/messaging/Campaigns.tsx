@@ -219,7 +219,7 @@ export function SmsCampaigns() {
                     {figure(c.confirmedRecipients !== null ? "Confirmed customers" : "Customers when last counted", customers)}
                     {figure("Delivered", m ? fmtNum(m.counts.delivered ?? 0) : "—")}
                     {figure("Orders that followed", m ? fmtNum(m.attributedOrders) : "—")}
-                    {figure(m ? "Cost (billed by AWS)" : "Expected cost (estimate)", m ? fmtUsd(m.costUsd) : c.estimatedCostUsd !== null ? `${fmtUsd(c.estimatedCostUsd)} (estimate)` : "—")}
+                    {figure(m ? "Cost (billed by the SMS provider)" : "Expected cost (estimate)", m ? fmtUsd(m.costUsd) : c.estimatedCostUsd !== null ? `${fmtUsd(c.estimatedCostUsd)} (estimate)` : "—")}
                   </div>
                   {(counts.length > 0 || manage) && (
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">

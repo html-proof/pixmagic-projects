@@ -1,9 +1,11 @@
-# Customer Messaging (SMS through AWS End User Messaging)
+# Customer Messaging (SMS through AWS End User Messaging or Twilio)
 
 Marketing → **Customer Messaging** in the dashboard: order updates, abandoned-checkout reminders,
 win-back and VIP texts and merchant-written campaigns, sent by SMS through **AWS End User Messaging
 SMS** (the `pinpoint-sms-voice-v2` API) from bizinsights' own AWS account (605411278365,
-ap-southeast-2).
+ap-southeast-2), or through **Twilio** with `SMS_PROVIDER=twilio` (below, "Twilio"): the provider
+bizinsights moves to as it leaves AWS (docs/ikorex-migration). The rest of this page describes the
+AWS provider where the two differ; the "Twilio" section says what changes.
 
 Nothing reaches a customer until all of these are true:
 
@@ -39,6 +41,8 @@ Nothing reaches a customer until all of these are true:
 | The Automations hub (one setup and history over SMS and email, [automations.md](automations.md)) | `packages/core/src/automations/sms.ts` calls the builder below; nothing else |
 | Automations (Create SMS Automation: when, who, message, test, review) | `builder.ts`, `readiness.ts`; rules in `@app/shared/sms` (`AUTOMATION_TRIGGER_CARDS`, `TRIGGER_SOURCES`, `AUTOMATION_STARTERS`, `smsAutomationSchema`, `smsAudienceSchema`, `segmentConditions`, `checkAutomationMessage`, `SKIP_LABEL`); each app's toml topics in core `apps.ts` (`APP_WEBHOOK_TOPICS`); API `apps/api/src/routes/smsAutomations.ts`; pages `/messaging`, `/messaging/automations`, `/messaging/automations/edit`, `/messaging/history`, `/messaging/settings` (`components/messaging/Overview.tsx`, `Automations.tsx`, `AutomationBuilder.tsx`, `AutomationAudience.tsx`, `AutomationReview.tsx`, `AutomationUi.tsx`, `History.tsx`, `SmsSettings.tsx`) |
 | AWS adapter (signed calls to sms-voice) | `apps/aws/src/smsProvider.ts` |
+| Twilio adapter (REST calls with the account's Auth Token); which one runs | `apps/aws/src/twilioSmsProvider.ts`; `apps/aws/src/smsProviders.ts` (`chooseSmsProvider`, `SMS_PROVIDER`) |
+| Twilio's webhooks, signatures, refusals and statuses in the send path's words, STOP replies | `packages/core/src/sms/twilio.ts`; API `apps/api/src/routes/smsTwilio.ts` |
 | API | `apps/api/src/routes/sms.ts`, `smsOps.ts`, `smsActivity.ts`, `smsPublic.ts`, `smsSends.ts` |
 | Worker | `apps/worker/src/handlers/integrations.ts` (`runSmsJob`, `runSmsEvent`), `webhooks.ts`, `index.ts` (sweep) |
 | Infrastructure | `infra/cdk/lib/app-stack.ts` (configuration set, events topic and queue, IAM, alarms) |
@@ -580,6 +584,63 @@ AWS's events, and Messaging costs AWS's price, before calling it operational.
 | `SMS_SENDER_REQUESTS_TO` | empty (production: the owner's address) | Where Set up SMS's sender-name requests are emailed |
 | `SMS_DEFAULT_REGION` | `AWS_REGION` | SMS region unless a sender's countries need another |
 | `SMS_CONFIGURATION_SET` | set by the App stack | Name, or JSON per region |
+| `SMS_PROVIDER` | `aws` | `aws` or `twilio` ("Twilio" below) |
+| `TWILIO_ACCOUNT_SID` | empty | The Twilio account (AC…), in `apps/aws/src/settings.ts`: not a secret |
+| `TWILIO_AUTH_TOKEN` | empty | The account's Auth Token, in the app secret (`put-secrets.mjs --set TWILIO_AUTH_TOKEN`): the API calls' password and the key of Twilio's webhook signatures |
+
+## Twilio
+
+`SMS_PROVIDER=twilio` sends every text through Twilio Programmable Messaging instead of AWS. Nothing
+else changes for merchants: the same checks, statuses, budgets, opt-outs and pages (whose words name
+no provider). It is off until the owner's steps below are done.
+
+### How Twilio stands in for what AWS did
+
+| AWS End User Messaging | Twilio |
+| --- | --- |
+| Origination identity: an ARN or id (phone number, sender ID, pool) | `+61…` or `PN…` (one of the account's numbers), `MG…` (a Messaging Service, which picks the sender), `MG…/NAME` (an alphanumeric sender ID in that service, sent From NAME through it). Set up SMS stores the last form for a name it finds. |
+| Tags `bizinsights:workspace=<id>`, `bizinsights:shared=true` | The same words in the number's or service's **Friendly Name** (Twilio has no tags): `bizinsights:workspace=<id>` exactly. |
+| Sender ID registration status (`DescribeRegistrations`) | Not in Twilio's API. A name is in a tagged service only once Twilio approved it where the country needs that, so a name found there counts as registered: add it to the service **after** Twilio's approval. |
+| Sandbox (`ACCOUNT_TIER`), spend limit | A Trial account (or one without an approved compliance profile) reaches only verified numbers (error 21608): shown as the sandbox. Twilio has no account spending limit to read: `SMS_ACCOUNT_MONTHLY_LIMIT_USD` and the stores' budgets are the limits. |
+| `MaxPrice` | None: Twilio dropped `MaxPrice` on 2024-06-03. Only Twilio's Geo Permissions (the countries the account may text) and bizinsights' budgets bound what a text can cost. |
+| `TimeToLive` (24 h order updates, 4 h marketing) | `ValidityPeriod`, at most 10 hours (36000 s): an order update Twilio can't hand to a carrier within 10 hours is dropped there. |
+| Delivery events through SNS → SQS | Each send names a `StatusCallback`: `API_URL/webhooks/sms/twilio/status?job=<id>&ws=<id>`. The webhook checks `X-Twilio-Signature` (HMAC-SHA1 with `TWILIO_AUTH_TOKEN` over that URL and the form's fields, the query included, so a job id can't be swapped) and queues the report in the shape AWS's events have, for the same handler. `delivered` → Delivered; `queued`/`sent` → still with the carrier; `undelivered`/`failed` → Failed, in words by Twilio's error code (30003 unreachable, 30005 unknown number: suppressed as invalid, 30006 landline, 30004 blocked, 30007 filtered as spam, 30034 unregistered 10DLC). Where carriers send no receipt Twilio stays at `sent`, and the sweep calls it Unknown after 74 hours (AWS said `SUCCESSFUL`). |
+| Price on each event | Not in Twilio's reports: the 15-minute sweep asks Twilio for each accepted text's price (`messageCost`) for 3 days, from 2 minutes after it went, and records it once. A failed text costs 0. **Bill the Twilio account in US dollars**: a price in another currency is ignored and the estimate stays. |
+| Opt-out list (STOP replies), synced every 15 minutes | Twilio blocks a number that replies STOP itself (a later send gets 21610: Opted out). The number's or service's incoming-message webhook, `API_URL/webhooks/sms/twilio/inbound` (signed the same way), puts it on the suppression list at once (reason "Replied STOP") of every store whose sender is that number or service. START is left to Twilio; the opt-out here stays, like every opt-out a customer makes. Other replies are answered with nothing. |
+| Test numbers verified by AWS (`CreateVerifiedDestinationNumber`…) | bizinsights texts a 6-digit code itself, from the store's checked sender (or `SMS_SHARED_SENDER`), keeps its hash in coord for 10 minutes and allows 5 tries. On a Trial account the number must also be a verified caller ID in Twilio's console. |
+| Refusals by exception name and Reason | Twilio's codes mapped to the same words (`twilioRefusal`): 21610 opted out, 21608 not verified (trial), 21408 country not enabled, 21211/21614 not a valid mobile (suppressed), 21612 sender can't reach that number, 21212/21606/21659/21660/2170x the sender isn't usable (held), 30034/30032 registration not complete, 429/20429 throttled (retried), 401/20003 refused credentials (held), 5xx unsure (never re-sent). The code is kept with the reason (`… TWILIO_21610`). |
+| India's DLT ids on each send | Not sent: Twilio matches Indian templates to their DLT registration itself, which the merchant (or the platform) does through Twilio first. Not tested. |
+
+### Switching to Twilio (owner)
+
+1. **Account** (twilio.com): sign up, then upgrade from Trial (add a payment method) and get the
+   primary customer profile approved (Console → Trust Hub), or texts reach only verified numbers.
+   Set the billing currency to **USD**.
+2. **Geo Permissions** (Console → Messaging → Settings → Geo permissions): only the countries stores
+   text (Australia first). This is the one price guard Twilio keeps, so leave the rest off.
+3. **Senders**, per store or one shared:
+   - **A sender name** (Australia: in ACMA's register since 1 July 2026, and registered with Twilio):
+     Console → Messaging → Regulatory Compliance → Sender ID registration; once approved, Messaging →
+     Services → Create with Friendly Name `bizinsights:workspace=<the workspace id>` (or
+     `bizinsights:shared=true`), Sender Pool → Alpha Sender ID → the name.
+   - **A number** (countries without names, or two-way): Phone Numbers → Buy a number, Friendly Name
+     as above.
+   - Each service's Integration → **Incoming messages: Send a webhook** (or each number's "A message
+     comes in"): `https://bizinsights.io/api/webhooks/sms/twilio/inbound`, HTTP POST. Advanced
+     Opt-Out may stay on (its default STOP words).
+   - The shared sender's identity (`MG…/NAME` or `+61…`) goes in `SMS_SHARED_SENDER`.
+4. **bizinsights**: `node infra/cdk/scripts/put-secrets.mjs --set TWILIO_AUTH_TOKEN` (copy the token
+   from Console → Account info first); in `apps/aws/src/settings.ts` set `TWILIO_ACCOUNT_SID` and
+   `SMS_PROVIDER: "twilio"`, and merge. On the iKorex server the same two settings and the token go
+   in `env/app.env`.
+5. **Check before telling merchants**: Customer Messaging → Settings shows the account as production;
+   each store's *Check sender* again (the identity is now Twilio's); one real text to the owner's own
+   phone (Send yourself a test) reaches *Delivered*, its price appears under Messaging costs within
+   15 minutes, and a STOP reply from that phone shows on the store's suppression list. Then
+   `sqsBridge` (`SMS_EVENTS_QUEUE_URL`) and the AWS SMS resources can go (docs/ikorex-migration).
+
+Going back: `SMS_PROVIDER: "aws"` and merge. Texts already sent through Twilio keep being settled by
+its reports and priced by the sweep; test numbers verified on Twilio must be verified again on AWS.
 
 ## Costs
 
@@ -626,8 +687,17 @@ TEST_PG_PORT=5463 TEST_DB=sms_test pnpm --filter @app/api exec vitest run test/s
 ```
 
 ```bash
-pnpm --filter @app/aws exec vitest run test/smsProvider.test.ts
+pnpm --filter @app/aws exec vitest run test/smsProvider.test.ts test/twilioSmsProvider.test.ts
 ```
+
+```bash
+TEST_PG_PORT=5463 TEST_DB=sms_test pnpm --filter @app/api exec vitest run test/smsTwilio.test.ts
+```
+
+`twilioSmsProvider.test.ts` is the Twilio adapter against a stand-in for Twilio's API, including
+the webhook signature against Twilio's own worked example; `smsTwilio.test.ts` posts signed status
+reports and STOP replies to the API and follows them to the message's status, the suppression list
+and the price.
 
 ### Production readiness
 

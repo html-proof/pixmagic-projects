@@ -118,6 +118,7 @@ const PROVIDERS = [
   { name: "Shopify", purpose: "The source of your store data." },
   { name: "Meta (WhatsApp)", purpose: "Delivers WhatsApp messages and reports whether each was delivered and read, only for stores that connect WhatsApp (a linked phone, or Meta's WhatsApp Business Platform)." },
   { name: "Amazon Web Services (AWS End User Messaging SMS)", purpose: "Delivers text messages, only for stores that set up Customer Messaging, and reports whether each was delivered and what it cost." },
+  { name: "Twilio Inc. (Programmable Messaging)", purpose: "Delivers text messages, only for stores that set up Customer Messaging, and reports whether each was delivered and what it cost." },
   {
     name: "Meta (Marketing API) and Google (Google Ads API, AdSense)",
     purpose: "The source of advertising reports, only for stores that connect an advertising account.",
@@ -272,7 +273,7 @@ export default function PrivacyPage() {
           masked. We keep the customer&apos;s text-message marketing consent as Shopify reports it, a history of every change to it with
           where it came from, and every opt-out, so that nobody who opted out is texted again. Marketing texts go only to customers
           who agreed to them in Shopify, and each one carries a link that stops them at once. Texts are sent through AWS End User
-          Messaging, which reports whether each one was delivered and what it cost.
+          Messaging or Twilio, which report whether each one was delivered and what it cost.
         </p>
         <p>
           The words of each text are kept for 30 days after it is delivered or fails, delivery reports for 180 days, unfinished

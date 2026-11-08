@@ -1,9 +1,11 @@
 /**
- * AWS's delivery events → each message's status and cost.
+ * The provider's delivery events → each message's status and cost.
  *
- * The App stack's configuration set sends every SMS event to an SNS topic only AWS End User
+ * AWS: the App stack's configuration set sends every SMS event to an SNS topic only AWS End User
  * Messaging may publish to, and the topic delivers them (raw) to the sms-events queue the jobs
- * function reads: nobody outside the account can post one. Events arrive late (up to 72 hours),
+ * function reads: nobody outside the account can post one. Twilio: its status reports come to a
+ * webhook that checks Twilio's signature and queues them in the same shape (core/sms/twilio.ts),
+ * and the price comes later, from the sweep (applySmsCost). Events arrive late (up to 72 hours),
  * twice and out of order, so:
  *  - each is stored once (provider message id, event type, time): a replay changes nothing;
  *  - a status only moves forward (statusMayMove): a final one is replaced only by a later final one;
@@ -150,6 +152,21 @@ export async function applySmsEvent(body: unknown, deps: Pick<SmsDeps, "mailer" 
     }
   }
   return "applied";
+}
+
+/**
+ * A price learned after the events (Twilio's, which the sweep asks for): recorded once, as an
+ * event's price would be. False when the message already has one or is gone.
+ */
+export async function applySmsCost(jobId: string, priceUsd: number, parts: number | null, deps: Pick<SmsDeps, "mailer" | "fetchImpl">): Promise<boolean> {
+  if (!Number.isFinite(priceUsd) || priceUsd < 0) return false;
+  const job = await systemDb.smsMessageJob.findUnique({ where: { id: jobId } });
+  if (!job || job.priceUsd !== null) return false;
+  const billed = parts !== null && Number.isFinite(parts) ? Math.max(0, Math.round(parts)) : null;
+  const { count } = await systemDb.smsMessageJob.updateMany({ where: { id: job.id, priceUsd: null }, data: { priceUsd, carrierFeeUsd: 0, ...(billed !== null ? { partsBilled: billed } : {}) } });
+  if (!count) return false;
+  await recordCost(job, priceUsd, 0, billed ?? job.segments ?? 0, job.destinationCountry, deps);
+  return true;
 }
 
 /** One cost row per message (AWS repeats the price on later events), then the store's budget alerts. */

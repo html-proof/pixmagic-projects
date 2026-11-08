@@ -696,7 +696,7 @@ export const SUPPRESSION_REASONS = ["opt_out_link", "aws_opt_out", "carrier_opt_
 export type SuppressionReason = (typeof SUPPRESSION_REASONS)[number];
 export const SUPPRESSION_LABEL: Record<SuppressionReason, string> = {
   opt_out_link: "Used the opt-out link",
-  aws_opt_out: "On the AWS opt-out list (replied STOP)",
+  aws_opt_out: "On the SMS provider's opt-out list (replied STOP)",
   carrier_opt_out: "Opted out with the carrier",
   keyword_stop: "Replied STOP",
   shopify_unsubscribed: "Unsubscribed in Shopify",
@@ -992,6 +992,7 @@ export const SKIP_LABEL: Record<string, string> = {
   not_in_audience: "The customer isn't one the automation is for",
   // The SMS provider's answers (classifySendError).
   aws_opt_out: "The customer replied STOP or opted out with their carrier",
+  keyword_stop: "The customer replied STOP",
   opted_out: "The customer replied STOP or opted out with their carrier",
   country_blocked: "Texts to this country aren't allowed for your SMS sender",
   destination_not_verified: "Until your SMS account is verified, texts only reach approved test recipients",
@@ -1425,7 +1426,7 @@ export type SmsCampaignInput = z.infer<typeof smsCampaignSchema>;
  * customer may have bought anyway, so attributed revenue is not incremental revenue.
  */
 export const ATTRIBUTION_RULE =
-  "An order counts when its customer received a text from you (AWS accepted it and no failure came back) within the attribution window before ordering. Each order counts once, for the last text before it. It shows orders that followed a text, not orders a text caused: some of these customers would have bought anyway.";
+  "An order counts when its customer received a text from you (the SMS provider accepted it and no failure came back) within the attribution window before ordering. Each order counts once, for the last text before it. It shows orders that followed a text, not orders a text caused: some of these customers would have bought anyway.";
 export const DEFAULT_ATTRIBUTION_DAYS = 3;
 /** Statuses that count as "received" for attribution. */
 export const ATTRIBUTABLE_STATUSES: readonly SmsStatus[] = ["accepted", "pending", "delivered", "carrier_accepted"];
@@ -1479,12 +1480,12 @@ export const SENDER_TYPE_LABEL: Record<SenderType, string> = {
 
 /** What each country needs before AWS will carry texts there (AWS End User Messaging SMS user guide, checked 2026-10-22). */
 export const COUNTRY_RULES: Record<string, { label: string; region: string; registration: string }> = {
-  AU: { label: "Australia", region: "ap-southeast-2", registration: "Alphanumeric sender IDs must be registered in ACMA's SMS Sender ID Register (enforced since 1 July 2026; AWS console → Registrations). Unregistered ones show as \"Unverified\" or are blocked." },
+  AU: { label: "Australia", region: "ap-southeast-2", registration: "Alphanumeric sender IDs must be registered in ACMA's SMS Sender ID Register (enforced since 1 July 2026). Unregistered ones show as \"Unverified\" or are blocked." },
   NZ: { label: "New Zealand", region: "ap-southeast-2", registration: "Sender IDs aren't supported: use a long code or a shared short code." },
   US: { label: "United States", region: "ap-southeast-2", registration: "Needs a registered 10DLC campaign, a verified toll-free number or a short code. Unregistered traffic is blocked." },
   CA: { label: "Canada", region: "ap-southeast-2", registration: "Needs a toll-free number (verified) or a long code; sender IDs aren't supported." },
-  GB: { label: "United Kingdom", region: "ap-southeast-2", registration: "Sender IDs must be registered (AWS console → Registrations → UK sender ID; AWS user guide, checked 2026-10-23)." },
-  IN: { label: "India", region: "ap-south-1", registration: "Local routes need a DLT-registered entity (Entity ID), a registered sender ID (header) and each template's DLT Template ID; AWS sends Indian local traffic only from Mumbai (ap-south-1) or Hyderabad (ap-south-2)." },
+  GB: { label: "United Kingdom", region: "ap-southeast-2", registration: "Sender IDs must be registered (UK sender ID registration, checked 2026-10-23)." },
+  IN: { label: "India", region: "ap-south-1", registration: "Local routes need a DLT-registered entity (Entity ID), a registered sender ID (header) and each template's DLT Template ID; the SMS provider sends Indian local traffic only from Mumbai (ap-south-1) or Hyderabad (ap-south-2)." },
 };
 
 export const smsSenderSchema = z.object({
@@ -1639,14 +1640,14 @@ export function checkSenderName(raw: string, country: string | null | undefined)
   const sees: Record<SenderIdSupport | "unknown", { customerSees: string; next: string }> = {
     registered: {
       customerSees: `${shown}, once it is registered`,
-      next: `${where} only shows registered sender names. bizinsights registers it with AWS for you; texts can't use it until the registration is approved.`,
+      next: `${where} only shows registered sender names. bizinsights registers it with the SMS provider for you; texts can't use it until the registration is approved.`,
     },
-    dynamic: { customerSees: shown, next: `${where} shows sender names without registration. bizinsights sets it up with AWS for you after checking the name is yours to use.` },
+    dynamic: { customerSees: shown, next: `${where} shows sender names without registration. bizinsights sets it up with the SMS provider for you after checking the name is yours to use.` },
     none: {
       customerSees: "A phone number (or a short code)",
       next: `Phones in ${where} don't show sender names: your texts come from a number. Say who you are in the message itself, for example "{{business_name}}: …".`,
     },
-    unknown: { customerSees: `${shown}, if ${where} allows it`, next: `bizinsights checks AWS's rules for ${where} when you ask for the name, and tells you what it needs.` },
+    unknown: { customerSees: `${shown}, if ${where} allows it`, next: `bizinsights checks the SMS provider's rules for ${where} when you ask for the name, and tells you what it needs.` },
   };
   return { name, problems, support, ...sees[support] };
 }
