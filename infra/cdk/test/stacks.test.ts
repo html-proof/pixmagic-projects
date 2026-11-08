@@ -243,6 +243,14 @@ describe("each environment's own settings (config.ts)", () => {
     // What the deploy workflow passes from its GitHub variables changes nothing, and neither does a flag it passes empty.
     expect(config({ env: "production", schedules: "on", alertEmail: "bizinsightsaus@yahoo.com", googleClientId: GOOGLE_CLIENT_ID, migrate: "on" })).toEqual(config({}));
     expect(config({ env: "production", schedules: "", alertEmail: "", googleClientId: "", migrate: "" })).toEqual(config({}));
+    expect(config({ whatsapp: "" })).toEqual(config({}));
+    expect(config({ whatsapp: "on" })).toEqual(config({}));
+  });
+
+  it("stops AWS's WhatsApp task only when told off (the iKorex server's Evolution then holds the sessions)", () => {
+    expect(config({}).whatsapp.tasks).toBe(1);
+    expect(config({ whatsapp: "off" }).whatsapp).toEqual({ ...config({}).whatsapp, tasks: 0 });
+    expect(config({ whatsapp: "Off" }).whatsapp.tasks).toBe(1);
   });
 
   it("still lets one deploy switch the schedules off, or name another alarm address or Google client", () => {
@@ -1647,6 +1655,21 @@ fs.writeSync(1, '{"level":50,"msg":"KEPT-pino"}\\n');
 
   it("raises an alarm when no task runs or memory runs short", () => {
     for (const name of ["insights-production-whatsapp-service-down", "insights-production-whatsapp-service-memory"]) w.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: name });
+  });
+
+  it("keeps everything but the task with -c whatsapp=off, and raises no alarm for the task it doesn't run", async () => {
+    const { WhatsappStack } = await import("../lib/whatsapp-stack.js");
+    const app = new App({ context: { whatsapp: "off" } });
+    const cfg = envConfig((k) => app.node.tryGetContext(k));
+    const env = { account: cfg.account, region: cfg.region };
+    const data = new DataStack(app, "D", cfg, { env });
+    const off = Template.fromStack(new WhatsappStack(app, "W", cfg, data, { env }));
+    off.hasResourceProperties("AWS::ECS::Service", { ServiceName: "insights-production-evolution-a", DesiredCount: 0 });
+    expect(Object.keys(off.findResources("AWS::ECS::TaskDefinition"))).toHaveLength(1);
+    for (const name of ["insights-production-whatsapp-service-down", "insights-production-whatsapp-service-memory"]) {
+      expect(Object.keys(off.findResources("AWS::CloudWatch::Alarm", { Properties: { AlarmName: name } }))).toHaveLength(0);
+    }
+    w.hasResourceProperties("AWS::ECS::Service", { ServiceName: "insights-production-evolution-a", DesiredCount: 1 });
   });
 
   it("tells every function the service's private address and the key's secret, and only the cron its database's", () => {

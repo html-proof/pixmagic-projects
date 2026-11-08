@@ -44,7 +44,9 @@ export interface EnvConfig {
    * with no task running), and Fargate Spot (about 70% cheaper; AWS may stop the task with two
    * minutes' notice, and WhatsApp reconnects from the saved sessions when it is back). One task holds
    * every store's WhatsApp session on its shard: never more than one at a time (a WhatsApp session
-   * can't be open in two places).
+   * can't be open in two places). `-c whatsapp=off` makes it 0 (the deploy workflow: GitHub variable
+   * AWS_WHATSAPP): from the move to the iKorex server until stage F, whose own Evolution then holds
+   * the sessions (docs/ikorex-migration/AWS_TO_IKOREX_MIGRATION_MATRIX.md, cutover step 2).
    */
   whatsapp: { cpu: 256 | 512 | 1024 | 2048; memoryMiB: number; tasks: 0 | 1; spot: boolean };
   /**
@@ -240,6 +242,8 @@ export function envConfig(context: (key: string) => unknown): EnvConfig {
   return {
     ...base,
     schedulesEnabled: onOff("schedules", base.schedulesEnabled),
+    // Only "off" stops it: unset, empty or a typo keeps this environment's own.
+    whatsapp: given("whatsapp") === "off" ? { ...base.whatsapp, tasks: 0 } : base.whatsapp,
     // Only "off" turns it off: unset, empty or a typo keeps the safe default.
     migrateBeforeLive: String(context("migrate") ?? "on") !== "off",
     googleClientId: given("googleClientId") ?? base.googleClientId,

@@ -1,8 +1,8 @@
 # Security audit: bizinsights on the iKorex server
 
-**Status (2026-11-07):** an audit of the design and of every file that will run on the server
+**Status (2026-11-08):** an audit of the design and of every file that will run on the server
 (stage A's runtime and server files, and the database copy). Six findings are fixed in the same
-change, with tests. The server itself has not been inspected yet (SSH access waits for its
+change, with tests; a seventh, found while building the copy back (2026-11-08), is fixed with it. The server itself has not been inspected yet (SSH access waits for its
 administrator), so what only the server can answer is listed under [Open](#open), with the check
 that answers it. Like the rest of the migration, nothing is claimed that hasn't been run.
 
@@ -30,6 +30,7 @@ that answers it. Like the rest of the migration, nothing is claimed that hasn't 
 | F4 | `ship.sh` trusted whatever host key the PC's `known_hosts` held for the server | Medium | The server's host key is pinned in `infra/ikorex/known_hosts`; `ship.sh` and `copy-db.mjs` connect only to it (`StrictHostKeyChecking=yes`), `copy-db.mjs` checks its fingerprint against the guide's before connecting, and a test does the same | `copy-db-lib.test.mjs`: the file's fingerprint is `SHA256:5whPPmUOtct7uImi8hLLqyVU5vv1j470FAfLI5Or+TA`, the guide's (also matched by `ssh-keyscan` on 2026-11-06) |
 | F5 | The database copy had no defined path: the move to AWS went through a backup on the PC's disk | Medium | The copy never lands on the PC: RDS → AWS's admin host → an encrypted bucket prefix the host may only write to and that empties itself in a day → a one-hour link on stdin → the server. Reports hold counts only ([DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md)) | `copyDb.test.ts`, the CDK test for `db-export/` |
 | F6 | The two files `render-monitoring.sh` writes (the alert address, Resend's SMTP password) weren't ignored by Git, and `ship.sh` would have sent a local copy over the server's | Low | Both ignored, and left out of what `ship.sh` sends | `git check-ignore` |
+| F7 (2026-11-08) | `copy-db.sh restore` handed the presigned link to `curl` as an argument: the link reached the server on stdin, but for the download's minute any user of the server could read it from the process list (`ps`, `/proc/<pid>/cmdline`) and fetch the whole database dump with it | Medium | `curl` gets the link in a config on its stdin (`-K -`), never in its arguments, for downloads and for the copy back's uploads alike; a link that could end the config's quoted value is refused. The admin host never gets a link at all (it reads the bucket with its own role), since Systems Manager keeps every command's text | `copyDb.test.ts`: curl's recorded arguments hold no link while the real curl moves the dump; `copy-db-lib.test.mjs`: a link in the admin host's settings is refused |
 
 These settings take effect when the containers first run on the server (stage B), and that first
 start is their test: every container healthy, `postgres` included with its five capabilities.

@@ -225,11 +225,12 @@ jobs:
           AWS_MAX_ATTEMPTS: "10"
           NODE_OPTIONS: "--network-family-autoselection-attempt-timeout=5000 --require ${{ github.workspace }}/infra/cdk/scripts/stall-guard.cjs"
           SCHEDULES: "${{ vars.AWS_SCHEDULES }}"
+          WHATSAPP: "${{ vars.AWS_WHATSAPP }}"
           ALERT_EMAIL: "${{ vars.AWS_ALERT_EMAIL }}"
           GOOGLE_CLIENT_ID: "${{ vars.GOOGLE_SIGNIN_CLIENT_ID }}"
           MIGRATE: "${{ vars.AWS_MIGRATE_BEFORE_LIVE || 'on' }}"
         run: |
-          deploy=(npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c "schedules=$SCHEDULES" -c "alertEmail=$ALERT_EMAIL" -c "googleClientId=$GOOGLE_CLIENT_ID" -c "migrate=$MIGRATE")
+          deploy=(npx cdk deploy --all --require-approval never --concurrency 3 -c env=production -c "schedules=$SCHEDULES" -c "whatsapp=$WHATSAPP" -c "alertEmail=$ALERT_EMAIL" -c "googleClientId=$GOOGLE_CLIENT_ID" -c "migrate=$MIGRATE")
           network='could not be used to assume|no credentials have been configured|did not establish a connection|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|getaddrinfo|socket hang up|TimeoutError|NetworkingError'
           log=$(mktemp)
           for attempt in 1 2 3; do

@@ -20,6 +20,10 @@ Melbourne time, no logs profile. Since then, each live on AWS through Deploy to 
   owner adds the app's redirect address to the Google client.
 - **Texts through Twilio** (#354, release 172), replacing AWS End User Messaging: built and off until
   the owner's Twilio account is ready ([docs/sms.md](../sms.md), "Switching to Twilio").
+- **The copy back for a rollback** (2026-11-08): `copy-db-back.mjs` copies the server's databases
+  back into RDS and proves them whole ([ROLLBACK_PLAN.md](ROLLBACK_PLAN.md#the-copy-back-de-after-writes-on-ikorex)),
+  tested against PostgreSQL; with it, `AWS_WHATSAPP=off`, which keeps AWS's WhatsApp service from
+  starting again against the server's through the rollback period.
 
 The server is not inspected yet: this PC's SSH key (with its passphrase now) waits for the
 administrator. Nothing has changed on the server, and AWS keeps running everything.
@@ -64,8 +68,9 @@ ourselves.
    host bizinsights there. Then the read-only inspection, which also answers the audit's open
    questions (who is in the `docker` group, what runs as `deployer`, disk encryption).
 2. The capacity test's result (go / tight / no go).
-3. Before stage D: the reverse copy (iKorex back to RDS) for the rollback period, driven and timed
-   like the forward one.
+3. Stage B's timed round trip of the database copy, out and back (`copy-db.mjs --rehearsal --keep`,
+   then `copy-db-back.mjs --rehearsal`): both built and tested on the PC, neither yet run against
+   RDS and the server.
 4. The owner: Google's redirect address for the app's own sign-in
    ([docs/cognito-setup.md](../cognito-setup.md#9-leaving-cognito-the-apps-own-sign-in)), and the
    Twilio account ([docs/sms.md](../sms.md), "Switching to Twilio"). Each then ships as a one-line
