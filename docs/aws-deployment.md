@@ -19,8 +19,8 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email,whatsapp}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
 | Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (on since 2026-10-16: `schedulesEnabled` in `infra/cdk/lib/config.ts`) | `runScheduled()` in `apps/worker` |
 | Migrations before the switch | Lambda `insights-production-migrate-before-live` (App stack, runs only during deploys, through the custom resource `MigrateBeforeLive`) runs a release's migrations on its new cron version before the `live` aliases move ("Migrations before the switch" below) | `infra/cdk/lib/migrate-before-live.ts`, `apps/aws/src/migrate.ts` |
-| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, Multi-AZ: standby in the other AZ, private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
-| Way out to the internet | EC2 NAT instances `insights-production-nat-a` / `-b` (t4g.nano, one per AZ, Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
+| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, single-AZ in 2b since 2026-11-08 (Multi-AZ before), private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
+| Way out to the internet | EC2 NAT instance `insights-production-nat-b` (t4g.nano, in the database's AZ, both AZs' functions through it since 2026-11-08; `nat-a` before that; Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
 | Coordinator | DynamoDB `insights-production-coord` | `apps/aws/src/dynamoCoord.ts` |
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
@@ -1102,7 +1102,8 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 ## Cost (US$/month, on-demand, approximate)
 
 The owner's ceiling is **US$50-80 a month** (2026-10-18), keeping everything above, Multi-AZ
-included. Measured, priced and independently re-checked on 2026-10-18 (AWS Price List API, Sydney,
+included. Since 2026-11-08 the database is single-AZ and there is one NAT instance (Fault
+tolerance): the two RDS rows below halve and the NAT row is ~8.3, ~30 a month less. Measured, priced and independently re-checked on 2026-10-18 (AWS Price List API, Sydney,
 before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's traffic):
 
 | Item | US$/month |
@@ -1205,6 +1206,16 @@ moving the rate windows from 60 seconds to 5 minutes, and swapping the custom he
 managed one, with no SLA. Cost allocation tags `app` and `environment` can be activated in Billing.
 
 ## Fault tolerance
+
+**Given up on 2026-11-08** (the owner's yes, to cut the bill until the move to iKorex,
+[aws-migration/AWS_MIGRATION_PLAN.md](aws-migration/AWS_MIGRATION_PLAN.md) changes 8 and 9): the
+database is single-AZ (`dbMultiAz: false`) and one NAT instance, `nat-b`, carries both AZs'
+traffic (`natGateways: 1`, `natAz: "ap-southeast-2b"`), ~US$30 a month less. Both are in 2b, so an
+outage of 2b stops the app until AWS recovers it (minutes to hours), an outage of 2a doesn't, and
+patching or a class change of the database is now a reboot of a few minutes instead of a failover.
+Trusted Advisor's three checks below turn red or yellow again, as expected. Going back is the same
+two lines (`dbMultiAz: true`, `natGateways: 2`), in place, without downtime. The rest of this
+section is how it was from 2026-10-17.
 
 Trusted Advisor's three fault-tolerance checks ("Amazon RDS DB instances not using Multi-AZ
 deployment", "NAT Gateway AZ Independence", "Single AZ Application Check") were one risk until

@@ -97,7 +97,8 @@ CloudFormation generated and the ECS task reads, and the smallest saving here, s
 ## Step 3: give up high availability (saves ~29.98)
 
 Both reverse decisions the owner made on 2026-10-17 to clear Trusted Advisor's fault-tolerance
-checks. Listed because they are the remaining large items, not recommended.
+checks. Listed because they are the remaining large items, not recommended. **The owner said yes to
+both on 2026-11-08**, until the move to iKorex ([MIGRATION_STATUS.md](MIGRATION_STATUS.md)).
 
 **8. Database single-AZ** (21.74). `dbMultiAz: false` in `config.ts`. The standby goes away; RDS
 converts in place without downtime. After that, a zone outage or AWS maintenance stops the app until
@@ -105,6 +106,7 @@ the instance recovers (minutes to hours), and Trusted Advisor's RDS check turns 
 
 **9. One NAT instance** (~8.24). `natGateways: 1`. Both zones' functions then go out through one
 instance; if its zone fails, calls to Shopify, Meta, Google and Cognito stop until it is replaced.
+The one kept is in the database's zone (`natAz`), so a single zone's outage, not either, stops the app.
 
 ## Not migrated, and why
 

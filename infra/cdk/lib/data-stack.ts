@@ -27,9 +27,10 @@ export const LAUNCH_SNAPSHOT_TAG = "insights-snapshot";
  *
  * Network: a VPC over two Availability Zones with
  *   - public subnets: only the NAT instances live here (nat-instances.ts; cfg.natGateways of them,
- *     one per AZ in production)
+ *     one in production since 2026-11-08, in cfg.natAz)
  *   - private subnets (with egress): the Lambda functions and the admin host; out to the internet
- *     (Cognito, Shopify, Meta, Google, merchants' SMTP servers) through the NAT instance in their AZ
+ *     (Cognito, Shopify, Meta, Google, merchants' SMTP servers) through the NAT instance in their AZ,
+ *     or the one there is
  *   - isolated subnets: the database (primary in one AZ, standby in the other with cfg.dbMultiAz),
  *     with no route out at all
  * plus free gateway endpoints for S3 and DynamoDB. Nothing in the VPC accepts connections from the
@@ -69,6 +70,9 @@ export class DataStack extends Stack {
       maxAzs: 2,
       natGateways: cfg.natGateways,
       natGatewayProvider: nat,
+      // A NAT instance's construct path is its subnet's (Vpc/publicSubnet<n>/NatInstance), so picking
+      // the AZ keeps that instance and its routes' targets as they are and removes the other.
+      natGatewaySubnets: cfg.natAz ? { subnetGroupName: "public", availabilityZones: [cfg.natAz] } : undefined,
       subnetConfiguration: [
         { name: "public", subnetType: ec2.SubnetType.PUBLIC, cidrMask: 24 },
         { name: "app", subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 22 },
