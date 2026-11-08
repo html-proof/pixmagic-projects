@@ -13,7 +13,11 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 | C | Backups to R2, restore test, monitoring and alerts, external uptime check | No | — |
 | D | Cutover in a maintenance window (below): a Sunday, 20:00-21:00 Melbourne time | **Yes** | **Owner, for the date** |
 | E | Rollback period, 14 days: AWS kept with schedules off | No | — |
-| F | AWS decommissioned, one resource at a time | **Yes** | **Owner, separately** |
+| F | AWS decommissioned, one resource at a time, then the account closed (decision 4b) | **Yes** | **Owner, separately** |
+
+Alongside, on AWS before the cutover (each live through Deploy to AWS like any change): the app's own
+sign-in, moving users over (`AUTH_MODE=migrating`), and texts through Twilio (`SMS_PROVIDER=twilio`).
+So the server starts with neither Cognito's sign-in nor AWS's SMS to carry.
 
 ## Service by service
 
@@ -23,33 +27,33 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 | SQS + Lambda `jobs` | `worker` + PostgreSQL queue | **Done**: `pgQueues.ts` (implements `Queues`; SQS's contract: delays, receive counts, holds, dead-letter after 10), runner in `selfhost.ts`, `admin queues/dlq/redrive` | Queues drained to empty before the window; nothing carried over | Integration tests against PostgreSQL (retry, backoff, dead-letter, worker dying mid-job, two claimers, time limit) | A handler that assumed SQS batch semantics: none do (they get one message at a time on both) |
 | EventBridge Scheduler + `cron` | Schedules in `worker` (`schedule_ticks`); admin command | **Done**: `schedules.ts` (cron with time zones, one run per tick across workers, catch-up, retries), `admin.ts` | — | Ticks recorded; two workers run a tick once; failed tick retried | A missed tick during the window: the 15-minute jobs catch up by design |
 | SNS alarms | Alertmanager | Rules + email config | — | One test alert | — |
-| SNS sms-events → SQS | **Stays on AWS** (SMS kept, 2026-11-07); the server's worker long-polls the `smsEvents` SQS queue into its own | **Done**: `sqsBridge.ts` (`SMS_EVENTS_QUEUE_URL`, only with `SCHEDULES=on`); deleted from SQS only once in PostgreSQL | — (events wait in SQS up to 4 days) | Sandbox SMS shows "delivered" on staging-turned-live | Two readers at once (the `jobs` function and the server): the function's `smsEvents` trigger is turned off in the window, before `SCHEDULES=on` |
+| SNS sms-events → SQS | Twilio's status and inbound webhooks (`/api/webhooks/sms/twilio/*`), through the tunnel like every request | **Done**: `apps/api/src/routes/smsTwilio.ts` (#354), signatures checked, into the same `smsEvents` queue. Only if the cutover comes before the Twilio switch: `sqsBridge.ts` (`SMS_EVENTS_QUEUE_URL`, only with `SCHEDULES=on`) reads AWS's queue meanwhile | — | A text's delivery report and a STOP reply arrive on the server | Twilio's webhooks follow DNS, so they reach whichever copy `bizinsights.io` points at. Before the switch: two readers of the SQS queue, so the `jobs` function's `smsEvents` trigger goes off in the window, before `SCHEDULES=on` |
 | DynamoDB `coord` | PostgreSQL table `coord_entries` | **Done**: `pgCoord.ts` (implements `Coord`), `admin import-coord` | The 12 items (signed-out sessions among them) copied with `admin import-coord` | `Coord` contract tests against PostgreSQL | — |
 | S3 `payloads` | Volume + nightly prune | **Done**: `fsBlobs.ts` (implements `BlobStore`) | — (transient, drained) | Unit tests incl. keys that would leave the folder | Disk fills: alert at 80 % |
 | S3 `site` | Served by `app` | Production static handler (`staticSite.ts` exists) with cache headers | — | Pages, hashed files cached by Cloudflare | — |
 | S3 `artifacts` | R2 bucket, encrypted | Backup scripts | Existing RDS snapshots stay in AWS until stage F | Restore test | — |
 | RDS PostgreSQL | `postgres` container | Connection strings only. **Copy built** (`copy-db.mjs` + `copy-db.sh`, tested against PostgreSQL; [DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md)) | One snapshot per database dumped on the admin host, restored on iKorex inside the window (~1.8 GB of data: minutes) | Every table's row count equal to the snapshot's, row-level security and policies equal, then `migrate` and the counts again; smoke tests | **Single server, no failover** (the owner's decision); a restore is the recovery |
-| Cognito | **Keep** (recommended) | Admin calls with an IAM user key (today: the function's role) | — | Password, email code, Google, reset, sign-out | Long-lived IAM key: limited to this pool, rotated |
-| Cognito email Lambda + KMS | Keep with Cognito | — | — | Reset code arrives | — |
+| Cognito | **The app's own sign-in** (decision 2 revised): `AUTH_MODE=migrating` on AWS first, `local` at stage F | **Done**: `localAuth.ts`, `migratingAuth.ts`, `authStore.ts` (#353); Cognito's password check and admin delete with an IAM user key until stage F | The accounts that moved over are rows of `auth_accounts`, copied with the database | Password, email code, Google, reset, sign-out, two-step verification | Users who never sign in before stage F: a reset email each (ROLLBACK_PLAN.md, "Before stage F starts") |
+| Cognito email Lambda + KMS | The app's own code emails (Resend) | Done with the sign-in above | — | Sign-up and reset codes arrive | — |
 | SES | Nothing (Resend sends) | — | — | — | — |
-| End User Messaging SMS | **Keep** (decided 2026-11-07) | IAM user key: `sms-voice:SendTextMessage`, and `sqs:ReceiveMessage`/`sqs:DeleteMessage` on the `smsEvents` queue | — | Sandbox send | — |
+| End User Messaging SMS | **Twilio** (decision 3 revised, owner's choice 2026-11-07) | **Done**: `twilioSmsProvider.ts`, `smsProviders.ts` (#354), off until the owner's Twilio account is ready (`docs/sms.md`, "Switching to Twilio"); until then an IAM user key with `sms-voice:SendTextMessage` and the SQS reads above | Nothing: no real text was sent on AWS (sandbox); sender names are registered again at Twilio | One real text to the owner's phone, its delivery report, a STOP reply | Sender name registration at Twilio takes days to weeks in some countries |
 | Secrets Manager + SSM | `.env` on the server + encrypted copy | `loadSecrets` skipped when the values are present | Exported by a script that prints names only | `config` action shows every provider configured | A secret in a log: the script never prints values |
 | CloudFront + WAF | Cloudflare proxy + Tunnel + Cloudflare rules | — | — | Client IP, geo, rate limit, outage behaviour | Cloudflare Free has less WAF than AWS's managed groups (see the cost audit, change 6) |
 | EC2 NAT + admin host | — | — | — | Outbound calls work from the server | — |
 | Fargate Evolution + Cloud Map + Route 53 | `evolution` container | `EVOLUTION_API_URL` = `http://evolution:8080`; webhook URL to `app` on the internal network | Its `evolution` database (sessions) with the app's | Linked numbers still connected after the window | Sessions tied to the old webhook URL: Evolution's instances re-pointed at start |
 | CloudWatch | Prometheus, Alertmanager, Grafana + external uptime check (Loki: off, decision 7) | **Done**: `/metrics` on `web` and `worker` (`metrics.ts`), `infra/ikorex/docker-compose.monitoring.yml`, 16 alert rules, a dashboard | — | Each alert fired once (stage C) | Monitoring on the same server: covered by the external check |
-| GuardDuty, CloudTrail, Cost Explorer, Budgets | Stay while AWS has resources; GuardDuty off at stage F | — | — | — | — |
+| GuardDuty, CloudTrail, Cost Explorer, Budgets | Deleted at stage F; the server never sends the cost email | **Done**: the server's cost-email schedule removed | — | — | — |
 | CDK + Deploy to AWS | `ship.sh` + `deploy.sh` over SSH; the workflow Deploy to iKorex | **Done**: the scripts, and `.github/workflows/ikorex-deploy.yml` (built 2026-11-07, off until stage B's setup: `IKOREX_STAGING`, then `IKOREX_PRODUCTION` at the cutover) | — | A deploy with a failing migration or health check rolls back (stage B) | The deploy key: its own, in GitHub's secret only, limited on the server to `ssh-gate.sh` (receive, deploy) |
 
 ## Cognito: the three ways
 
 Cognito does not export password hashes. That is AWS's rule, not something the migration can work
-around.
+around. **Chosen: option 2** (owner, 2026-11-07, "own sign-in, gradual move"), built in #353.
 
 | Option | Users notice | Work | Cost |
 | --- | --- | --- | --- |
-| **1. Keep Cognito** (recommended) | Nothing | Small: an IAM user for the admin calls | ~US$1.15/month (the email key) |
-| 2. Lazy migration to the app's own sign-in | Nothing for those who sign in within the window; a reset email for the rest | Large: password hashing (argon2id), Google sign-in on the app's own OAuth client, password reset, sessions; Cognito switched off after N weeks | 0 after |
+| 1. Keep Cognito (first recommendation) | Nothing | Small: an IAM user for the admin calls | ~US$1.15/month (the email key) |
+| **2. Lazy migration to the app's own sign-in** (chosen) | Nothing for those who sign in within the window; a reset email for the rest | Large: password hashing (argon2id), Google sign-in on the app's own OAuth client, password reset, sessions; Cognito switched off after N weeks | 0 after |
 | 3. Keycloak on the server | Every user resets their password | Large, plus ~1 GB of memory for Keycloak and another service to patch | 0, but server memory |
 
 Users who only ever sign in with Google have no Cognito password, so the resets in options 2 and 3
@@ -58,16 +62,18 @@ only reach users with one.
 ## Cutover (stage D), in the window
 
 1. Announce the window. Stage B's staging has passed every check.
-2. On AWS: schedules off; webhooks answered `503` (Shopify retries them for hours); the `jobs`
-   function's `smsEvents` trigger off (SMS events then wait in SQS for the server); the other queues
-   drained to empty; final `counts`.
+2. On AWS: schedules off; webhooks answered `503` (Shopify retries them for hours, Twilio once,
+   so a delivery report in the window may be lost and the text stays "Sent"); if SMS is still on AWS,
+   the `jobs` function's `smsEvents` trigger off (SMS events then wait in SQS for the server); the
+   other queues drained to empty; final `counts`.
 3. `node infra/ikorex/scripts/copy-db.mjs --cutover --replace`: both databases from one snapshot
    each, restored on iKorex, compared table by table, `admin migrate`, compared again.
 4. Copy the coordinator's items; start `app`, `worker`, `evolution` with production settings.
 5. Cloudflare: `bizinsights.io` and `www` move from CloudFront to the tunnel (proxied, takes effect
    in seconds).
-6. Smoke tests; sign in; a test webhook; WhatsApp numbers connected; `SMS_EVENTS_QUEUE_URL` set
-   and schedules on (`SCHEDULES=on` also starts reading the SMS events waiting in SQS).
+6. Smoke tests; sign in; a test webhook; WhatsApp numbers connected; schedules on
+   (`SCHEDULES=on`; if SMS is still on AWS, with `SMS_EVENTS_QUEUE_URL` set, which also starts
+   reading the SMS events waiting in SQS).
 7. Webhooks queued at Shopify arrive at iKorex.
 
 The window is the only write freeze. The rollback for each step is in [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md).

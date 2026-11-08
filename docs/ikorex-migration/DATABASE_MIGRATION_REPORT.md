@@ -12,10 +12,10 @@ for SSH access, and the real copy is step 3 of the cutover (stage D).
 | `app`: every customer record (stores, orders, sales, inventory, ads, SMS, staff, sessions…) | RDS PostgreSQL 17.11 | 1.8 GB used (CloudWatch, 2026-11-06); 155 tables, 149 of them under row-level security, 293 policies, 65 migrations | This copy |
 | `evolution`: the WhatsApp service's instances and their WhatsApp sessions | Same RDS instance, its own role | Small | This copy, restored as its own role so the service still owns its tables |
 | Database roles and their passwords | RDS | n/a | **Not copied.** On the server the roles come from `init.sql` (through `admin migrate`) with the server's own passwords (`env/owner.env`); no password leaves AWS, and none travels in a dump |
-| User passwords | Cognito | n/a | Not moved: Cognito stays (decision 2) |
+| User passwords | Cognito, and the app's own `auth_accounts` | n/a | Those who moved over to the app's own sign-in (`AUTH_MODE=migrating`): argon2id hashes in `auth_accounts`, part of this copy. The rest stay at Cognito, which still checks them until stage F (decision 2) |
 | The coordinator's items (rate limits, locks) | DynamoDB `coord` | Small, short-lived | Cutover step 4: `admin import-coord` |
 | Queued jobs | SQS | Drained to empty before the copy (cutover step 2; the copy refuses otherwise) | Not moved |
-| SMS delivery events | SQS `smsEvents` | Waits there | Read by the server once it is live (`sqsBridge.ts`) |
+| SMS delivery events | Twilio's webhooks; SQS `smsEvents` only while SMS is on AWS | Twilio's arrive wherever `bizinsights.io` points; AWS's wait in SQS | Twilio's: nothing to move. AWS's: read by the server once it is live (`sqsBridge.ts`) |
 
 ## How: `infra/ikorex/scripts/copy-db.mjs` and `copy-db.sh`
 

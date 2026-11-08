@@ -3,6 +3,26 @@
 What has been tested, how, and with what result. Only runs that happened are recorded here; a
 criterion with no run says so. Newest first.
 
+## 2026-11-08: leaving Cognito and AWS's SMS, on AWS first
+
+The owner's revised decisions (leave AWS completely) are carried out on AWS production before the
+cutover, each through Deploy to AWS: the app's own sign-in (#353) and Twilio (#354) are live as
+releases 171 and 172, both off; this change switches the sign-in to `migrating`. Google stays on
+Cognito: Google answered `redirect_uri_mismatch` for `https://bizinsights.io/auth/callback` on the
+app's client (checked 2026-11-08 by opening its authorization address, no sign-in), so
+`GOOGLE_SIGNIN_CLIENT_ID` waits for the owner to add it.
+
+The e2e server starts from `apps/aws/src/settings.ts`, so the browser suite now runs `migrating`
+too. On the owner's PC (PostgreSQL 18 scratch cluster, the mail stand-in, Playwright 1.56):
+
+| Test | What it shows | Result |
+| --- | --- | --- |
+| `e2e/auth.spec.ts` + `e2e/app.spec.ts` in `migrating` | Sign-up and its emailed code, sign-in with the emailed code, the session across a reload, forgot password, Google through Cognito (sign-up, cancel, linking an existing address), password change and sign-out everywhere, two-step verification set up and asked for, linking and removing Google, adding a password to a Google-only account, deleting the account, onboarding and the dashboard | **28 of 28 passed**, no server errors (first run: 19 failed on a test helper, which expected the Cognito emulator to know every new account; fixed) |
+| New: an account made at Cognito the old way | Its next sign-in is checked by Cognito once and the account is kept here under the same sub (`auth_accounts.moved_from = cognito`, a password hash, the same `users` row); after Cognito deletes it, the password still signs in and a wrong one is refused | **Passed** (twice, `--repeat-each 2`) |
+
+The server's own changes: no AWS cost email from the server (`selfhost.ts`), since AWS's schedule
+sends it until the account closes.
+
 ## 2026-11-07: Deploy to iKorex (the GitHub workflow), on the owner's PC
 
 Branch `claude/ssh-key-ikorex-server-663aff`, on top of the database copy's (below). Git Bash, Node 24,

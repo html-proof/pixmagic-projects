@@ -34,8 +34,9 @@ visitor ──HTTPS──> Cloudflare (DNS, proxy, TLS, managed rules, rate limi
 Cloudflare already proxies `bizinsights.io`. A Cloudflare Tunnel (free) lets the `cloudflared`
 container dial out to Cloudflare, so the server needs **no inbound port, no TLS certificate and no
 change to its existing web server**. Shopify webhooks, OAuth callbacks (Shopify, Meta, Google, Zapier)
-and the Cognito domain all use `bizinsights.io` / `auth.bizinsights.io`, so they keep working when the
-hostname's target moves from CloudFront to the tunnel: no app registration has to change.
+Twilio's SMS webhooks and, until stage F, the Cognito domain all use `bizinsights.io` /
+`auth.bizinsights.io`, so they keep working when the hostname's target moves from CloudFront to the
+tunnel: no app registration has to change.
 
 The app trusts the client address only from Cloudflare's `CF-Connecting-IP` (and location from
 Cloudflare's visitor-location headers), and only when it is a valid address. That is safe because the
@@ -56,7 +57,7 @@ What CloudFront does today and where it goes:
 
 `infra/ikorex/docker-compose.yml`, all on the project's own network (`bizinsights_internal`). Only
 `cloudflared` takes traffic in (through Cloudflare); every container can reach the internet for its
-own calls (Shopify, Meta, Google, Resend, Cognito).
+own calls (Shopify, Meta, Google, Resend, Twilio, and Cognito until stage F).
 
 | Service | Image | Role | Data | Limits |
 | --- | --- | --- | --- | --- |
@@ -100,19 +101,19 @@ counting exactly, which pg-boss's retry policies don't, with no extra dependency
 
 **Events (SNS).** SNS only carries the alarm emails and the SMS delivery events today; the app's own
 notifications (`packages/core/src/notify.ts`, the bell, alerts) already run through the queues, the
-database and Resend. Alarms move to Alertmanager. SMS stays on AWS End User Messaging (decided
-2026-11-07), and so do its delivery events' topic and queue: the configuration set → SNS topic →
-`smsEvents` SQS queue path is unchanged, and the server's worker long-polls that queue and moves each
-event into its own `smsEvents` queue (`apps/aws/src/sqsBridge.ts`, with `SMS_EVENTS_QUEUE_URL`, only
-when `SCHEDULES=on`). This replaced the plan of an SNS HTTPS subscription to the app: SQS keeps an
-event 4 days, so a server down for hours loses none (SNS gives up on an HTTPS endpoint after an
-hour), and no new public endpoint is needed. Polling costs nothing (~130,000 requests a month, in
-SQS's free tier).
+database and Resend. Alarms move to Alertmanager. SMS moves to Twilio (decision 3, #354): its
+delivery reports and STOP replies are signed webhooks to `/api/webhooks/sms/twilio/status` and
+`/inbound` (`apps/api/src/routes/smsTwilio.ts`), which reach the server through the tunnel like every
+request and go into the same `smsEvents` queue; nothing of AWS's is needed. Only while SMS is still
+on AWS End User Messaging (`SMS_PROVIDER=aws`, if the cutover comes before the owner's Twilio switch):
+the configuration set → SNS topic → `smsEvents` SQS queue path stays, and the server's worker
+long-polls that queue into its own (`apps/aws/src/sqsBridge.ts`, with `SMS_EVENTS_QUEUE_URL`, only when
+`SCHEDULES=on`). The bridge, its alert and those settings are removed once Twilio is on.
 
 ### Schedules (replaces EventBridge Scheduler + the `cron` function): `apps/aws/src/schedules.ts`
 
-Every 15 minutes, 03:15 UTC nightly, and 07:00 Melbourne for the cost email (only with
-`COST_REPORT_TO`). Each worker checks every 20 s which tick is due; a tick runs once however many
+Every 15 minutes and 03:15 UTC nightly (the AWS cost email stays with AWS, whose own schedule sends
+it until the account closes). Each worker checks every 20 s which tick is due; a tick runs once however many
 workers there are (the first to insert its `schedule_ticks` row runs it), a restart runs a tick it
 missed (within 14 minutes for the 15-minute run, 12 hours for the nightly), and a failed or abandoned
 tick is tried again after 20 minutes, three times at most. `runScheduled()` is reused unchanged. The
@@ -192,12 +193,13 @@ server (the owner's password manager).
 | --- | --- |
 | Cloudflare (DNS, proxy, Tunnel, R2) | Already the front door; free |
 | Resend | Already sends every email; deliverability needs a reputable sender, not a server of our own |
-| Cognito (recommended) | Free at this size; cannot export password hashes (see the matrix for the alternatives) |
-| AWS End User Messaging SMS (owner's choice) | Per message; sending SMS needs a carrier-connected provider |
+| Twilio (SMS) | Per message; sending SMS needs a carrier-connected provider (decision 3) |
+| Cognito, until stage F only | While users move over to the app's own sign-in, Cognito checks each one's password once (decision 2) |
 | Shopify, Meta, Google, Zapier | The integrations themselves |
 
-The AWS calls that remain (Cognito's admin calls, SMS, the cost email) use one IAM user's keys,
-limited to those actions, where AWS used the functions' role.
+Until stage F, the AWS calls that remain (Cognito's password check and admin calls; AWS's SMS until
+the Twilio switch) use one IAM user's keys, limited to those actions, where AWS used the functions'
+role. After stage F, nothing calls AWS.
 
 ## Deploys (replaces CDK + Deploy to AWS)
 
@@ -238,7 +240,7 @@ its reason, and any can be revisited before the cutover.
 | --- | --- | --- | --- |
 | 1 | The server administrator's agreement and an SSH key for this PC | **Waiting on the administrator** | The key is made on this PC (the guide's step 2, with a passphrase only the owner knows); steps 3-4 (sending the public key, reading its fingerprint by phone) and the agreement are between the owner and the administrator |
 | 2 | Cognito | ~~Keep~~ → **Replaced by the app's own sign-in, moved over gradually** (owner, 2026-11-07, later the same day: "every AWS service replaced, the account closed") | `AUTH_MODE` (`apps/api/src/localAuth.ts`, `migratingAuth.ts`, [docs/cognito-setup.md](../cognito-setup.md#9-leaving-cognito-the-apps-own-sign-in)): argon2id passwords, the app's own Google client, emailed codes through Resend. "migrating" moves each Cognito user at their next sign-in under the same sub; whoever hasn't signed in before AWS closes resets once by email. Two-step verification has to be set up again (Cognito never gives out the secret) |
-| 3 | SMS | ~~Keep AWS End User Messaging~~ → **An SMS company's API** (owner, 2026-11-07, later the same day) | Open-source software can't send texts without a carrier, so a provider's API replaces AWS's; sender names and opt-outs are set up again there. Nothing real has been sent yet (AWS's SMS sandbox), so nothing carries over but settings. The provider and the work: [AWS_TO_IKOREX_MIGRATION_MATRIX.md](AWS_TO_IKOREX_MIGRATION_MATRIX.md) |
+| 3 | SMS | ~~Keep AWS End User Messaging~~ → **An SMS company's API** (owner, 2026-11-07, later the same day) | Open-source software can't send texts without a carrier, so a provider's API replaces AWS's; sender names and opt-outs are set up again there. Nothing real has been sent yet (AWS's SMS sandbox), so nothing carries over but settings. **Twilio** (owner's choice, 2026-11-07), built in #354 behind `SMS_PROVIDER` and switched on once the owner's account is ready ([docs/sms.md](../sms.md), "Twilio"). The work: [AWS_TO_IKOREX_MIGRATION_MATRIX.md](AWS_TO_IKOREX_MIGRATION_MATRIX.md) |
 | 4b | The AWS account | **Closed** after the 14-day rollback period (owner, 2026-11-07) | Every resource deleted (stage F), a final database dump kept encrypted in R2 (snapshots can't leave AWS); closing the account itself is the owner's step in the AWS console |
 | 4 | Backup destination | **Cloudflare R2** | The domain is already on Cloudflare; no egress fees for a restore; a ~2 GB database's compressed backups and 14 days of WAL should fit in R2's free 10 GB. The bucket and its token are made in stage C |
 | 5 | One server instead of Multi-AZ | **Accepted** | It is what moving to one server means. Loss of the server loses at most the last 5 minutes of writes (WAL archived every 300 s to R2); recovery is a restore on another host: AWS during the 14-day rollback period, any Docker host after it (a few hours, rehearsed weekly by the restore test) |

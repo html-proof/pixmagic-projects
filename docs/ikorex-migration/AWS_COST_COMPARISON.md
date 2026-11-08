@@ -15,29 +15,27 @@ read from the bill a month after the cutover.
 #343 (merged 2026-11-06, Deploy to confirm) switches X-Ray off (−0.46) and moves the WhatsApp
 service to Fargate Spot (up to −12.10); neither changes the conclusion below.
 
-## After: what stays on AWS
+## After: nothing stays on AWS
 
-Cognito and SMS stay on AWS (both decided 2026-11-07, [IKOREX_INFRASTRUCTURE_ARCHITECTURE.md](IKOREX_INFRASTRUCTURE_ARCHITECTURE.md#decisions-2026-11-07)):
+The owner's revised decisions (2026-11-07, [IKOREX_INFRASTRUCTURE_ARCHITECTURE.md](IKOREX_INFRASTRUCTURE_ARCHITECTURE.md#decisions-2026-11-07)):
+Cognito is replaced by the app's own sign-in (users move over gradually, `AUTH_MODE`), SMS by
+Twilio (`SMS_PROVIDER`), and the AWS account is **closed** after the 14-day rollback period. So the
+AWS bill after stage F is **0.00**.
 
-| Service | Before GST | Why it stays |
+What the earlier plan kept, and where it went:
+
+| Service | Before GST | Now |
 | --- | --- | --- |
-| Cognito | 0.00 | Free up to 10,000 monthly active users (72 users) |
-| KMS key for Cognito's emailed codes | ~1.15 | Cognito encrypts the codes it hands to the email function |
-| Lambda `cognito-email` | 0.00 | Free tier |
-| Secrets Manager: the one secret that function reads | 0.40 | Resend's key for the code emails |
-| End User Messaging SMS | per message | Sandbox now: nothing sent, nothing billed |
-| SNS + the `smsEvents` SQS queue (SMS delivery events) | 0.00 | Free tiers: the server's long polls are ~130,000 SQS requests a month of the free 1,000,000 |
-| CloudTrail + its bucket | ~0.05 | Audit of what remains |
-| Cost Explorer (daily cost email) | 0.30 | Optional once the bill is this small |
-| Support plan | 0.00 | Basic |
-| **Total** | **~1.90** | **~2.09 with GST** |
+| Cognito | 0.00 | The app's own sign-in (`apps/api/src/localAuth.ts`); deleted at stage F |
+| KMS key for Cognito's emailed codes | ~1.15 | The app emails its own codes through Resend; deleted with Cognito |
+| Lambda `cognito-email` + its secret | 0.40 | Deleted with Cognito |
+| End User Messaging SMS + SNS + the `smsEvents` queue | per message | Twilio (per message, billed by Twilio); deleted at stage F |
+| CloudTrail + its bucket | ~0.05 | Nothing left to audit; deleted at stage F |
+| Cost Explorer (daily cost email) | 0.30 | No AWS bill to report: the server never sends it; AWS's own schedule sends it until the account closes |
 
-Everything else is deleted at stage F: RDS (44.54), the WhatsApp service and its DNS zone (17.79),
-the WAF (10.08), the NAT instances, their disks and addresses (18.34), the other secrets, CloudWatch,
-DynamoDB, S3 buckets, the other SQS queues, Lambda `api`/`jobs`/`cron`, CloudFront, GuardDuty.
-
-If Cognito is replaced too (option 2 or 3 in the matrix) and SMS moves elsewhere, the AWS account
-can be closed: **0.00**. Not before then.
+Everything else is deleted at stage F as planned: RDS (44.54), the WhatsApp service and its DNS
+zone (17.79), the WAF (10.08), the NAT instances, their disks and addresses (18.34), the secrets,
+CloudWatch, DynamoDB, S3 buckets, the SQS queues, Lambda `api`/`jobs`/`cron`, CloudFront, GuardDuty.
 
 ## After: what is new outside AWS
 
@@ -47,7 +45,7 @@ can be closed: **0.00**. Not before then.
 | Cloudflare Tunnel, managed rules, one rate-limit rule | 0.00 | Free plan |
 | Cloudflare R2, backups | 0.00 up to 10 GB, then 0.015 per GB | ~2 GB database, 14 days of WAL and dumps: expected under 10 GB |
 | External uptime check | 0.00 | Free tier |
-| SMS provider, if SMS leaves AWS | per message | Owner's choice |
+| Twilio (SMS) | per message, in US dollars | Twilio's price for each country texted (Australia only, by Geo Permissions); nothing until the owner switches (`docs/sms.md`, "Twilio"). Merchants' monthly SMS limits cap it, as they did on AWS |
 | A server of its own, **only if the capacity test says no go** | to be quoted | 4 vCPU / 8 GB / 80 GB SSD |
 
 ## The saving
@@ -55,8 +53,10 @@ can be closed: **0.00**. Not before then.
 | | Before GST | With GST |
 | --- | --- | --- |
 | AWS after GuardDuty's trial | ~135.76 | ~149.34 |
-| AWS after the move (Cognito kept) | ~1.90 | ~2.09 |
-| **Saving a month** | **~133.86** | **~147.25** |
+| AWS after stage F (account closed) | 0.00 | 0.00 |
+| **Saving a month** | **~135.76** | **~149.34** |
+
+Twilio's texts are the one new bill that grows with use, as AWS's did; the saving above is before them.
 
 Of that, **29.00 (the support plan) is saved anyway** by the downgrade to Basic allowed from
 ~2026-11-14, move or not. Against the cheapest AWS setup that keeps a managed database (the cost

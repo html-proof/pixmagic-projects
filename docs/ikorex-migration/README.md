@@ -4,19 +4,25 @@ The owner's brief of 2026-11-06: run bizinsights on the existing iKorex server (
 instead of AWS, keeping every feature, record and integration, without disturbing the websites, n8n
 and the CCTV tunnel already on that server.
 
-**Status (2026-11-07):** discovery done on the AWS side (#347). **Stage A done and live on AWS**
+**Status (2026-11-08):** discovery done on the AWS side (#347). **Stage A done and live on AWS**
 (#348, release 167): the self-hosted runtime and the server's files, built and tested on this PC
 ([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md)). **The owner's decisions are made**
-([the list](IKOREX_INFRASTRUCTURE_ARCHITECTURE.md#decisions-2026-11-07)): Cognito and SMS stay on AWS,
-backups to R2, one server accepted, the cutover on a Sunday 20:00-21:00 Melbourne time, no logs
-profile. **The database copy and the security audit are built** (2026-11-07): the copy is tested
-against PostgreSQL with the real schema, and six security findings in the server's files are fixed
-with tests. **The deploy workflow is built and off** (Deploy to iKorex, 2026-11-07): it deploys
-`main` to staging, and from the cutover to production, once the deploy key is agreed with the
-administrator and set up. The server is not inspected yet: this PC's SSH key (with its passphrase now) waits for
-the administrator. Nothing has changed on the server, and AWS keeps running everything (its only
-changes: four empty tables the runtime uses, and the admin host may write dumps under one bucket
-prefix).
+([the list](IKOREX_INFRASTRUCTURE_ARCHITECTURE.md#decisions-2026-11-07)), and revised the same evening:
+**leave AWS completely and close the account** after the 14-day rollback period, so Cognito and AWS's
+SMS are replaced too; backups to R2, one server accepted, the cutover on a Sunday 20:00-21:00
+Melbourne time, no logs profile. Since then, each live on AWS through Deploy to AWS:
+
+- **The database copy and the security audit** (#350, #352, release 169).
+- **The deploy workflow**, built and off (Deploy to iKorex, #351, release 171): it deploys `main` to
+  staging, and from the cutover to production, once the deploy key is agreed with the administrator.
+- **The app's own sign-in** (#353, release 171), replacing Cognito. Switched to `migrating` in
+  production after it: each user moves over at their next password sign-in. Google moves once the
+  owner adds the app's redirect address to the Google client.
+- **Texts through Twilio** (#354, release 172), replacing AWS End User Messaging: built and off until
+  the owner's Twilio account is ready ([docs/sms.md](../sms.md), "Switching to Twilio").
+
+The server is not inspected yet: this PC's SSH key (with its passphrase now) waits for the
+administrator. Nothing has changed on the server, and AWS keeps running everything.
 
 ## The pages
 
@@ -46,9 +52,11 @@ implementations (`apps/aws/src/selfhost.ts` and its parts, `infra/ikorex/`). On 
 Compose project with no open port: Cloudflare (already in front) reaches it through a Cloudflare
 Tunnel; PostgreSQL 17 replaces RDS with continuous encrypted backups off the server, and also holds
 the job queue, the schedules and the coordinator (SQS, EventBridge and DynamoDB); Prometheus, Grafana, Loki
-and an external uptime check replace CloudWatch. Resend keeps sending email; Cognito is best kept
-(free, and it can't export passwords). The AWS bill would fall from ~US$136 to ~US$2 a month before
-GST, at the price of one server instead of a failover database, and of running it ourselves.
+and an external uptime check replace CloudWatch. Resend keeps sending email; the app's own sign-in
+replaces Cognito (each user's password is checked by Cognito once, since Cognito can't export them)
+and Twilio replaces AWS's SMS. The AWS bill falls from ~US$136 a month before GST to nothing once
+the account closes, at the price of one server instead of a failover database, and of running it
+ourselves.
 
 ## Waiting on
 
@@ -58,3 +66,9 @@ GST, at the price of one server instead of a failover database, and of running i
 2. The capacity test's result (go / tight / no go).
 3. Before stage D: the reverse copy (iKorex back to RDS) for the rollback period, driven and timed
    like the forward one.
+4. The owner: Google's redirect address for the app's own sign-in
+   ([docs/cognito-setup.md](../cognito-setup.md#9-leaving-cognito-the-apps-own-sign-in)), and the
+   Twilio account ([docs/sms.md](../sms.md), "Switching to Twilio"). Each then ships as a one-line
+   settings change.
+5. Stage F, after the rollback period: the checks in [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md) ("Before
+   stage F starts"), then the deletions and the owner closing the account.
