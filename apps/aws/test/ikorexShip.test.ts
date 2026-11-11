@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -29,6 +29,12 @@ describe.skipIf(!bash)("Deploy to iKorex: ship.sh and the server's gate", { time
   const write = (path: string, text: string) => {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, text.replace(/\r\n/g, "\n"));
+  };
+  // A stand-in program: found on PATH and run by name, so it needs the executable bit (Linux
+  // refuses it with 126 without; Git for Windows runs anything that starts with "#!").
+  const program = (path: string, text: string) => {
+    write(path, text);
+    chmodSync(path, 0o755);
   };
   const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
   const calls = () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : []);
@@ -82,7 +88,7 @@ describe.skipIf(!bash)("Deploy to iKorex: ship.sh and the server's gate", { time
 
     // ssh: the options it was given, then the request run as sshd would (the gate with the request
     // in SSH_ORIGINAL_COMMAND for the deploy key, a shell for the owner's key). docker: recorded.
-    write(
+    program(
       `${stubs}/ssh`,
       [
         "#!/bin/bash",
@@ -95,7 +101,7 @@ describe.skipIf(!bash)("Deploy to iKorex: ship.sh and the server's gate", { time
         "",
       ].join("\n"),
     );
-    write(`${stubs}/docker`, '#!/bin/bash\necho "docker $*" >> "$STUB_LOG"\n');
+    program(`${stubs}/docker`, '#!/bin/bash\necho "docker $*" >> "$STUB_LOG"\n');
     write(`${work}/ssh_config`, "Host ikorex\n  HostName 192.0.2.1\n");
     freshHome();
   }, 60_000);

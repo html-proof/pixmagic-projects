@@ -9,7 +9,7 @@
     "dev": "pnpm -r --parallel --filter ./apps/** dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "lint": "eslint . --max-warnings=0 && node scripts/check-import-cycles.mjs",
+    "lint": "eslint . --max-warnings=0 && node scripts/check-import-cycles.mjs && node scripts/aws-dependency-scan.mjs --check",
     "test": "pnpm --filter @app/shared --filter @app/core --filter @app/aws --filter @app/web test",
     "test:integration": "pnpm --workspace-concurrency=1 --filter @app/api --filter @app/worker test",
     "e2e": "pnpm --filter @app/web e2e",

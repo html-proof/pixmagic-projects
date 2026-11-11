@@ -20,6 +20,7 @@ import { collectionName, CollectionSales, useCollectionSales, type CollectionCho
 import { ContactsCard } from "./Contacts";
 import { MonthlyCohorts, RepeatCustomers, useCustomerAnalytics } from "./CustomerCohorts";
 import { comparisonHelp, noEarlierData, versusWords, comparedWith } from "./DateRange";
+import { FIGURE_HELP, visitsThatBoughtHelp } from "./figureHelp";
 import { fmtDateTime, fmtDuration, fmtLongDay, fmtRange, fmtSpan, hourRange, plural, weekdayName } from "./format";
 import { CatalogCard, FulfillmentBadge, OrderName, PaymentBadge } from "./Modules";
 import { comparedOn, upDown } from "./Narrative";
@@ -347,16 +348,16 @@ export function SalesOverviewTab({ ov, currency, onOpen }: { ov: Overview; curre
       </ShortLine>
       <section aria-label="Sales numbers" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {total !== null ? (
-          <Figure title="Total sales" value={money(total)} change={<Change value={s.deltas.totalSales} versus={versus} />} />
+          <Figure title="Total sales" value={money(total)} change={<Change value={s.deltas.totalSales} versus={versus} />} help={FIGURE_HELP.totalSales} />
         ) : (
-          <Figure title="Net sales" value={money(c.netSales)} change={<Change value={s.deltas.netSales} versus={versus} />} />
+          <Figure title="Net sales" value={money(c.netSales)} change={<Change value={s.deltas.netSales} versus={versus} />} help={FIGURE_HELP.netSales} />
         )}
-        <Figure title="Orders" value={fmtNum(c.orders)} change={<Change value={s.deltas.orders} versus={versus} />} />
-        <Figure title="Average order" value={c.averageOrderValue === null ? "—" : money(c.averageOrderValue)} change={<Change value={s.deltas.averageOrderValue} versus={versus} />} />
+        <Figure title="Orders" value={fmtNum(c.orders)} change={<Change value={s.deltas.orders} versus={versus} />} help={FIGURE_HELP.orders} />
+        <Figure title="Average order" value={c.averageOrderValue === null ? "—" : money(c.averageOrderValue)} change={<Change value={s.deltas.averageOrderValue} versus={versus} />} help={FIGURE_HELP.averageOrder} />
         {funnel ? (
-          <Figure title="Visits that bought" value={fmtPct(funnel.conversionRate)} change={<Change value={funnel.previous.imported === false ? null : funnel.deltas.conversionRate} versus={versus} />} sub={`Of ${plural(funnel.visits, "tracked visit")}`} />
+          <Figure title="Visits that bought" value={fmtPct(funnel.conversionRate)} change={<Change value={funnel.previous.imported === false ? null : funnel.deltas.conversionRate} versus={versus} />} sub={`Of ${plural(funnel.visits, "tracked visit")}`} help={visitsThatBoughtHelp(funnel.visits)} />
         ) : (
-          <Figure title="Items sold" value={fmtNum(c.units)} change={<Change value={s.deltas.units} versus={versus} />} />
+          <Figure title="Items sold" value={fmtNum(c.units)} change={<Change value={s.deltas.units} versus={versus} />} help={FIGURE_HELP.itemsSold} />
         )}
       </section>
       <SalesAddUp ov={ov} currency={currency} />

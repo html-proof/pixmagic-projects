@@ -25,6 +25,9 @@ export default defineConfig(
     // Session worktrees are whole copies of the repo inside the main checkout, each with its own
     // eslint.config.mjs. (.claude/*.mjs, the committed demo servers, are still linted.)
     ".claude/worktrees/**",
+    // Scripts kept for the record that run inside Figma, not here: the body of a plugin call
+    // (a `figma` global, a top-level `return`). docs/ux-redesign/figma/README.md says what each is.
+    "docs/ux-redesign/figma/**",
   ]),
   js.configs.recommended,
   tseslint.configs.recommended,
