@@ -90,7 +90,7 @@ password user resetting once.
 
 | § | Asks for | Where it stands |
 | --- | --- | --- |
-| 1 | Server facts before anything | Inspected read-only on 2026-11-08 ([inspect-server.sh](inspect-server.sh)): Ubuntu 24.04.5, 2 vCPU, 3.9 GB memory, 73 GB disk with 45 GB free, Docker 29.8.2, twelve containers of other workloads. Written up in PR #360, not yet on `main`. A second inspection, to see whether the server has been enlarged, was started on 2026-11-11 |
+| 1 | Server facts before anything | Inspected read-only on 2026-11-08 ([inspect-server.sh](inspect-server.sh)): Ubuntu 24.04.5, 2 vCPU, 3.9 GB memory, 73 GB disk with 45 GB free, Docker 29.8.2, twelve containers of other workloads. Written up in PR #360, not yet on `main`. On 2026-11-11 the owner logged in again (the login banner: 43 % of memory in use, 34 updates and a restart pending); the second inspection, to see whether the server has been enlarged, has not run yet: it needs the owner to type the key's passphrase |
 | 2 | AWS dependency inventory | [AWS_INVENTORY.md](AWS_INVENTORY.md). Not in use, so nothing to replace: API Gateway, ElastiCache, Step Functions, ECR, AWS Backup, Route 53 public zones |
 | 3 | Open-source replacements installed | Chosen (above), configured in `infra/ikorex/`, **not installed**: no room on the server |
 | 4 | SNS replaced | Done in code (above). Retries, dead-letter and failed-job tracking are the queue's; each text's delivery status is kept on its own record in the database |
