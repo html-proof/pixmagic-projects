@@ -58,6 +58,14 @@ and Twilio replaces AWS's SMS. The AWS bill falls from ~US$136 a month before GS
 the account closes, at the price of one server instead of a failover database, and of running it
 ourselves.
 
+## The 2026-11-11 brief
+
+A fourth brief names an open-source component for each job (Traefik, Keycloak, Valkey, NATS,
+RabbitMQ, Garage, Postal, OpenBao, Restic). [OPEN_SOURCE_STACK.md](OPEN_SOURCE_STACK.md) sets that
+list beside what is built, with where each of its sections, tests and thirteen files stands;
+[ENVIRONMENT_VARIABLES_MIGRATION.md](ENVIRONMENT_VARIABLES_MIGRATION.md) is the one page it asks for
+that didn't exist.
+
 ## Waiting on
 
 1. **SSH access**: the administrator adding this PC's key (guide steps 2-4), and their agreement to

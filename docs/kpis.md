@@ -372,7 +372,9 @@ out by the same code:
   value instead. Last, **Visits that bought** (the funnel's conversion rate, of the visits the pixel
   tracked) where there are tracked visits, otherwise Average order value (or Total products sold).
   Each change is "+12.7%" under the number (beside its name on a phone); the date card says what
-  it is compared with.
+  it is compared with. The "i" in a tile's corner says what the figure measures, in the words of
+  `components/dashboard/figureHelp.ts` (the Sales Overview's figures use the same): keep them in
+  step with "Formulas" above.
 - **Sales by day**: total sales (net without the breakdown) each day of the dates as dark green
   bars, today's paler with "today so far" over it, and the dates compared with as a dotted line, day
   i over day i (`sales_overview.previousSeries`: each day's net and total sales, null when those

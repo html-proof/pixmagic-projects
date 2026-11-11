@@ -171,7 +171,7 @@ of truth and almost every screen is "load, show, edit, save".
 | Server data | `useApi(path)` (`lib/api.ts`): each answer is kept with the request it answers, transient failures retry by themselves, `reload()` and `setData()` for edits. `useLiveApi(path, ms)` for data that must stay live (the dashboard). |
 | Session, workspaces, current workspace and store | `AppContext` (`useApp()`), signed-in pages only. |
 | The dashboard's date range, its comparison and open detail | The URL (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`, `?view=`), so a link reproduces the view. The Advertising area (/advertising, [advertising.md](advertising.md)) reads the same dates and adds `?platform=&account=`; the Shopping Funnel (/funnel, [kpis.md](kpis.md) "Shopping Funnel page") adds `?device=&visitor=&landing=&country=`; the Profit sheet (/sheet, [kpis.md](kpis.md) "Profit sheet") `?by=&days=&events=`. |
-| Per-device preferences | `lib/storage.ts` (`readLocal` / `writeLocal`): never throws, so blocked storage only loses the preference. |
+| Per-device preferences (which Home, which menu and its open groups, the narrowed sidebar, the look around answered) | `lib/storage.ts` (`readLocal` / `writeLocal`): never throws, so blocked storage only loses the preference. |
 | Form drafts | Component state. |
 
 Write a hand-made `api()` call in an effect only when `useApi` can't express it (paging with
@@ -204,10 +204,37 @@ page by page:
   `@font-face`, so nothing is preloaded.
 - `components/PageKit.tsx` holds the pieces a rebuilt page's layout is made of: `Card` (a white
   card with its heading), `FigureTile` and `ChangeTag` (a page's few numbers), `InShortLine` (the
-  opening sentence), `ShareRow` (a labelled share bar) and `PageTabs` (a row of tabs).
+  opening sentence), `ShareRow` (a labelled share bar), `PageTabs` (a row of tabs) and `HelpTip`
+  (the small "i" beside a figure's name: what it measures, on hover, focus or tap).
 
-A new page uses these pieces rather than its own borders and radii. The menu itself is unchanged:
-the owner kept it.
+A new page uses these pieces rather than its own borders and radii.
+
+**Finding your way (2026-11-11).** Every page keeps its name, its address and its place in the menu's
+whole list; what changed is how much of the list is read at once.
+- **The short menu** (`SIMPLE_MENU` in lib/features.ts; the rules, tested, in `lib/menu.ts`; drawn by
+  `AppShell.tsx`). The sidebar lists the everyday pages (Dashboard, Sales & Orders, Products,
+  Customers, Inventory or Stock, Advertising, Profit & Loss) and folds the rest into four groups:
+  More reports (Business Overview, Profit sheet, Discounts, Shopping Funnel), Store (Orders,
+  Shipping, Sales channels, Staff, My work), Marketing (the whole list's "Marketing & integrations")
+  and Settings. A group opens
+  with a click and stays open on that device (localStorage `menu-open`); the group holding the
+  page being looked at is open by itself. A group of one page is shown as that page, and a menu of
+  fewer than ten entries (a member shown a few pages, a shared dashboard) doesn't fold at all. "Show
+  every page" at the foot brings back the whole list as it always was (`menu-layout`), and "Show
+  fewer pages" returns. A new entry goes into the whole list and into the everyday list or one of
+  the groups, both in `Sidebar`.
+- **The narrowed sidebar** (wide screens): the button beside the logo narrows it to its icons
+  (`menu-rail`), each named on hover and to screen readers; a group is one icon, which widens the
+  sidebar with that group open.
+- **The look around** (`components/Tour.tsx`, steps and card placement in `lib/tour.ts`): a few
+  steps over the page itself, each lighting up one part (what needs you, the numbers, the dates,
+  the menu, search, the bell, help) by its `data-tour` name. It is only ever offered: the simple
+  Home shows one row on a device that hasn't answered (`tour-seen`), and the help button keeps
+  "Show me around". Skip or Escape leaves at any step; a step whose part isn't on the page is left
+  out. A new part of the frame worth pointing at gets a `data-tour` name and a step.
+- **What a figure measures** (`components/dashboard/figureHelp.ts`): one wording per headline figure,
+  behind its `HelpTip` on the Home's four numbers and the Sales Overview's, from the definitions in
+  [kpis.md](kpis.md). A figure with a name a merchant may not know gets a `help` there.
 
 **The Sales pages (Stitch screens 05–12).** The dashboard's topics (`?view=sales`, `products`,
 `customers`, `orders`, `shipping`, `channels`, `discounts`, `timing`, `overview`) are pages of their
