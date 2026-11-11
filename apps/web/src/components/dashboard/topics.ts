@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
+import { usePathname } from "next/navigation";
 import type { IconName } from "./Icons";
 
 /** Everything a dashboard card can open, each as a page of its own (?view=<topic>, components/dashboard/SalesFrame.tsx). */
@@ -55,6 +56,13 @@ function subscribeView(onChange: () => void) {
 
 /** The topic open in the address bar (null while prerendering, and with none open). */
 export function useCurrentView(): Topic | null {
+  // A link from another page (/team to /dashboard?view=sales) changes the address with neither
+  // event, and what stays on screen across it (the sidebar) would keep the view it read before:
+  // read the address again once the new page is in place.
+  const path = usePathname();
+  useEffect(() => {
+    window.dispatchEvent(new Event(VIEW_EVENT));
+  }, [path]);
   return useSyncExternalStore(subscribeView, readView, () => null);
 }
 

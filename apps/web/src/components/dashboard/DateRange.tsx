@@ -531,7 +531,7 @@ export function DateChip({ r, shown, current = true }: { r: DateRangeState; show
   const c = compareChoice(r, shown, current);
   const line = "relative block min-w-0 rounded-sm focus-within:ring-2 focus-within:ring-accent";
   return (
-    <div className="home-card relative inline-flex min-w-0 max-w-full items-center gap-3 py-2 pr-9 pl-3 transition-colors hover:bg-home-soft" title={d.title} data-testid="date-chip">
+    <div className="home-card relative inline-flex min-w-0 max-w-full items-center gap-3 py-2 pr-9 pl-3 transition-colors hover:bg-home-soft" title={d.title} data-testid="date-chip" data-tour="dates">
       <CalendarDays aria-hidden className="h-[18px] w-[18px] shrink-0 text-muted" strokeWidth={1.8} />
       <span className="flex min-w-0 flex-col">
         <span className={line}>
