@@ -82,15 +82,16 @@ right choice at a point the app hasn't reached:
 | Traefik | A server of bizinsights' own, where ports 80 and 443 are free |
 | Postal | Not on a shared server; only with a dedicated machine and a warmed-up address |
 
-This is the owner's call. If the owner wants the brief's list as written, it needs a server of its
-own first (8 GB at the least, 16 GB to follow the vendors' minimums), and Keycloak would mean every
-password user resetting once.
+**Decided (owner, 2026-11-11): keep what is built.** The brief's components are not installed; the
+table above says when each would be looked at again. Had the brief's list been chosen as written,
+it would have needed a server of its own first (8 GB at the least, 16 GB to follow the vendors'
+minimums), and Keycloak would have meant every password user resetting once.
 
 ## The brief's sections, one by one
 
 | § | Asks for | Where it stands |
 | --- | --- | --- |
-| 1 | Server facts before anything | Inspected read-only on 2026-11-08 ([inspect-server.sh](inspect-server.sh)): Ubuntu 24.04.5, 2 vCPU, 3.9 GB memory, 73 GB disk with 45 GB free, Docker 29.8.2, twelve containers of other workloads. Written up in PR #360, not yet on `main`. On 2026-11-11 the owner logged in again (the login banner: 43 % of memory in use, 34 updates and a restart pending); the second inspection, to see whether the server has been enlarged, has not run yet: it needs the owner to type the key's passphrase |
+| 1 | Server facts before anything | Inspected read-only on 2026-11-08 ([inspect-server.sh](inspect-server.sh)): Ubuntu 24.04.5, 2 vCPU, 3.9 GB memory, 73 GB disk with 45 GB free, Docker 29.8.2, twelve containers of other workloads. Written up in [SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08). On 2026-11-11 the owner logged in again (the login banner: 43 % of memory in use, 34 updates and a restart pending); the second inspection, to see whether the server has been enlarged, has not run yet: it needs the owner to type the key's passphrase |
 | 2 | AWS dependency inventory | [AWS_INVENTORY.md](AWS_INVENTORY.md). Not in use, so nothing to replace: API Gateway, ElastiCache, Step Functions, ECR, AWS Backup, Route 53 public zones |
 | 3 | Open-source replacements installed | Chosen (above), configured in `infra/ikorex/`, **not installed**: no room on the server |
 | 4 | SNS replaced | Done in code (above). Retries, dead-letter and failed-job tracking are the queue's; each text's delivery status is kept on its own record in the database |
@@ -148,7 +149,7 @@ where they are (links, tests and three open pull requests point at them); this t
 | Brief's file | Page |
 | --- | --- |
 | 1. AWS_SERVICE_INVENTORY.md | [AWS_INVENTORY.md](AWS_INVENTORY.md) |
-| 2. SERVER_AUDIT.md | [SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md) (the 2026-11-08 inspection is in PR #360) |
+| 2. SERVER_AUDIT.md | [SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md) |
 | 3. MIGRATION_ARCHITECTURE.md | [IKOREX_INFRASTRUCTURE_ARCHITECTURE.md](IKOREX_INFRASTRUCTURE_ARCHITECTURE.md) |
 | 4. AWS_TO_OPEN_SOURCE_MAPPING.md | [AWS_TO_IKOREX_MIGRATION_MATRIX.md](AWS_TO_IKOREX_MIGRATION_MATRIX.md), and this page |
 | 5. DOCKER_COMPOSE_PRODUCTION.yml | [infra/ikorex/docker-compose.yml](../../infra/ikorex/docker-compose.yml), [docker-compose.monitoring.yml](../../infra/ikorex/docker-compose.monitoring.yml) |
@@ -169,7 +170,7 @@ Nothing below has been done on anyone's behalf.
 | --- | --- | --- |
 | 1 | More memory on the server (asked 2026-11-08: 8 GB, 4 vCPU), or a server of bizinsights' own | The server's administrator; the owner |
 | 2 | Agreement to install bizinsights on the server at all, and a separate Linux user for it | The administrator |
-| 3 | The stack: keep what is built (recommended) or the brief's list | The owner |
+| 3 | ~~The stack: keep what is built or the brief's list~~ **Answered 2026-11-11: keep what is built** | The owner |
 | 4 | Google sign-in on the app's own client: add `https://bizinsights.io/auth/callback` to the Google client's redirect addresses | The owner |
 | 5 | A Twilio account, then the one-line switch (`docs/sms.md`, "Switching to Twilio") | The owner |
 | 6 | The Cloudflare Tunnel's token and the R2 bucket's token (stages B and C) | The owner, in Cloudflare |
