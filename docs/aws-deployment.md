@@ -688,9 +688,9 @@ job signs in only with the OIDC deploy role and checks that it did.
     Defender antivirus and SmartScreen stay on. This PC has KB5127648 (2026-10-15), whose known
     issue is that the switch back to On can be greyed out until Microsoft fixes it.
   - Or GitHub's machines for a while: delete the repository variable `SELF_HOSTED_RUNNER` (back:
-    `gh variable set SELF_HOSTED_RUNNER --body '["self-hosted","bizinsights-pc"]'`). The deploy role
-    trusts the workflow file on `main`, not the machine, so Deploy to AWS works from there; the
-    2,000 free minutes a month are the limit (first section above).
+    "Setting the variable" below). The deploy role trusts the workflow file on `main`, not the
+    machine, so Deploy to AWS works from there; the 2,000 free minutes a month are the limit
+    (first section above).
 
   Until one is done, hold pull requests as drafts (below): every job sent to the PC ends as a red or
   cancelled check.
@@ -702,6 +702,20 @@ job signs in only with the OIDC deploy role and checks that it did.
   setting the variable back, Smart App Control has to be off, or one small job has to be seen
   running its steps on the PC (a docs-only pull request costs one 10-minute red check if it is
   still blocked).
+  Setting the variable: its value must be JSON, quotes included, because every `runs-on` passes it
+  to `fromJSON`. Windows PowerShell 5.1 drops the double quotes inside a single-quoted argument to
+  a program, so `--body '["self-hosted","bizinsights-pc"]'` (right in Git Bash) stores
+  `[self-hosted,bizinsights-pc]` there. Every run then fails within seconds with no job started,
+  and a Deploy on `main` would too: that happened on 2026-11-11 from 08:23Z to 08:30Z (run
+  42987297392, #361), with the command copied from this entry. In Windows PowerShell:
+
+  ```powershell
+  gh variable set SELF_HOSTED_RUNNER --body '[\"self-hosted\",\"bizinsights-pc\"]'
+  ```
+
+  Or type the value in GitHub (Settings → Secrets and variables → Actions → Variables). Then
+  check it: `gh variable get SELF_HOSTED_RUNNER` must print `["self-hosted","bizinsights-pc"]`.
+  A broken value is put right by deleting it (`gh variable delete SELF_HOSTED_RUNNER`).
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
 - With one runner a pull request sometimes has to wait: another needs the runner first, or it has to
   land after another. Hold it by making it a draft (`gh pr ready <n> --undo`), never by cancelling
