@@ -4,7 +4,9 @@ import { claimsAddUp } from "@app/shared/ads";
 import { gradeRefundRate, shippingIsLate } from "@app/shared/health";
 import { bestEntryPage, biggestDropOff, dropOffSection } from "@app/shared/journey";
 import { dailyBreakdown } from "@app/shared/sales";
+import { MoreDetail } from "@/components/MoreDetail";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { FOLD_DETAIL } from "@/lib/features";
 import { SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { fmtTimes, hourRange, plural, weekdayName } from "./format";
 import { Icon } from "./Icons";
@@ -301,6 +303,16 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
 
 export function Explained({ topic, ov, currency }: { topic: Topic; ov: Overview; currency: string }) {
   const next = nextSteps(topic, ov, currency);
+  const terms = (
+    <dl className="divide-y divide-border">
+      {TERMS[topic].map(([term, text]) => (
+        <div key={term} className="grid gap-0.5 py-2.5 text-sm sm:grid-cols-[13rem_1fr] sm:gap-4">
+          <dt className="font-medium">{term}</dt>
+          <dd className="text-muted">{text}</dd>
+        </div>
+      ))}
+    </dl>
+  );
   return (
     <>
       {next.length > 0 && (
@@ -317,16 +329,19 @@ export function Explained({ topic, ov, currency }: { topic: Topic; ov: Overview;
           </ul>
         </Panel>
       )}
-      <Panel id={`d-terms-${topic}`} title="What these numbers mean" help="Every figure on this page, in plain words.">
-        <dl className="divide-y divide-border">
-          {TERMS[topic].map(([term, text]) => (
-            <div key={term} className="grid gap-0.5 py-2.5 text-sm sm:grid-cols-[13rem_1fr] sm:gap-4">
-              <dt className="font-medium">{term}</dt>
-              <dd className="text-muted">{text}</dd>
-            </div>
-          ))}
-        </dl>
-      </Panel>
+      {/* The glossary: one fold for every topic, so a device that opened it has it open on each page. */}
+      <MoreDetail id="terms" label="What these numbers mean" holds={TERMS[topic].map(([term]) => term)}>
+        {FOLD_DETAIL ? (
+          // The fold's own row is the heading.
+          <section id={`d-terms-${topic}`} className="card min-w-0" aria-label="What these numbers mean" data-testid={`module-d-terms-${topic}`}>
+            {terms}
+          </section>
+        ) : (
+          <Panel id={`d-terms-${topic}`} title="What these numbers mean" help="Every figure on this page, in plain words.">
+            {terms}
+          </Panel>
+        )}
+      </MoreDetail>
     </>
   );
 }

@@ -171,6 +171,17 @@ export async function fullDashboard(page: Page) {
 }
 
 /** Fill in the create-account form (without sending it). */
+/**
+ * Open a page's "More detail" fold (components/MoreDetail.tsx, lib/features.ts FOLD_DETAIL) when it is
+ * closed: for a test of a panel that sits inside it. The device then keeps it open.
+ */
+export async function openMoreDetail(page: Page, id = "sales") {
+  const fold = page.getByTestId(`more-detail-${id}`);
+  await expect(fold).toBeVisible();
+  if ((await fold.getAttribute("open")) === null) await fold.locator("summary").click();
+  await expect(fold).toHaveAttribute("open", "");
+}
+
 export async function fillSignUp(page: Page, email: string, password = PASSWORD, name = "E2E User") {
   await asNewVisitor(page);
   await page.getByLabel("Full name").fill(name);
