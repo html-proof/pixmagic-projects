@@ -694,6 +694,14 @@ job signs in only with the OIDC deploy role and checks that it did.
 
   Until one is done, hold pull requests as drafts (below): every job sent to the PC ends as a red or
   cancelled check.
+  2026-11-11: the owner chose GitHub's machines. `SELF_HOSTED_RUNNER` was deleted at 08:19Z and the
+  next job ran its steps to the end on `ubuntu-latest` (run 42986152890, #362). Smart App Control
+  is still on and bizinsights-pc is still registered, online and unused. CI and Deploy now spend
+  the 2,000 minutes; when they run out, jobs stop with the "payments have failed or your spending
+  limit" annotation (first section above) until the 1st, unless the PC can take them again. Before
+  setting the variable back, Smart App Control has to be off, or one small job has to be seen
+  running its steps on the PC (a docs-only pull request costs one 10-minute red check if it is
+  still blocked).
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
 - With one runner a pull request sometimes has to wait: another needs the runner first, or it has to
   land after another. Hold it by making it a draft (`gh pr ready <n> --undo`), never by cancelling
