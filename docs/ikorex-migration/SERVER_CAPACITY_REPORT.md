@@ -81,7 +81,7 @@ is the server's total memory, which a busier hour can only make worse.
 | CPU | 2 virtual cores (AMD EPYC 9254, KVM). Load average 0.08–0.45, 95–99 % idle over 5 seconds | Tight (2–3 cores, load under 40 %) |
 | Free disk | 45 GB of 73 GB (ext4). Docker's build cache holds 8.3 GB more that could be reclaimed. Whether the disk is SSD isn't shown (a virtual disk reports "rotational" whatever is under it): the administrator to confirm | Go, if SSD |
 | Docker | Engine 29.8.2, Compose v5.6.0 | Go |
-| Outbound HTTPS | Not checked by this run; the script checks it from now on | — |
+| Outbound HTTPS | Not checked by this run; checked on [2026-11-12](#inspection-2026-11-12): open | — |
 
 **Verdict: no go as the server is today.** bizinsights' containers need 3.2–4.6 GB together
 ([above](#what-bizinsights-needs)). That is more than the server has free, and close to all the memory it has. Seven
@@ -119,6 +119,37 @@ look without `sudo` gives them:
 | O3: files every user can read | Under `deployer`'s home: 4 `.env` files and 3 key files (counts only). The home folder itself is closed to other users (`drwxr-x---`) | Told to the administrator |
 | O4: disk encryption | None (no `crypto_LUKS`) | The administrator's call. bizinsights' backups are encrypted either way |
 | O5: patching, SSH, firewall | Automatic security updates on; fail2ban on; password and keyboard-interactive logins off. A restart is pending with 27 updates waiting. `PermitRootLogin` appears as both `yes` and `no` across the SSH settings files | The effective root-login setting (`sudo sshd -T`) and the firewall rules (`ufw`) need `sudo`: asked of the administrator |
+
+## Inspection, 2026-11-12
+
+The same script, run again from the owner's PC on Thursday 2026-11-12 at 04:45 Melbourne time
+(2026-11-11 17:45 UTC), to see whether the server had been enlarged since the request of
+2026-11-08. It changed nothing. Again a quiet hour, and again the verdict doesn't need a busy one.
+
+**The server is the same size. The verdict stands: no go.**
+
+| | Measured | Since 2026-11-08 | Verdict |
+| --- | --- | --- | --- |
+| Memory available | **2,506 MB** of 3,914 MB. 1,408 MB used (n8n 383 MB). Swap: 6 GB, 37 MB used | Unchanged (2,518 MB then) | **No go** (under 4 GB) |
+| CPU | 2 virtual cores. Load average 0.00–0.06, 94–99 % idle over 5 seconds | Unchanged | Tight |
+| Free disk | 45 GB of 73 GB; 24 GB used. Docker's build cache: 10.3 GB, 8.3 GB of it reclaimable | Unchanged | Go, if SSD |
+| Docker | Engine 29.8.2, Compose v5.6.0 | Unchanged | Go |
+| Outbound HTTPS | Every address answered: `bizinsights.io` (200), Docker Hub's registry (401, which is its answer without a login), Resend (200), Twilio (200), Meta's Graph API (400), Google's OAuth (404), Shopify (301). The Cloudflare tunnel's port 7844 is open to both of its regions | First check | **Go** |
+
+Also unchanged: the same twelve containers and six Compose projects, nothing of bizinsights
+among them; up 36 days, so no restart since the request; a restart still pending, with 29
+upgradable packages.
+
+One open point of the first inspection is settled as far as the files show. The script now prints
+where each SSH setting is: `sshd_config` includes `sshd_config.d/*.conf` on line 12, before its own
+`PermitRootLogin yes` on line 33, and `10-hardening.conf` sets `PermitRootLogin no`. sshd keeps the
+first value it reads, so root login over SSH is off. `sudo sshd -T` would confirm it; the firewall
+rules still need `sudo`.
+
+**What this means:** nothing can be installed until the administrator enlarges the server (at
+least 8 GB and 4 cores) or the owner takes the alternative in [the test](#the-test-that-decides),
+a server of bizinsights' own. Outbound access, the one row the first run left empty, is no
+obstacle.
 
 ## When one server stops being enough
 

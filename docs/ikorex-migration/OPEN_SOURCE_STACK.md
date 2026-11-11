@@ -23,7 +23,7 @@ thing the brief asks for stands. Nothing here changes the server or AWS.
 | SMS without AWS | Built (Twilio, release 172), off until the owner's Twilio account is ready |
 | Database copy RDS → server, and its check | Built and tested on the PC; never run against RDS |
 | Deploy workflow (GitHub Actions over SSH) | Built, off until the deploy key is agreed with the server's administrator |
-| **The server** | First login and read-only inspection on 2026-11-08: **no go on memory** (3.9 GB in all, 2.5 GB available, twelve other containers already running). The administrator was asked for 8 GB and 4 vCPU. Nothing of bizinsights is installed there |
+| **The server** | First login and read-only inspection on 2026-11-08: **no go on memory** (3.9 GB in all, 2.5 GB available, twelve other containers already running). The administrator was asked for 8 GB and 4 vCPU. Inspected again on 2026-11-12: not enlarged, still no go. Nothing of bizinsights is installed there |
 | AWS | Still runs everything. Nothing has been removed |
 
 So the brief's phases 1, 5, 6, 8 and most of 9 are done in code; phase 2 has a result (no go);
@@ -91,7 +91,7 @@ minimums), and Keycloak would have meant every password user resetting once.
 
 | § | Asks for | Where it stands |
 | --- | --- | --- |
-| 1 | Server facts before anything | Inspected read-only on 2026-11-08 ([inspect-server.sh](inspect-server.sh)): Ubuntu 24.04.5, 2 vCPU, 3.9 GB memory, 73 GB disk with 45 GB free, Docker 29.8.2, twelve containers of other workloads. Written up in [SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08). On 2026-11-11 the owner logged in again (the login banner: 43 % of memory in use, 34 updates and a restart pending); the second inspection, to see whether the server has been enlarged, has not run yet: it needs the owner to type the key's passphrase |
+| 1 | Server facts before anything | Inspected read-only on 2026-11-08 ([inspect-server.sh](inspect-server.sh)): Ubuntu 24.04.5, 2 vCPU, 3.9 GB memory, 73 GB disk with 45 GB free, Docker 29.8.2, twelve containers of other workloads. Written up in [SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08). Inspected again on 2026-11-12 (04:45 Melbourne time): [the same size](SERVER_CAPACITY_REPORT.md#inspection-2026-11-12), 2.5 GB available, so still no go; outbound HTTPS and the Cloudflare tunnel's port are open |
 | 2 | AWS dependency inventory | [AWS_INVENTORY.md](AWS_INVENTORY.md). Not in use, so nothing to replace: API Gateway, ElastiCache, Step Functions, ECR, AWS Backup, Route 53 public zones |
 | 3 | Open-source replacements installed | Chosen (above), configured in `infra/ikorex/`, **not installed**: no room on the server |
 | 4 | SNS replaced | Done in code (above). Retries, dead-letter and failed-job tracking are the queue's; each text's delivery status is kept on its own record in the database |
