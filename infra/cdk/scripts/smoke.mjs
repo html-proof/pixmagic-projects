@@ -37,6 +37,28 @@ const isConfigReport = (r) =>
   r.credentials.every((c) => c && typeof c.provider === "string" && typeof c.idSetting === "string" && typeof c.secretSetting === "string" && typeof c.idSet === "boolean" && typeof c.secretSet === "boolean");
 
 /**
+ * The smoke tests' requests (redirects never followed). A read that got no answer at all (fetch
+ * throws: the connection between the runner and the edge was dropped or reset) is asked once more,
+ * for the reason the configuration check below asks twice: it says nothing about the release, and a
+ * failed smoke test rolls every function back. On 2026-11-11 `/settings` and `/terms` each failed
+ * with "fetch failed" within 70 ms of the page before, and release 176 was rolled back; both
+ * answered 200 minutes later. An answer is never asked again, whatever its status, and neither is
+ * anything but a read: a POST that may have arrived is not sent twice.
+ */
+export function requester(fetchImpl = fetch, pauseMs = 1000) {
+  return async (url, init) => {
+    const ask = () => fetchImpl(url, { redirect: "manual", ...init });
+    try {
+      return await ask();
+    } catch (err) {
+      if (!/^(GET|HEAD)$/i.test(init?.method ?? "GET")) throw err;
+      await new Promise((r) => setTimeout(r, pauseMs));
+      return ask();
+    }
+  };
+}
+
+/**
  * What the cron function answered to {"action":"config"} (packages/core/src/configReport.ts), as
  * the check "app configuration read from the cron function" reports it. `invoke()` asks once and
  * returns { meta, report }: the CLI's answer (FunctionError when the function threw) and the
@@ -135,7 +157,7 @@ async function main() {
       console.log(`FAIL ${name}: ${err.message}`);
     }
   }
-  const get = (url, init) => fetch(url, { redirect: "manual", ...init });
+  const get = requester();
   // The domain's DNS is at Cloudflare, proxied: it answers as `server: cloudflare` and may serve a file
   // from its own cache, so CloudFront's and S3's marks are looked for in what it passes on.
   const edgeHit = (r) => /hit/i.test(r.headers.get("x-cache") ?? "") || /hit/i.test(r.headers.get("cf-cache-status") ?? "");
@@ -154,6 +176,8 @@ async function main() {
   for (const page of ["/login", "/signup", "/forgot-password", "/dashboard", "/settings", "/privacy", "/terms"]) {
     await check(`page ${page}`, async () => {
       const r = await get(`${base}${page}`);
+      // Read to the end, so the connection is free for the next page and not dropped half-read.
+      await r.arrayBuffer();
       expect(r.status === 200, `status ${r.status}`);
       expect((r.headers.get("content-type") ?? "").startsWith("text/html"), r.headers.get("content-type"));
     });

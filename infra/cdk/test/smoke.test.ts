@@ -10,8 +10,10 @@ interface Answer {
   meta: { FunctionError?: string; StatusCode?: number };
   report: unknown;
 }
-const { configCheck } = (await import(new URL("../scripts/smoke.mjs", import.meta.url).href)) as {
+type Get = (url: string, init?: RequestInit) => Promise<Response>;
+const { configCheck, requester } = (await import(new URL("../scripts/smoke.mjs", import.meta.url).href)) as {
   configCheck: (invoke: () => Answer, envName: string) => { detail: string; warnings: string[] };
+  requester: (fetchImpl: Get, pauseMs?: number) => Get;
 };
 
 const credential = (provider: string, idSetting: string, secretSetting: string, idSet: boolean, secretSet: boolean, effect: string) => ({
@@ -141,5 +143,47 @@ describe("the configuration check", () => {
       expect(detail, JSON.stringify(report)).toMatch(/^not checked: an answer this check doesn't know/);
       expect(warnings[0]).toMatch(/^::warning title=Provider secrets weren't checked::/);
     }
+  });
+});
+
+/** A fetch that gives each of `outcomes` in turn: a Response, or an Error it throws as fetch does. */
+function fetches(...outcomes: (Response | Error)[]) {
+  const asked: { url: string; init?: RequestInit }[] = [];
+  const impl: Get = async (url, init) => {
+    asked.push({ url, init });
+    const next = outcomes[Math.min(asked.length, outcomes.length) - 1]!;
+    if (next instanceof Error) throw next;
+    return next;
+  };
+  return { impl, asked };
+}
+const dropped = () => new TypeError("fetch failed");
+
+describe("the smoke tests' requests", () => {
+  it("asks a page once more when the connection was dropped, and never follows a redirect", async () => {
+    const f = fetches(dropped(), new Response("ok"));
+    const r = await requester(f.impl, 0)("https://example.test/settings");
+    expect(r.status).toBe(200);
+    expect(f.asked).toHaveLength(2);
+    expect(f.asked[1]!.init).toEqual({ redirect: "manual" });
+  });
+
+  it("fails when the second ask gets no answer either", async () => {
+    const f = fetches(dropped());
+    await expect(requester(f.impl, 0)("https://example.test/terms")).rejects.toThrow("fetch failed");
+    expect(f.asked).toHaveLength(2);
+  });
+
+  it("never asks again for an answer, whatever its status", async () => {
+    const f = fetches(new Response("down", { status: 503 }), new Response("ok"));
+    const r = await requester(f.impl, 0)("https://example.test/dashboard");
+    expect(r.status).toBe(503);
+    expect(f.asked).toHaveLength(1);
+  });
+
+  it("never sends a POST twice", async () => {
+    const f = fetches(dropped(), new Response("ok"));
+    await expect(requester(f.impl, 0)("https://example.test/api/auth/logout", { method: "POST" })).rejects.toThrow("fetch failed");
+    expect(f.asked).toHaveLength(1);
   });
 });
