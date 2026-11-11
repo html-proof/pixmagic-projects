@@ -34,6 +34,9 @@ const COMMENT = /^\s*(\/\/|\/\*|\*|#|<!--)/;
 /** Text the scan reads; images, fonts and the lockfile are skipped. */
 const SKIP = /\.(png|jpe?g|gif|svg|ico|webp|woff2?|ttf|pdf|zip|gz)$|(^|\/)pnpm-lock\.yaml$/;
 
+/** This file names AWS's libraries and endpoints to find them; it uses none. */
+const SELF = "scripts/aws-dependency-scan.mjs";
+
 /** Documentation: describes AWS, runs nothing. */
 const isDocs = (path) => path.endsWith(".md") || path.startsWith("docs/");
 
@@ -155,7 +158,7 @@ export function scan(files = execFileSync("git", ["ls-files", "-z"], { cwd: root
   const hits = [];
   let docs = 0;
   for (const path of files) {
-    if (SKIP.test(path)) continue;
+    if (SKIP.test(path) || path === SELF) continue;
     let text;
     try {
       text = read(path);

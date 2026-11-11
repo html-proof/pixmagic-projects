@@ -24,8 +24,10 @@ only a comment doesn't count. Markdown and `docs/` don't count: they describe AW
 ## Result, 2026-11-08 (`main` at e3f7811b)
 
 **90 files, 474 lines.** Documentation that names AWS's settings or endpoints, not counted: 30 files.
-No file uses the AWS SDK: the AWS code signs its own requests with `aws4fetch`, and every AWS
-service sits behind one of the interfaces above.
+No file of the app uses the AWS SDK: the AWS code signs its own requests with `aws4fetch`, and every
+AWS service sits behind one of the interfaces above. The SDK appears only in infrastructure code
+that runs inside AWS, the inline functions of `infra/cdk/lib/migrate-before-live.ts` and
+`whatsapp-stack.ts`, which go at stage F.
 
 | Group | Files | Lines | Goes |
 | --- | --- | --- | --- |
