@@ -110,7 +110,7 @@ capacity claim); everything that touches production (stages D-F).
 | # | Criterion | Status |
 | --- | --- | --- |
 | 1 | Every AWS dependency migrated or justified | Justified in [AWS_INVENTORY.md](AWS_INVENTORY.md); migration not done |
-| 2 | bizinsights runs on iKorex | Not yet (stage B). First login and inspection 2026-11-08: **no go on memory** (2.5 GB free; bizinsights needs 3.2–4.6 GB) until the server is enlarged to at least 8 GB and 4 cores, as requested of the administrator ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08)) |
+| 2 | bizinsights runs on iKorex | Not yet (stage B). First login and inspection 2026-11-08: **no go on memory** (2.5 GB free; bizinsights needs 3.2–4.6 GB) until the server is enlarged to at least 8 GB and 4 cores, as requested of the administrator ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08)). Inspected again 2026-11-12: the same size, still no go; outbound HTTPS open ([second inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-12)) |
 | 3 | Customer accounts accessible | Not yet (stage D) |
 | 4 | Shopify OAuth works | Not yet (stage B/D) |
 | 5 | Shopify sync works | Code path: the queue runs the same handlers (tested above); on the server: not yet |
