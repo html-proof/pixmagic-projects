@@ -25,8 +25,11 @@ Melbourne time, no logs profile. Since then, each live on AWS through Deploy to 
   tested against PostgreSQL; with it, `AWS_WHATSAPP=off`, which keeps AWS's WhatsApp service from
   starting again against the server's through the rollback period.
 
-The server is not inspected yet: this PC's SSH key (with its passphrase now) waits for the
-administrator. Nothing has changed on the server, and AWS keeps running everything.
+**The server (2026-11-12): inspected twice, read-only, and no go on memory both times.** It has
+3.9 GB in all with about 2.5 GB free beside what already runs there, and bizinsights needs 3.2 to
+4.6 GB ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md)). The administrator has been asked
+for at least 8 GB and 4 cores. Nothing has been installed or changed on the server, and AWS keeps
+running everything.
 
 ## The pages
 
@@ -74,10 +77,10 @@ that didn't exist.
 
 ## Waiting on
 
-1. **SSH access**: the administrator adding this PC's key (guide steps 2-4), and their agreement to
-   host bizinsights there. Then the read-only inspection, which also answers the audit's open
-   questions (who is in the `docker` group, what runs as `deployer`, disk encryption).
-2. The capacity test's result (go / tight / no go).
+1. **The server's administrator**: more memory (at least 8 GB and 4 cores), their agreement to host
+   bizinsights there, and a Linux user of its own. SSH access works (first login 2026-11-08).
+2. The inspection again after the resize: nothing is installed before the capacity test passes. If
+   the server can't be enlarged, a server of bizinsights' own, with the same files.
 3. Stage B's timed round trip of the database copy, out and back (`copy-db.mjs --rehearsal --keep`,
    then `copy-db-back.mjs --rehearsal`): both built and tested on the PC, neither yet run against
    RDS and the server.

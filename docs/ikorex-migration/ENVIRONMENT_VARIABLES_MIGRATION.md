@@ -91,4 +91,4 @@ placeholder, and the app refuses to start in production with a test secret or a 
 
 - Before the cutover: `admin config` on the server lists every provider as configured, values hidden.
 - After stage F: the AWS key lines are empty, and `node scripts/aws-dependency-scan.mjs --none-left`
-  (PR #358) finds no AWS code left in the repository.
+  ([AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md)) finds no AWS code left in the repository.
