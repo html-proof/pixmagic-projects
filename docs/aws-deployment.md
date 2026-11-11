@@ -660,6 +660,40 @@ job signs in only with the OIDC deploy role and checks that it did.
   is vitest's "Start at". A busy PC (demos, other test runs, other sessions' builds) makes the
   integration tests and the e2e suite 2-3 times slower too and can time a test out even plugged in
   and awake (2026-10-19 20:28Z): re-run the job once the PC is quiet.
+- A job that is "in progress" on bizinsights-pc with no steps, then fails or is cancelled after 10
+  minutes with nothing in its log, while the runner shows online: Windows' Smart App Control is
+  blocking the runner's worker program (2026-11-09 to 11-11: #359, #360, #361, #362). A restart
+  doesn't help and it isn't the network. Check, without elevation:
+
+  ```powershell
+  Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-CodeIntegrity/Operational'; Id=3077; StartTime=(Get-Date).AddHours(-2)} | Format-List TimeCreated, Message
+  ```
+
+  It names `\actions-runner\bin.<version>\Runner.Worker.exe` or `Runner.Worker.dll` and policy
+  `{0283ac0f-fff1-49ae-ada1-8a933130cad6}` (VerifiedAndReputableDesktop, which is Smart App Control;
+  `VerifiedAndReputablePolicyState` under `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` is 1
+  while it enforces). The Application log has the other half at the same second: `.NET Runtime`
+  1026, "An Application Control policy has blocked this file. (0x800711C7)".
+  Why: GitHub doesn't sign the runner's Windows programs (event 3089 beside each 3077:
+  `TotalSignatureCount=0`), so Smart App Control lets each one run only while Microsoft's cloud
+  service vouches for that exact file, and that can stop on any day without anything changing on
+  the PC. Runner 2.338.2 arrived on 2026-11-03 and ran every job until 11-08; from 11-09 05:07Z
+  its worker was blocked, here and for other people on the same day
+  ([actions/runner#4770](https://github.com/actions/runner/issues/4770), open since 2026-10-11).
+  Smart App Control had been enforcing since 2026-08-24, so neither it nor the runner's update was
+  new. Windows has no exception for one program. What doesn't fix it: an older runner (2.337.0 and
+  2.338.0 are unsigned too and were blocked for others, and GitHub stops sending jobs to a runner
+  30 days behind a release). What does, both the owner's decision:
+  - Smart App Control off: Windows Security → App & browser control → Smart App Control → Off.
+    Defender antivirus and SmartScreen stay on. This PC has KB5127648 (2026-10-15), whose known
+    issue is that the switch back to On can be greyed out until Microsoft fixes it.
+  - Or GitHub's machines for a while: delete the repository variable `SELF_HOSTED_RUNNER` (back:
+    `gh variable set SELF_HOSTED_RUNNER --body '["self-hosted","bizinsights-pc"]'`). The deploy role
+    trusts the workflow file on `main`, not the machine, so Deploy to AWS works from there; the
+    2,000 free minutes a month are the limit (first section above).
+
+  Until one is done, hold pull requests as drafts (below): every job sent to the PC ends as a red or
+  cancelled check.
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
 - With one runner a pull request sometimes has to wait: another needs the runner first, or it has to
   land after another. Hold it by making it a draft (`gh pr ready <n> --undo`), never by cancelling
