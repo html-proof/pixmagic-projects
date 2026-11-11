@@ -184,6 +184,7 @@ before it needs the file copied again into `C:\ProgramData\bizinsights-runner` (
 | Backups in the bucket | `docker compose exec backup pgbackrest --stanza=bizinsights info` |
 | Restore test now | `docker compose exec backup restore-test.sh` |
 | Turn schedules on (production, at the cutover; with SMS still on AWS, also starts reading its SMS events) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=on/' .env && docker compose up -d worker` |
+| Turn schedules off (first step of a copy back to AWS, [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md#the-copy-back-de-after-writes-on-ikorex)) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=off/' .env && docker compose up -d worker` |
 
 ## Rolling back a release
 

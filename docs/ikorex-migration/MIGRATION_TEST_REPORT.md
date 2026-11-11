@@ -3,6 +3,30 @@
 What has been tested, how, and with what result. Only runs that happened are recorded here; a
 criterion with no run says so. Newest first.
 
+## 2026-11-08: the copy back for a rollback, on the owner's PC
+
+Branch `claude/ikorex-copy-back`. The last piece the rollback plan needed before the cutover:
+`infra/ikorex/scripts/copy-db-back.mjs` copies the server's databases back into RDS and proves them
+whole ([DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md#the-way-back-copy-db-backmjs),
+[ROLLBACK_PLAN.md](ROLLBACK_PLAN.md#the-copy-back-de-after-writes-on-ikorex)). Building it found two
+gaps, fixed in the same change: the presigned link was on `curl`'s command line on the server
+(SECURITY_AUDIT.md F7), and nothing kept AWS's WhatsApp service off after the cutover, so any Deploy
+to AWS in the rollback period would have started it against the server's on the same WhatsApp
+sessions (now `AWS_WHATSAPP=off`, and both copies refuse while it has a task). PostgreSQL 18.6
+scratch cluster, Git Bash, Node 24, Windows 11:
+
+| Test | Result |
+| --- | --- |
+| `apps/aws/test/copyDb.test.ts` (12, 5 new: upload to and download from presigned links with no link in curl's arguments, `s3://` with the host's own role, a restore as RDS's master would make it, every target checked first, `FREE_BYTES`) | **12 of 12 passed** |
+| `apps/aws/test/copyDbPresign.test.ts` (new): the upload link equal to aws4fetch's for the same PUT | **Passed** |
+| `infra/ikorex/scripts/copy-db-lib.test.mjs` (16, 8 new) | **16 passed** |
+| `infra/cdk` (186, 2 new: `-c whatsapp=off`) | **186 passed** |
+| `apps/aws` whole suite with PostgreSQL | **177 passed** |
+| `tsc` (apps/aws, infra/cdk), ESLint on every changed file | **Clean** |
+
+Not run: anything against AWS or the server (SSH still waits for the administrator). The copy back's
+first real run is stage B's timed round trip.
+
 ## 2026-11-08: leaving Cognito and AWS's SMS, on AWS first
 
 The owner's revised decisions (leave AWS completely) are carried out on AWS production before the
@@ -129,5 +153,5 @@ capacity claim); everything that touches production (stages D-F).
 | 18 | No cross-tenant leakage | The new tables carry no tenant data and the tenant role has no rights on them (checked); the copy carries every table's row-level security and policies unchanged (tested); on the server: not yet |
 | 19 | Existing iKorex websites keep working | Not yet (nothing has run on the server) |
 | 20 | n8n and the CCTV tunnel keep working | Not yet |
-| 21 | Rollback documented and tested | Documented ([ROLLBACK_PLAN.md](ROLLBACK_PLAN.md)); `deploy.sh`'s automatic rollback not yet run |
+| 21 | Rollback documented and tested | Documented ([ROLLBACK_PLAN.md](ROLLBACK_PLAN.md)); the copy back (`copy-db-back.mjs`) tested against PostgreSQL (2026-11-08), not yet against RDS and the server (stage B); `deploy.sh`'s automatic rollback not yet run |
 | 22 | Unused AWS resources decommissioned | Not yet (stage F, owner's approval) |

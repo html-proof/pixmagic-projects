@@ -1,5 +1,5 @@
-// The parts of copy-db.mjs that touch nothing (its tests: copy-db-lib.test.mjs).
-import { createHash } from "node:crypto";
+// The parts of copy-db.mjs and copy-db-back.mjs that touch nothing (their tests: copy-db-lib.test.mjs).
+import { createHash, createHmac } from "node:crypto";
 
 /** The fingerprint the administrator's SSH guide (5 Nov 2026) gives for the server's host key. */
 export const PINNED_HOST = "103.146.112.176";
@@ -43,15 +43,20 @@ export function preamble(vars) {
 /**
  * What Systems Manager runs on AWS's admin host: the database owner's login read from its secret
  * there (it never leaves AWS, and the command's text, which Systems Manager keeps, holds only the
- * secret's ARN), copy-db.sh written to a file, then `dump`.
+ * secret's ARN), copy-db.sh written to a file, then `command`: dump (copy-db.mjs), restore or facts
+ * (copy-db-back.mjs). No setting may be a link: Systems Manager keeps the command's text.
  */
-export function adminHostScript({ settings, dbSecretArn, copyScript }) {
+export function adminHostScript({ settings, dbSecretArn, copyScript, command = "dump" }) {
   if (!/^arn:aws:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@-]+$/.test(dbSecretArn)) throw new Error("not a Secrets Manager ARN");
   if (/^COPYDB$/m.test(copyScript)) throw new Error("copy-db.sh holds the heredoc's end marker");
+  if (!["dump", "restore", "facts"].includes(command)) throw new Error(`copy-db.sh has no command ${command}`);
+  if (Object.values(settings).some((v) => /^https?:/i.test(String(v)))) throw new Error("a link in the admin host's settings would stay in Systems Manager's command history");
   return `set -euo pipefail
 ${preamble(settings)}
+# Amazon Linux 2023 holds /tmp in memory (half of this host's 0.5 GB): the dumps go to its disk.
+export TMPDIR_COPY=/var/tmp
 command -v pg_dump >/dev/null || dnf install -y -q postgresql17 jq >/dev/null 2>&1
-# pg_dump refuses a server newer than itself: RDS runs 17.
+# pg_dump refuses a server newer than itself, pg_restore an archive newer than itself: 17 on both sides.
 [ "$(pg_dump --version | grep -oE '[0-9]+' | head -1)" -ge 17 ] || { echo "pg_dump 17 or newer is needed on the admin host" >&2; exit 1; }
 S=$(aws secretsmanager get-secret-value --secret-id '${dbSecretArn}' --query SecretString --output text)
 export PGHOST=$(echo "$S" | jq -r .host) PGPORT=$(echo "$S" | jq -r .port) PGUSER=$(echo "$S" | jq -r .username) PGPASSWORD=$(echo "$S" | jq -r .password) PGSSLMODE=require
@@ -59,8 +64,85 @@ unset S
 cat > /var/tmp/copy-db.sh <<'COPYDB'
 ${copyScript.replace(/\r\n/g, "\n").replace(/\n?$/, "\n")}COPYDB
 trap 'rm -f /var/tmp/copy-db.sh' EXIT
-bash /var/tmp/copy-db.sh dump
+bash /var/tmp/copy-db.sh ${command}
 `;
+}
+
+/** S3's encoding for a SigV4 query (RFC 3986: all but A-Z a-z 0-9 - _ . ~ escaped). */
+const s3Encode = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+
+/**
+ * A presigned S3 link (Signature Version 4 in the query, the payload unsigned): what `aws s3
+ * presign` makes for GET, and for PUT, which the CLI can't. The reverse copy's dumps go from the
+ * server straight into the bucket with one, so the data never passes through the PC. Good for one
+ * method on one key until `expires` seconds pass or the credentials it was signed with expire.
+ */
+export function presignS3({ method, bucket, key, region, credentials, now = new Date(), expires = 3600, host }) {
+  if (!["GET", "PUT"].includes(method)) throw new Error("GET or PUT");
+  if (!credentials?.accessKeyId || !credentials?.secretAccessKey) throw new Error("no AWS credentials to sign with");
+  if (!Number.isInteger(expires) || expires < 1 || expires > 604_800) throw new Error("a presigned link lasts 1 s to 7 days");
+  const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const day = amzDate.slice(0, 8);
+  const h = host ?? `${bucket}.s3.${region}.amazonaws.com`;
+  const path = `/${key.split("/").map(s3Encode).join("/")}`;
+  const scope = `${day}/${region}/s3/aws4_request`;
+  const params = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": `${credentials.accessKeyId}/${scope}`,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": String(expires),
+    "X-Amz-SignedHeaders": "host",
+    ...(credentials.sessionToken ? { "X-Amz-Security-Token": credentials.sessionToken } : {}),
+  };
+  const query = Object.keys(params)
+    .sort()
+    .map((k) => `${s3Encode(k)}=${s3Encode(params[k])}`)
+    .join("&");
+  const canonical = [method, path, query, `host:${h}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
+  const toSign = ["AWS4-HMAC-SHA256", amzDate, scope, createHash("sha256").update(canonical).digest("hex")].join("\n");
+  const hmac = (k, v) => createHmac("sha256", k).update(v).digest();
+  const signingKey = hmac(hmac(hmac(hmac(`AWS4${credentials.secretAccessKey}`, day), region), "s3"), "aws4_request");
+  return `https://${h}${path}?${query}&X-Amz-Signature=${createHmac("sha256", signingKey).update(toSign).digest("hex")}`;
+}
+
+/** `aws configure export-credentials --format process`: the signed-in session's keys. */
+export function exportedCredentials(stdout) {
+  const c = JSON.parse(String(stdout));
+  if (!c?.AccessKeyId || !c?.SecretAccessKey) throw new Error("the AWS CLI gave no credentials (aws login first)");
+  return { accessKeyId: c.AccessKeyId, secretAccessKey: c.SecretAccessKey, sessionToken: c.SessionToken, expiration: c.Expiration };
+}
+
+/**
+ * AWS's WhatsApp services (`aws ecs describe-services`) with a task running, starting or wanted.
+ * Two Evolution services on one WhatsApp session push each other off it, and AWS's keeps writing
+ * its `evolution` database: neither copy may run while AWS's does.
+ */
+export function liveServices(described) {
+  return (described?.services ?? [])
+    .filter((s) => s.status !== "INACTIVE" && (s.runningCount > 0 || s.pendingCount > 0 || s.desiredCount > 0))
+    .map((s) => ({ name: s.serviceName, running: s.runningCount, desired: s.desiredCount }));
+}
+
+/** psql -A -t of `SELECT queue, count(*) FROM job_queue GROUP BY 1`, as { queue: jobs }. */
+export function queueCounts(stdout) {
+  return Object.fromEntries(
+    String(stdout)
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => {
+        const [queue, n] = l.split("|");
+        if (!queue || !/^\d+$/.test(n ?? "")) throw new Error(`not a queue count: ${l}`);
+        return [queue, Number(n)];
+      }),
+  );
+}
+
+/** A manual RDS snapshot's name: lowercase letters, digits and single hyphens, a letter first. */
+export function snapshotName(instance, stamp) {
+  const name = `${instance}-before-rollback-${stamp}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
+  if (!/^[a-z][a-z0-9-]{0,254}$/.test(name) || name.endsWith("-")) throw new Error(`not a snapshot name: ${name}`);
+  return name;
 }
 
 /**

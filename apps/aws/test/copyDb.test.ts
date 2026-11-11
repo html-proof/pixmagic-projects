@@ -1,8 +1,9 @@
 import { execFile, execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "../src/migrate.js";
@@ -63,8 +64,10 @@ describe.skipIf(!adminUrl || !bash || !hasPgTools)("database copy to the iKorex 
   };
 
   function run(command: "dump" | "restore" | "facts", env: Record<string, string>): Promise<{ code: number; stdout: string; stderr: string; result?: Record<string, Result> }> {
+    // Stand-ins first on the PATH from inside bash: Git for Windows' bash.exe puts its own folders first.
+    const argv = env.PREPEND_PATH ? ["-c", 'export PATH="$(cygpath -u "$PREPEND_PATH" 2>/dev/null || printf %s "$PREPEND_PATH"):$PATH"; exec bash "$0" "$@"', script, command] : [script, command];
     return new Promise((done) => {
-      execFile(bash!, [script, command], { env: { ...process.env, ...pgEnv(), ...env }, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      execFile(bash!, argv, { env: { ...process.env, ...pgEnv(), ...env }, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
         const line = stdout.split(/\r?\n/).find((l) => l.startsWith("COPY-RESULT "));
         done({ code: err ? ((err as { code?: number }).code ?? 1) : 0, stdout, stderr, result: line ? JSON.parse(line.slice("COPY-RESULT ".length)) : undefined });
       });
@@ -218,6 +221,166 @@ describe.skipIf(!adminUrl || !bash || !hasPgTools)("database copy to the iKorex 
     expect(out.result!.evolution!.facts).toEqual(dumped.evolution!.facts);
     expect(await dbExists(target)).toBe(false);
   }, 60_000);
+
+  it("checks every target before it changes any: a refusal for the second leaves the first as it was", async () => {
+    const first = `copy_two1_${id}`;
+    const second = `copy_two2_${id}`;
+    made.push(first, second);
+    for (const db of [first, second]) {
+      await admin.query(`CREATE DATABASE ${db}`);
+      await sql(db, "CREATE TABLE stale (id int); INSERT INTO stale VALUES (1)");
+    }
+    const holder = new pg.Client({ connectionString: url(second) });
+    await holder.connect();
+    const out = await run("restore", {
+      DBS: "app evolution",
+      MODE: "replace",
+      SOURCE_app: `${work}/app.dump`,
+      SHA_app: dumped.app!.sha256,
+      TARGET_app: first,
+      SOURCE_evolution: `${work}/evolution.dump`,
+      SHA_evolution: dumped.evolution!.sha256,
+      TARGET_evolution: second,
+    });
+    await holder.end();
+    expect(out.code).not.toBe(0);
+    expect(out.stderr).toContain(`1 other connection(s) to ${second}`);
+    // Not emptied, not restored: the first database is exactly as it was.
+    expect(out.stderr).not.toContain(`emptying ${first}`);
+    expect((await sql(first, "SELECT count(*) FROM stale")).rows[0].count).toBe("1");
+  }, 60_000);
+
+  it("refuses a restore the database's disk can't take, given as FREE_BYTES where this host can't see it (RDS)", async () => {
+    const target = `copy_free_${id}`;
+    const out = await run("restore", { DBS: "app", MODE: "fresh", FREE_BYTES: "1000", BYTES_app: String(dumped.app!.bytes), SOURCE_app: `${work}/app.dump`, SHA_app: dumped.app!.sha256, TARGET_app: target });
+    expect(out.code).not.toBe(0);
+    expect(out.stderr).toContain("1000 bytes free where the database lives");
+    expect(await dbExists(target)).toBe(false);
+    const junk = await run("restore", { DBS: "app", MODE: "fresh", FREE_BYTES: "lots", SOURCE_app: `${work}/app.dump`, SHA_app: dumped.app!.sha256, TARGET_app: target });
+    expect(junk.stderr).toContain("FREE_BYTES is not a number");
+  });
+
+  it("restores as RDS's master would: no superuser, a member of the WhatsApp service's role, fresh and then replacing", async () => {
+    // RDS's master `app`: CREATEDB and CREATEROLE, no superuser; granted the service's role when it
+    // made the service's database (apps/aws/src/evolutionDb.ts).
+    const master = `copy_master_${id}`;
+    const service = `copy_svc_${id}`;
+    const appTarget = `copy_rdsapp_${id}`;
+    const evoTarget = `copy_rdsevo_${id}`;
+    made.push(appTarget, evoTarget);
+    // A password of its own: CI's server takes SCRAM logins only (PGREQUIREAUTH), as RDS does.
+    const password = randomUUID();
+    await admin.query(`CREATE ROLE ${master} LOGIN CREATEDB CREATEROLE NOSUPERUSER NOBYPASSRLS PASSWORD '${password}'`);
+    await admin.query(`CREATE ROLE ${service} NOLOGIN`);
+    await admin.query(`GRANT ${service} TO ${master}`);
+    try {
+      const env = {
+        PGUSER: master,
+        PGPASSWORD: password,
+        PGDATABASE: "postgres",
+        DBS: "app evolution",
+        SOURCE_app: `${work}/app.dump`,
+        SHA_app: dumped.app!.sha256,
+        TARGET_app: appTarget,
+        NEED_ROLES_app: "app_rls app_system",
+        SOURCE_evolution: `${work}/evolution.dump`,
+        SHA_evolution: dumped.evolution!.sha256,
+        TARGET_evolution: evoTarget,
+        ROLE_evolution: service,
+      };
+      const fresh = await run("restore", { ...env, MODE: "fresh" });
+      expect(fresh.stderr).not.toContain("REFUSED");
+      expect(fresh.code, fresh.stderr).toBe(0);
+      // The rollback: both exist with tables, and are replaced.
+      const replaced = await run("restore", { ...env, MODE: "replace" });
+      expect(replaced.stderr).not.toContain("REFUSED");
+      expect(replaced.code, replaced.stderr).toBe(0);
+      for (const out of [fresh, replaced]) {
+        expect(out.result!.app!.facts).toEqual(dumped.app!.facts);
+        expect(out.result!.evolution!.facts).toEqual(dumped.evolution!.facts);
+      }
+      expect((await sql(evoTarget, `SELECT tableowner FROM pg_tables WHERE tablename = 'Instance'`)).rows[0].tableowner).toBe(service);
+      expect((await sql(appTarget, `SELECT tableowner FROM pg_tables WHERE tablename = 'job_queue'`)).rows[0].tableowner).toBe(master);
+    } finally {
+      for (const db of [appTarget, evoTarget]) await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+      await admin.query(`DROP OWNED BY ${master}; DROP ROLE ${master}; DROP ROLE ${service}`).catch(() => {});
+    }
+  }, 120_000);
+
+  describe("the way back (copy-db-back.mjs): links and the admin host's own role", () => {
+    // A stand-in bucket (a folder), a curl that logs its arguments and the config it reads on stdin
+    // and then lets the real curl move the file to or from the folder, and an aws that copies from it.
+    let bucketDir = "";
+    let bin = "";
+    let logs = "";
+    const linkFor = (key: string) => `https://bucket.test/${key}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=3600&X-Amz-Security-Token=tok%2Fen&X-Amz-Signature=abc123`;
+    const env = () => ({ PREPEND_PATH: bin, CURL_LOG: `${logs}/argv.log`, CURL_CONFIG_LOG: `${logs}/config.log`, BUCKET_DIR: bucketDir, BUCKET_URL: pathToFileURL(bucketDir).href });
+
+    beforeAll(() => {
+      bucketDir = join(work, "bucket").replace(/\\/g, "/");
+      bin = join(work, "bin").replace(/\\/g, "/");
+      logs = join(work, "logs").replace(/\\/g, "/");
+      for (const d of [bucketDir, bin, logs]) mkdirSync(d, { recursive: true });
+      const realCurl = execFileSync(bash!, ["-c", "command -v curl"], { encoding: "utf8" }).trim();
+      writeFileSync(
+        join(bin, "curl"),
+        [
+          "#!/bin/bash",
+          'printf "%s\\n" "$@" >> "$CURL_LOG"',
+          "config=$(cat)",
+          'printf "%s\\n" "$config" >> "$CURL_CONFIG_LOG"',
+          'link=${config#url = \\"}; link=${link%\\"}',
+          "key=${link#https://bucket.test/}; key=${key%%\\?*}",
+          'mkdir -p "$(dirname "$BUCKET_DIR/$key")"',
+          `exec "${realCurl}" "$@" <<<"url = \\"$BUCKET_URL/$key\\""`,
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        join(bin, "aws"),
+        ["#!/bin/bash", '[ "$1 $2" = "s3 cp" ] || { echo "aws stand-in: only s3 cp" >&2; exit 2; }', 'cp "$BUCKET_DIR/${3#s3://bucket/}" "$4"', ""].join("\n"),
+        { mode: 0o755 },
+      );
+    });
+
+    it("dumps on the server straight to a presigned link, the link never on curl's command line", async () => {
+      const out = await run("dump", { ...env(), DBS: "app", DB_app: src, DEST_app: linkFor("db-export/t-back/app.dump") });
+      expect(out.stderr).not.toContain("REFUSED");
+      expect(out.code).toBe(0);
+      const uploaded = `${bucketDir}/db-export/t-back/app.dump`;
+      expect(createHash("sha256").update(readFileSync(uploaded)).digest("hex")).toBe(out.result!.app!.sha256);
+      expect(statSync(uploaded).size).toBe(out.result!.app!.bytes);
+      const argv = readFileSync(`${logs}/argv.log`, "utf8");
+      expect(argv).toContain("-K");
+      expect(argv).not.toContain("bucket.test");
+      expect(argv).not.toContain("X-Amz");
+      expect(readFileSync(`${logs}/config.log`, "utf8")).toContain(`url = "${linkFor("db-export/t-back/app.dump")}"`);
+    }, 120_000);
+
+    it("restores from a presigned link the same way, and from s3:// with the host's own role", async () => {
+      const sha = createHash("sha256").update(readFileSync(`${bucketDir}/db-export/t-back/app.dump`)).digest("hex");
+      const viaLink = `copy_link_${id}`;
+      const viaS3 = `copy_s3_${id}`;
+      made.push(viaLink, viaS3);
+      const a = await run("restore", { ...env(), DBS: "app", MODE: "fresh", SOURCE_app: linkFor("db-export/t-back/app.dump"), SHA_app: sha, TARGET_app: viaLink, NEED_ROLES_app: "app_rls app_system" });
+      expect(a.stderr).not.toContain("REFUSED");
+      expect(a.code).toBe(0);
+      const b = await run("restore", { ...env(), DBS: "app", MODE: "fresh", SOURCE_app: "s3://bucket/db-export/t-back/app.dump", SHA_app: sha, TARGET_app: viaS3 });
+      expect(b.stderr).not.toContain("REFUSED");
+      expect(b.code).toBe(0);
+      // The same rows either way (the dump was a later snapshot than the first test's: compare the two).
+      expect(b.result!.app!.facts).toEqual(a.result!.app!.facts);
+      expect(a.result!.app!.facts.rls).toEqual(dumped.app!.facts.rls);
+      expect(readFileSync(`${logs}/argv.log`, "utf8")).not.toContain("X-Amz");
+    }, 120_000);
+
+    it("refuses a link that could break out of curl's config", async () => {
+      const out = await run("restore", { ...env(), DBS: "app", MODE: "fresh", SOURCE_app: 'https://bucket.test/k"\nurl = "file:///etc/passwd', SHA_app: "0".repeat(64), TARGET_app: `copy_bad2_${id}` });
+      expect(out.code).not.toBe(0);
+      expect(out.stderr).toContain("not a plain https link");
+    });
+  });
 
   it("ships with LF line endings (bash on Linux refuses CR)", () => {
     const text = readFileSync(script, "utf8");
