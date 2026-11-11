@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { insertStore, signUp, uniqueEmail } from "./helpers";
+import { insertStore, openMenuGroup, signUp, uniqueEmail } from "./helpers";
 
 /**
  * The Automations hub in the browser: the four-step setup for SMS against the local server's
@@ -46,6 +46,7 @@ test("an owner creates an SMS automation in four steps, tests it on themself and
   const { hub, store } = await ownerWithSender(page);
 
   await page.goto("/dashboard");
+  await openMenuGroup(page, "marketing");
   await page.getByRole("complementary").getByRole("navigation", { name: "App" }).getByRole("link", { name: "Automations" }).click();
   await expect(page).toHaveURL(/\/automations\/?$/);
   await expect(page.getByRole("heading", { name: "Automations", level: 1 })).toBeVisible();

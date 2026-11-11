@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV, E2E_EVOLUTION_URL } from "../playwright.config";
-import { insertStore, signUp, uniqueEmail } from "./helpers";
+import { insertStore, openMenuGroup, signUp, uniqueEmail } from "./helpers";
 
 /**
  * WhatsApp Automation in the browser (docs/whatsapp.md), with e2e/evolution-stub.mjs as Evolution API:
@@ -40,6 +40,7 @@ test("an owner links a phone, configures, verifies their number and sees WhatsAp
   const testNumber = `614${String(Date.now()).slice(-8)}`;
 
   await page.goto("/dashboard");
+  await openMenuGroup(page, "marketing");
   await page.getByRole("complementary").getByRole("navigation", { name: "App" }).getByRole("link", { name: "WhatsApp", exact: true }).click();
   await expect(page).toHaveURL(/\/dashboard\/whatsapp-automation\/?/);
   await expect(page.getByRole("heading", { name: /WhatsApp Automation/ }).first()).toBeVisible({ timeout: 15_000 });

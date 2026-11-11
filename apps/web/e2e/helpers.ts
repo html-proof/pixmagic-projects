@@ -171,6 +171,24 @@ export async function fullDashboard(page: Page) {
 }
 
 /** Fill in the create-account form (without sending it). */
+/**
+ * The short menu (lib/menu.ts) lists the everyday pages and folds the rest into groups: open one
+ * of them in the sidebar ("reports", "store", "marketing" or "settings"), as its heading does.
+ */
+export async function openMenuGroup(page: Page, id: "reports" | "store" | "marketing" | "settings") {
+  const heading = page.getByRole("complementary").getByTestId(`menu-group-${id}`);
+  await expect(heading).toBeVisible();
+  if ((await heading.getAttribute("aria-expanded")) !== "true") await heading.click();
+  await expect(heading).toHaveAttribute("aria-expanded", "true");
+}
+
+/** List every page in the sidebar, as "Show every page" at its foot keeps it on a device: for a test of what the menu holds. */
+export async function showEveryPage(page: Page) {
+  const nav = page.getByRole("complementary").getByRole("navigation", { name: "App" });
+  await nav.getByTestId("menu-layout-switch").click();
+  await expect(nav).toHaveAttribute("data-menu", "full");
+}
+
 export async function fillSignUp(page: Page, email: string, password = PASSWORD, name = "E2E User") {
   await asNewVisitor(page);
   await page.getByLabel("Full name").fill(name);
