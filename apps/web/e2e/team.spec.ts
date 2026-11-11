@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV, E2E_MAILPIT_URL } from "../playwright.config";
-import { asNewVisitor, signUp, uniqueEmail } from "./helpers";
+import { asNewVisitor, openMenuGroup, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Team & Access through the real app: an owner shares part of the dashboard with someone outside
@@ -55,6 +55,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   const ws = await createWorkspace(page, "Acme Goods");
   await insertStore(ws, `team-${Date.now()}.myshopify.com`, ["read_orders", "read_products", "read_customers"]);
   await page.goto("/dashboard");
+  await openMenuGroup(page, "settings");
   await sidebar(page).getByRole("link", { name: "Team & Access" }).click();
   await expect(page).toHaveURL(/\/team/);
   await expect(page.getByRole("heading", { name: "Team & Access" })).toBeVisible();

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { insertStore, signedWebhook, signUp, uniqueEmail } from "./helpers";
+import { insertStore, openMenuGroup, signedWebhook, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Customer Messaging in the browser, against the local server's stand-in for AWS (apps/aws
@@ -39,6 +39,7 @@ test("an owner sets up a sender, verifies a test number, writes a template and t
   const { base } = await ownerWithStore(page);
 
   await page.goto("/dashboard");
+  await openMenuGroup(page, "marketing");
   await page.getByRole("complementary").getByRole("navigation", { name: "App" }).getByRole("link", { name: "Customer Messaging" }).click();
   await expect(page).toHaveURL(/\/messaging\/?$/);
   // The heading comes with the overview's first load, which outlasted 5 s on the PC runner on battery.

@@ -20,7 +20,8 @@ import { AnimatedNumber } from "@/components/dashboard/Motion";
 import { costsOf, leftOverOf, leftOverWords, type LeftOver } from "@/components/dashboard/profitFigures";
 import { needsOf } from "@/components/dashboard/homeNeeds";
 import { greeting, NeedsYou, NumberTile, SalesByDay, useHomeAlerts, useHomeLayout, WhatChanged, WorkingForYou } from "@/components/dashboard/SimpleHome";
-import { plural } from "@/components/dashboard/format";
+import { TourOffer } from "@/components/Tour";
+import { FIGURE_HELP, visitsThatBoughtHelp } from "@/components/dashboard/figureHelp";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { signInFinished } from "@/lib/adSignIn";
 import { api, ApiError, apiHref, fmtMoney, fmtNum, fmtPct, friendlyError, isTransient, useLiveApi } from "@/lib/api";
@@ -447,16 +448,56 @@ export default function DashboardPage() {
   const automationsOn = AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")));
   const needs = ov && simple ? needsOf({ ov, alerts, costs: costsOn ? costs : null, money, stockHref: offers("inventory") && allowed("inventory.view") ? "/inventory/low-stock" : null }) : [];
   const funnel = m?.funnel && m.funnel.visits > 0 ? m.funnel : null;
+  // What each of the four numbers measures is behind its "i" (components/dashboard/figureHelp.ts).
   const aovTile = (i: number) =>
-    s && <NumberTile i={i} title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={money} />)} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} onClick={() => detail.open("sales")} />;
+    s && (
+      <NumberTile
+        i={i}
+        title="Average order value"
+        value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={money} />)}
+        delta={s.deltas.averageOrderValue}
+        compared={compared}
+        versus={versus}
+        help={FIGURE_HELP.averageOrder}
+        onClick={() => detail.open("sales")}
+      />
+    );
   const simpleTiles = s && (
-    <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+    <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4" data-tour="numbers">
       {s.current.totalSales !== undefined ? (
-        <NumberTile i={0} title="Total sales" value={figure(<AnimatedNumber value={s.current.totalSales} format={money} />)} delta={s.deltas.totalSales ?? null} compared={compared} versus={versus} extra={salesExtra} onClick={() => detail.open("sales")} />
+        <NumberTile
+          i={0}
+          title="Total sales"
+          value={figure(<AnimatedNumber value={s.current.totalSales} format={money} />)}
+          delta={s.deltas.totalSales ?? null}
+          compared={compared}
+          versus={versus}
+          extra={salesExtra}
+          help={FIGURE_HELP.totalSales}
+          onClick={() => detail.open("sales")}
+        />
       ) : (
-        <NumberTile i={0} title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={money} />)} delta={s.deltas.netSales} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+        <NumberTile
+          i={0}
+          title="Net sales"
+          value={figure(<AnimatedNumber value={s.current.netSales} format={money} />)}
+          delta={s.deltas.netSales}
+          compared={compared}
+          versus={versus}
+          help={FIGURE_HELP.netSales}
+          onClick={() => detail.open("sales")}
+        />
       )}
-      <NumberTile i={1} title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} delta={s.deltas.orders} compared={compared} versus={versus} onClick={() => detail.open("sales")} />
+      <NumberTile
+        i={1}
+        title="Orders"
+        value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)}
+        delta={s.deltas.orders}
+        compared={compared}
+        versus={versus}
+        help={FIGURE_HELP.orders}
+        onClick={() => detail.open("sales")}
+      />
       {showLeftOver && leftOver ? (
         <NumberTile
           i={2}
@@ -468,7 +509,7 @@ export default function DashboardPage() {
               {!leftOver.isNet && <span className="sr-only">. Not profit: bizinsights may not have every cost.</span>}
             </span>
           }
-          hint={!leftOver.isNet ? "Not profit: bizinsights may not have every cost." : undefined}
+          help={leftOver.isNet ? FIGURE_HELP.netProfit : FIGURE_HELP.leftOver}
           onClick={() => (allowed("analytics.sales") ? router.push("/sheet") : detail.open("sales"))}
         />
       ) : (
@@ -482,13 +523,22 @@ export default function DashboardPage() {
           delta={funnel.previous.imported === false ? null : funnel.deltas.conversionRate}
           compared={compared}
           versus={versus}
-          hint={`Of ${plural(funnel.visits, "tracked visit")}`}
+          help={visitsThatBoughtHelp(funnel.visits)}
           onClick={() => detail.open("shoppers")}
         />
       ) : showLeftOver ? (
         aovTile(3)
       ) : (
-        <NumberTile i={3} title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} delta={s.deltas.units} compared={compared} versus={versus} onClick={() => detail.open("products")} />
+        <NumberTile
+          i={3}
+          title="Total products sold"
+          value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)}
+          delta={s.deltas.units}
+          compared={compared}
+          versus={versus}
+          help={FIGURE_HELP.itemsSold}
+          onClick={() => detail.open("products")}
+        />
       )}
     </section>
   );
@@ -726,6 +776,7 @@ export default function DashboardPage() {
           numbers, sales by day, then what changed beside the automations working; with no
           automations offered (an App Store store), what changed beside the chart instead
           (components/dashboard/SimpleHome.tsx). */}
+      {simple && ov && <TourOffer />}
       {simple && ov && <NeedsYou needs={needs} onOpen={detail.open} />}
       {simple && simpleTiles}
       {simple &&

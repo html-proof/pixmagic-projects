@@ -41,6 +41,15 @@ export const AUTOMATIONS_HUB: boolean = true;
 export const SIMPLE_HOME: boolean = true;
 
 /**
+ * The short menu (2026-11-11): the sidebar lists the everyday pages and folds the rest into groups
+ * that open with a click (lib/menu.ts, components/AppShell.tsx). Every page keeps its name and its
+ * address. "Show every page" at the foot of the menu brings back the whole list on that device, and
+ * "Show fewer pages" returns. Flip to `false` to make the whole list everyone's menu again, with no
+ * switch.
+ */
+export const SIMPLE_MENU: boolean = true;
+
+/**
  * The Zapier card on Settings → Integrations (docs/zapier.md): connect the store to the merchant's own
  * Zapier account through bizinsights' Zapier app. On in production since 2026-10-29: the app is
  * registered and its ZAPIER_* settings are live, and the first test Zap passed (docs/zapier.md,

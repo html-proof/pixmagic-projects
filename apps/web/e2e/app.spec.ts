@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { fillCode, fillSignUp, insertStore, latestCode, logIn, PASSWORD, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
+import { fillCode, fillSignUp, insertStore, latestCode, logIn, PASSWORD, showEveryPage, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
 
 /** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
 const alert = (page: import("@playwright/test").Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
@@ -627,6 +627,8 @@ test("a workspace installed from the App Store shows only what the listing descr
   // No WhatsApp, Staff or advertising in the menu, and no Advertising section on the dashboard.
   await page.goto("/dashboard");
   const nav = page.getByRole("navigation", { name: "App" });
+  // Every page listed, so an entry that is missing is missing, not folded away.
+  await showEveryPage(page);
   await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Sales & Orders" })).toBeVisible();
   for (const name of ["WhatsApp", "Staff", "Advertising", "Customer Messaging", "Automations"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);

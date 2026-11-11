@@ -5,6 +5,7 @@ import { ArrowUpRight, ChevronRight, CircleCheck } from "lucide-react";
 import type { AlertView } from "@app/shared/alerts";
 import type { Health } from "@app/shared/health";
 import { CHANNEL_NAME, useHub } from "@/components/automations/HubUi";
+import { HelpTip } from "@/components/PageKit";
 import type { HubAutomation, OverviewResponse } from "@/components/automations/types";
 import { fmtMoney, fmtNum, fmtPct, useApi } from "@/lib/api";
 import { SIMPLE_HOME } from "@/lib/features";
@@ -81,7 +82,7 @@ function NeedButton({ a, onOpen }: { a: NeedAction; onOpen: (t: Topic) => void }
 /** The few things to do now (`needsOf`), worst first, or that there are none. */
 export function NeedsYou({ needs, onOpen }: { needs: Need[]; onOpen: (t: Topic) => void }) {
   return (
-    <section aria-labelledby="needs-h" data-testid="home-needs" className="home-card animate-rise overflow-hidden">
+    <section aria-labelledby="needs-h" data-testid="home-needs" data-tour="needs" className="home-card animate-rise overflow-hidden">
       <h2 id="needs-h" className="home-h2 px-5 py-4 sm:px-6">Needs you</h2>
       {needs.length === 0 ? (
         <p className="flex items-center gap-2 px-5 pb-5 text-sm text-muted sm:px-6" data-testid="needs-none">
@@ -147,7 +148,7 @@ export function NumberTile({
   compared,
   sub,
   extra,
-  hint,
+  help,
   i = 0,
   onClick,
 }: {
@@ -158,30 +159,37 @@ export function NumberTile({
   compared?: string;
   sub?: ReactNode;
   extra?: ReactNode;
-  /** On hover: what the figure is, in a sentence. */
-  hint?: string;
+  /** What the figure measures, in plain words: behind the small "i" in the tile's corner (PageKit's HelpTip). */
+  help?: ReactNode;
   i?: number;
   onClick: () => void;
 }) {
   const change = sub === undefined && <Delta value={delta} versus={versus} compared={compared} />;
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={hint}
-      className="home-card animate-rise flex min-w-0 flex-col p-4 text-left outline-none transition-shadow hover:shadow-[var(--shadow-lift)] focus-visible:ring-2 focus-visible:ring-accent sm:p-6"
-      style={{ ["--i" as string]: i }}
-      data-testid={`metric-${title}`}
-    >
-      <span className="flex items-baseline justify-between gap-2 text-xs font-medium text-muted">
-        <span className="truncate">{title}</span>
-        {change && <span className="shrink-0 sm:hidden">{change}</span>}
-      </span>
-      <span className="mt-2 block truncate text-2xl leading-8 font-semibold tracking-[-0.02em] tabular-nums sm:mt-3 sm:text-[28px]">{value}</span>
-      {sub !== undefined ? <span className="mt-1 block min-w-0 text-xs text-muted">{sub}</span> : <span className="mt-1 hidden text-xs sm:block">{change}</span>}
-      {extra && <span className="mt-1 block min-w-0 text-xs text-muted">{extra}</span>}
-      <span className="sr-only"> – open details</span>
-    </button>
+    // The "i" sits over the tile's corner, beside it in the page: a button can't hold another.
+    <div className="relative flex min-w-0">
+      <button
+        type="button"
+        onClick={onClick}
+        className="home-card animate-rise flex min-w-0 flex-1 flex-col p-4 text-left outline-none transition-shadow hover:shadow-[var(--shadow-lift)] focus-visible:ring-2 focus-visible:ring-accent sm:p-6"
+        style={{ ["--i" as string]: i }}
+        data-testid={`metric-${title}`}
+      >
+        <span className={`flex items-baseline justify-between gap-2 text-xs font-medium text-muted ${help ? "pr-6" : ""}`}>
+          <span className="truncate">{title}</span>
+          {change && <span className="shrink-0 sm:hidden">{change}</span>}
+        </span>
+        <span className="mt-2 block truncate text-2xl leading-8 font-semibold tracking-[-0.02em] tabular-nums sm:mt-3 sm:text-[28px]">{value}</span>
+        {sub !== undefined ? <span className="mt-1 block min-w-0 text-xs text-muted">{sub}</span> : <span className="mt-1 hidden text-xs sm:block">{change}</span>}
+        {extra && <span className="mt-1 block min-w-0 text-xs text-muted">{extra}</span>}
+        <span className="sr-only"> – open details</span>
+      </button>
+      {help && (
+        <HelpTip label={title} className="absolute top-3.5 right-3 sm:top-[22px] sm:right-5">
+          {help}
+        </HelpTip>
+      )}
+    </div>
   );
 }
 
