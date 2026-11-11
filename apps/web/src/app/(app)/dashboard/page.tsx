@@ -19,13 +19,15 @@ import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
 import { costsOf, leftOverOf, leftOverWords, type LeftOver } from "@/components/dashboard/profitFigures";
 import { needsOf } from "@/components/dashboard/homeNeeds";
+import { DateChips, MoneyInAndOut, MoreNumbers } from "@/components/dashboard/HomeGlance";
 import { greeting, NeedsYou, NumberTile, SalesByDay, useHomeAlerts, useHomeLayout, WhatChanged, WorkingForYou } from "@/components/dashboard/SimpleHome";
 import { TourOffer } from "@/components/Tour";
 import { FIGURE_HELP, visitsThatBoughtHelp } from "@/components/dashboard/figureHelp";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { signInFinished } from "@/lib/adSignIn";
 import { api, ApiError, apiHref, fmtMoney, fmtNum, fmtPct, friendlyError, isTransient, useLiveApi } from "@/lib/api";
-import { AUTOMATIONS_HUB, SIMPLE_HOME } from "@/lib/features";
+import { AUTOMATIONS_HUB, HOME_AT_A_GLANCE, SIMPLE_HOME } from "@/lib/features";
+import { smallNumbers } from "@/lib/homeGlance";
 import { scopeList } from "@app/shared/capabilities";
 import { ALL_HISTORY } from "@app/shared/dates";
 import { hasFullAccess, ROLE_INFO, seesModule } from "@app/shared/access";
@@ -122,6 +124,12 @@ const DOLLARS = new Set(["USD", "AUD", "CAD", "NZD"]);
  * Under Left over, as the design words it: "41¢ of every $1, after product costs and your costs".
  * A loss, or nothing sold, says only what was taken off.
  */
+/** "Product costs, ads and your costs": the costs taken off, named under their total. */
+function costsList(after: readonly string[]): string {
+  const words = new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(after);
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function leftOverSub(l: LeftOver, currency: string): string {
   const words = leftOverWords(l);
   if (l.base <= 0 || l.value < 0) return words;
@@ -542,6 +550,19 @@ export default function DashboardPage() {
       )}
     </section>
   );
+  // Under the tiles: each headline figure they don't already show (lib/homeGlance.ts smallNumbers).
+  const glance = HOME_AT_A_GLANCE && simple;
+  // What was taken off to get the tile's figure: every expense for net profit, the known costs otherwise.
+  const costsTaken = leftOver ? (leftOver.isNet ? Math.round((leftOver.base - leftOver.value) * 100) / 100 : leftOver.taken) : 0;
+  const moreNumbers =
+    glance && s
+      ? smallNumbers({ totalSales: s.current.totalSales !== undefined, leftOver: showLeftOver, funnel: !!funnel, costs: costsTaken > 0 }).map((id) =>
+          id === "netSales" ? { id, label: "Net sales", value: money(s.current.netSales), sub: "Products, after discounts and returns" }
+          : id === "costs" ? { id, label: leftOver?.isNet ? "Total expenses" : "Costs taken off", value: money(costsTaken), sub: leftOver?.isNet ? "Every cost in these dates" : costsList(leftOver?.after ?? []) }
+          : id === "averageOrder" ? { id, label: "Average order value", value: s.current.averageOrderValue === null ? "—" : money(s.current.averageOrderValue), sub: "Items after discounts, before tax and shipping" }
+          : { id, label: "Total products sold", value: fmtNum(s.current.units), sub: "Items sold, returns taken off" },
+        )
+      : [];
   // While the store's dates are custom, their pickers under the header (either Home).
   const customPickers = (
     <>
@@ -710,6 +731,11 @@ export default function DashboardPage() {
             </p>
           </div>
           <DateChip r={dates} shown={shown} current={!olderAnswer} />
+          {glance && (
+            <div className="w-full min-w-0">
+              <DateChips r={dates} shown={shown} />
+            </div>
+          )}
           {customPickers}
         </header>
       ) : (
@@ -779,11 +805,13 @@ export default function DashboardPage() {
       {simple && ov && <TourOffer />}
       {simple && ov && <NeedsYou needs={needs} onOpen={detail.open} />}
       {simple && simpleTiles}
+      {glance && <MoreNumbers items={moreNumbers} />}
       {simple &&
         ov &&
         (automationsOn ? (
           <>
             {s && <SalesByDay ov={ov} currency={cur} />}
+            {glance && <MoneyInAndOut />}
             <div className="grid gap-6 lg:grid-cols-2">
               <WhatChanged ov={ov} currency={cur} onOpen={detail.open} />
               <WorkingForYou />
@@ -793,6 +821,7 @@ export default function DashboardPage() {
           <div className={`grid gap-6 ${s ? "lg:grid-cols-3" : ""}`}>
             {s && <SalesByDay ov={ov} currency={cur} className="lg:col-span-2" />}
             <WhatChanged ov={ov} currency={cur} onOpen={detail.open} stacked={!!s} />
+            {glance && <MoneyInAndOut className="lg:col-span-full" />}
           </div>
         ))}
 

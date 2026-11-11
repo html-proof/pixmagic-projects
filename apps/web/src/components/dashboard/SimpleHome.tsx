@@ -8,7 +8,8 @@ import { CHANNEL_NAME, useHub } from "@/components/automations/HubUi";
 import { HelpTip } from "@/components/PageKit";
 import type { HubAutomation, OverviewResponse } from "@/components/automations/types";
 import { fmtMoney, fmtNum, fmtPct, useApi } from "@/lib/api";
-import { SIMPLE_HOME } from "@/lib/features";
+import { HOME_AT_A_GLANCE, SIMPLE_HOME } from "@/lib/features";
+import { needsSplit } from "@/lib/homeGlance";
 import { HOME_LAYOUT_KEY, readLocal, writeLocal } from "@/lib/storage";
 import { versusWords } from "./DateRange";
 import { fmtDay, fmtLongDay, fmtSpan } from "./format";
@@ -80,7 +81,10 @@ function NeedButton({ a, onOpen }: { a: NeedAction; onOpen: (t: Topic) => void }
 }
 
 /** The few things to do now (`needsOf`), worst first, or that there are none. */
-export function NeedsYou({ needs, onOpen }: { needs: Need[]; onOpen: (t: Topic) => void }) {
+export function NeedsYou({ needs: every, onOpen }: { needs: Need[]; onOpen: (t: Topic) => void }) {
+  // Three at most until asked for more (lib/homeGlance.ts): they arrive worst first, so what is urgent always shows.
+  const [all, setAll] = useState(false);
+  const { shown: needs, more } = needsSplit(every, all || !HOME_AT_A_GLANCE);
   return (
     <section aria-labelledby="needs-h" data-testid="home-needs" data-tour="needs" className="home-card animate-rise overflow-hidden">
       <h2 id="needs-h" className="home-h2 px-5 py-4 sm:px-6">Needs you</h2>
@@ -108,6 +112,13 @@ export function NeedsYou({ needs, onOpen }: { needs: Need[]; onOpen: (t: Topic) 
               )}
             </li>
           ))}
+          {more > 0 && (
+            <li className="px-5 py-2.5 sm:px-6">
+              <button type="button" className="text-sm font-medium text-accent hover:underline" onClick={() => setAll(true)} data-testid="needs-more">
+                Show {more} more
+              </button>
+            </li>
+          )}
         </ul>
       )}
     </section>

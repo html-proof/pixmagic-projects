@@ -50,6 +50,15 @@ export const SIMPLE_HOME: boolean = true;
 export const SIMPLE_MENU: boolean = true;
 
 /**
+ * The simple Home at a glance (2026-11-11, docs/ux-redesign step C): the dates most asked for as
+ * one-click chips, the quieter numbers under the four tiles, sales, expenses and profit by day, week
+ * or month, and "Needs you" kept to three until asked for more (components/dashboard/HomeGlance.tsx,
+ * lib/homeGlance.ts). Flip to `false` for the simple Home as it was. The full dashboard is unaffected
+ * either way.
+ */
+export const HOME_AT_A_GLANCE: boolean = true;
+
+/**
  * The Zapier card on Settings → Integrations (docs/zapier.md): connect the store to the merchant's own
  * Zapier account through bizinsights' Zapier app. On in production since 2026-10-29: the app is
  * registered and its ZAPIER_* settings are live, and the first test Zap passed (docs/zapier.md,

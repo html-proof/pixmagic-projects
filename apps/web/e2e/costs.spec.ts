@@ -88,6 +88,35 @@ test("the owner keeps the store's costs, and the dashboard counts them without c
   await expect(leftOver).toContainText("Not profit");
   // Sales with no cost per item: Needs you sends the owner to add it in Shopify.
   await expect(page.getByTestId("need-costs")).toContainText("$200.00 of sales had no cost per item in Shopify");
+  // The Home at a glance (lib/features.ts HOME_AT_A_GLANCE). The dates as chips: the one chosen is
+  // pressed, and a click sets the page's dates as the dates menu does.
+  await expect(page.getByTestId("date-chip-mtd")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("date-chip-30d").click();
+  await expect(page.getByTestId("date-chip-30d")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("date-chip-mtd")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("date-chip")).toContainText("Last 30 days");
+  await page.getByTestId("date-chip-mtd").click();
+  await expect(page).toHaveURL(/preset=mtd/);
+  await expect(leftOver).toContainText("$290.00");
+  // Under the tiles, what was taken off to get Left over, named; and net sales, which the tiles don't show.
+  const taken = page.getByTestId("more-number-costs");
+  await expect(taken).toContainText("Costs taken off");
+  await expect(taken).toContainText("$210.00");
+  await expect(taken).toContainText("Product costs and your costs");
+  await expect(page.getByTestId("more-number-netSales")).toContainText("$500.00");
+  // Sales, expenses and profit, from the Profit sheet's own answer: the last 12 months, or this
+  // month by day or week. This store's earlier months aren't imported, so the card opens on the
+  // days. A cost is missing (the custom item's), and it says so rather than draw a profit.
+  const moneyCard = page.getByTestId("home-money");
+  await expect(moneyCard.getByTestId("money-view-daily")).toHaveAttribute("aria-pressed", "true");
+  await expect(moneyCard.getByTestId("money-what")).toContainText("day by day");
+  await expect(moneyCard.getByRole("table")).toContainText("$500.00");
+  await expect(moneyCard.getByTestId("money-gaps")).toContainText("Expenses and profit show only where every cost is known");
+  await moneyCard.getByTestId("money-view-weekly").click();
+  await expect(moneyCard.getByTestId("money-what")).toContainText("week by week");
+  await moneyCard.getByTestId("money-view-monthly").click();
+  await expect(moneyCard.getByTestId("money-what")).toContainText("The last 12 months");
+  await expect(moneyCard.getByTestId("money-empty")).toContainText("Nothing to draw here yet");
   await page.getByTestId("home-layout-switch").click();
   const profit = page.getByTestId("home-profit");
   await expect(page.getByTestId("profit-what")).toContainText("product costs and your costs");
