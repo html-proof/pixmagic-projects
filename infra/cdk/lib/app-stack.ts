@@ -68,6 +68,8 @@ export class AppStack extends Stack {
   constructor(scope: Construct, id: string, cfg: EnvConfig, data: DataStack, webAclArn: string, props: StackProps) {
     super(scope, id, props);
     const prefix = `insights-${cfg.name}`;
+    /** WhatsApp's Evolution API service has a task (whatsapp-stack.ts); false with `-c whatsapp=off`. */
+    const whatsappRuns = cfg.whatsapp.tasks > 0;
     this.runtimeParam = `/insights/${cfg.name}/runtime`;
 
     if (!existsSync(FUNCTION_DIR)) throw new Error(`No Lambda package at ${FUNCTION_DIR}: run \`pnpm --filter @app/aws build\` first`);
@@ -157,8 +159,10 @@ export class AppStack extends Stack {
       SMS_CONFIGURATION_SET: smsConfigurationSet,
       // WhatsApp Automation's Evolution API service (whatsapp-stack.ts): its private address, and its
       // global key's secret (read at cold start like the others), by name: an ARN would cost the
-      // 4 KB environment ~90 bytes more (Secrets Manager reads a secret by either).
-      EVOLUTION_API_URL: evolutionUrl(cfg),
+      // 4 KB environment ~90 bytes more (Secrets Manager reads a secret by either). With no task
+      // running (`-c whatsapp=off`) there is no address to give: the app then says WhatsApp isn't
+      // set up, instead of trying a service that can't answer on every sweep and every page.
+      ...(whatsappRuns ? { EVOLUTION_API_URL: evolutionUrl(cfg) } : {}),
       EVOLUTION_SECRET_ARN: `insights/${cfg.name}/evolution-api`,
       // A domain is known before the deploy, so the functions get it with the release (no window in
       // which a fresh instance reads the previous address from the runtime parameter). Without one,
@@ -574,16 +578,19 @@ export class AppStack extends Stack {
     });
     alarm("messaging-send-failures", sendFailures.metric({ period: five, statistic: "Sum" }), 25, "Many automated SMS, emails or WhatsApp messages refused by their providers: see the message histories, docs/automations.md and docs/whatsapp.md", 2);
     // WhatsApp's Evolution API service not answering the cron's check (every 15 minutes): no store can
-    // connect or send until it is back (whatsapp-stack.ts has the service's own alarms).
-    const evolutionDown = new logs.MetricFilter(this, "EvolutionUnreachable", {
-      logGroup: cron.fn.logGroup,
-      filterPattern: logs.FilterPattern.anyTerm("evolution unreachable"),
-      metricNamespace: "Insights",
-      metricName: `${cfg.name}-evolution-unreachable`,
-      metricValue: "1",
-      defaultValue: 0,
-    });
-    alarm("whatsapp-service-unreachable", evolutionDown.metric({ period: Duration.minutes(15), statistic: "Sum" }), 1, "WhatsApp's Evolution API service didn't answer the sweep: no store can connect or send (docs/whatsapp.md, Runbook)", 2);
+    // connect or send until it is back (whatsapp-stack.ts has the service's own alarms). Like those,
+    // not while the service is switched off on purpose: nothing asks it then.
+    if (whatsappRuns) {
+      const evolutionDown = new logs.MetricFilter(this, "EvolutionUnreachable", {
+        logGroup: cron.fn.logGroup,
+        filterPattern: logs.FilterPattern.anyTerm("evolution unreachable"),
+        metricNamespace: "Insights",
+        metricName: `${cfg.name}-evolution-unreachable`,
+        metricValue: "1",
+        defaultValue: 0,
+      });
+      alarm("whatsapp-service-unreachable", evolutionDown.metric({ period: Duration.minutes(15), statistic: "Sum" }), 1, "WhatsApp's Evolution API service didn't answer the sweep: no store can connect or send (docs/whatsapp.md, Runbook)", 2);
+    }
     const hour = Duration.hours(1);
     // Sync-queue jobs that failed for good with every attempt spent (consume's "sync job failed" with
     // final: true, from the sixth delivery: core's MAX_ATTEMPTS): a store's orders, catalog or stock, an

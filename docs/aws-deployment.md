@@ -203,10 +203,11 @@ One-time setup in the repository's Settings → Environments → `production`: v
 `cdk deploy`. They hold the same values as production's in config.ts, so they change nothing; a different
 value overrides config.ts's for that deploy. Unset, each reaches the deploy empty, which keeps
 config.ts's (production's schedules stay on); `AWS_SCHEDULES=off` still switches the schedules off
-for every Deploy run while it is set. `AWS_WHATSAPP` (unset until the move to the iKorex server)
-works the same way: `off` leaves the WhatsApp service with no task, from the cutover to stage F
-(docs/ikorex-migration/AWS_TO_IKOREX_MIGRATION_MATRIX.md, cutover step 2); any other value keeps
-config.ts's one task. Required reviewers and branch
+for every Deploy run while it is set. `AWS_WHATSAPP` (**`off` since 2026-11-12**: nobody was using WhatsApp, [whatsapp.md](whatsapp.md), "Cost")
+works the same way: `off` leaves the WhatsApp service with no task, gives the functions no
+`EVOLUTION_API_URL` and drops the three `whatsapp-service-*` alarms; it was made for the time from
+the iKorex cutover to stage F (docs/ikorex-migration/AWS_TO_IKOREX_MIGRATION_MATRIX.md, cutover
+step 2). Any other value, or deleting the variable, keeps config.ts's one task. Required reviewers and branch
 rules for an environment need a paid plan for a private repository; the role's trust does that job.
 
 The role admits a token only when all of these claims match exactly (`githubDeployClaims` in
