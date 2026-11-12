@@ -132,7 +132,7 @@ export interface EnvConfig {
    */
   alertEmail: string;
   /**
-   * Where the budget's emails go (spend at 50/75/90/100% of monthlyBudgetUsd, and a forecast above
+   * Where the budget's emails go (spend at 50/70/85/95% of monthlyBudgetUsd, and a forecast above
    * it); costs only, none of the alarms. Empty: alertEmail, or no subscribers without one.
    * `-c budgetEmail=...` overrides it for one deploy.
    */

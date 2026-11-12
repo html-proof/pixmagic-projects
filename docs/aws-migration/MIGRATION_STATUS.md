@@ -23,7 +23,8 @@ change, or the day an owner-only step is done.
 | 13 | WhatsApp service switched off (`AWS_WHATSAPP=off`: no Fargate task; everything else kept) | ~5-7 on Spot (17.29 on demand) | **Live** 2026-11-12, release 179 (#372): the ECS service at 0 of 0 tasks, no `whatsapp-service-*` alarm, the app answers WhatsApp isn't set up | A week of billing for the figure |
 | 14 | 26 unused tables dropped (the two old WhatsApp designs, `email_otps`, `funnel_daily`), all empty | ~0 (tidiness) | **Live** 2026-11-12, release 181 (#374; the owner's yes that day, kept on 2026-10-29): 131 tables left, none of the 26 among them | — |
 | 15 | `refunds` dropped too (2 rows, written before returns were read from `order_sales` on 2026-10-16) | ~0 (tidiness) | **Live** 2026-11-12, release 182 (#378; the owner's "drop refunds too" that day): 130 tables left, `refunds` not among them | — |
-| 16 | Budget US$80 → US$50, tax included: the owner's ceiling since 2026-11-12 ([aws-deployment.md](../aws-deployment.md), "The US$50 ceiling") | 0 (it only emails) | #379, 2026-11-12. November is already above US$50 (64.20 with GST on the 11th), so its emails come at once | The ceiling itself needs changes 1, 4 and 6: ~46 a month with GST once all three are done, ~57 with the WAF left, ~89 with the support plan left too |
+| 16 | Budget US$80 → US$50, tax included: the owner's ceiling since 2026-11-12 ([aws-deployment.md](../aws-deployment.md), "The US$50 ceiling") | 0 (it only emails) | #379, 2026-11-12. November is already above US$50 (64.20 with GST on the 11th), so its emails come at once | The ceiling itself needs changes 1, 4 and 6: ~47 a month with GST once all three are done (re-measured 2026-11-12, [COST_CEILING_50.md](COST_CEILING_50.md)), ~58 with the WAF left, ~90 with the support plan left too |
+| 17 | Budget emails at 50/70/85/95% (they were 50/75/90/100), and on a forecast above US$50: the thresholds of the owner's brief of 2026-11-12 | 0 (it only emails) | In this pull request | — |
 
 ## Services
 
@@ -131,3 +132,12 @@ change, or the day an owner-only step is done.
   off since release 179. The month so far, to the 11th: 64.20 with GST, of it 29 the support plan
   and 5.83 GST. Budget lowered to 50 (change 16). What a day is made of and what the month comes
   to: [aws-deployment.md](../aws-deployment.md), "The US$50 ceiling".
+- **2026-11-12**: the owner's brief "complete AWS cost reduction, maximum US$50 including tax".
+  Read-only audit again, every Region: nothing forgotten anywhere, release 183 live, the WhatsApp
+  service at 0 tasks, GuardDuty's trial at 2 days with both RDS features still `ENABLED`, the alarm
+  email still `PendingConfirmation`, `/edge-lock` still 403 (change 6 waits on the header). The
+  month to the 11th: US$64.99 with GST. Re-measured, the month with changes 1, 4 and 6 done is ~47
+  with GST, so US$2-3 to spare: [COST_CEILING_50.md](COST_CEILING_50.md) has the inventory, the
+  forecast against the brief's budget table and three smaller changes for more room (the database
+  reservation, the three October snapshots, change 7). Nothing was deleted or switched off in
+  AWS. Changed: the budget's thresholds (change 17).

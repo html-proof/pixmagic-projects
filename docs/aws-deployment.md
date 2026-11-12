@@ -1347,10 +1347,12 @@ of 2026-10-18), the six secrets could move to free Parameter Store SecureStrings
 three manual snapshots of October count toward the backups charged above.
 
 **Budget** `insights-production-monthly-<digest>`: US$50 since 2026-11-12 (US$80 before), tax
-included, emails `budgetEmail` when the month passes 50/75/90/100% (US$25/37.50/45/50) and when AWS
+included, emails `budgetEmail` when the month passes 50/70/85/95% (US$25/35/42.50/47.50; they were
+50/75/90/100 until the owner's brief of 2026-11-12 asked for these) and when AWS
 forecasts it above US$50. Nothing is stopped at any threshold. Until the three things under
-the US$50 ceiling above are in place, the 100% email is expected every month: it is accurate,
-not noise. November 2026 was already above US$50 when the budget was lowered, so its
+the US$50 ceiling above are in place, the 95% email is expected every month: it is accurate,
+not noise. The audit behind the ceiling, with the inventory:
+[aws-migration/COST_CEILING_50.md](aws-migration/COST_CEILING_50.md). November 2026 was already above US$50 when the budget was lowered, so its
 emails came at once. The name carries a digest
 of the alerts because CloudFormation replaces a budget whose alerts change. The alarm topic is
 another thing: it emails only once its subscription is confirmed (Owner-only steps, Alerts).
