@@ -711,12 +711,13 @@ export class AppStack extends Stack {
     });
 
     // --- Budget: the owner's ceiling (US$50/month since 2026-11-12), tax included. Emails when the
-    // month's spend passes 50, 75, 90 and 100% of it, and when AWS forecasts the month above it
-    // (five: the most a budget takes). Nothing is stopped at any threshold.
+    // month's spend passes 50, 70, 85 and 95% of it (the last one US$47.50: before the ceiling, not
+    // at it), and when AWS forecasts the month above it (five: the most a budget takes). Nothing is
+    // stopped at any threshold, and AWS's figures run hours to a day behind.
     const budgetEmail = cfg.budgetEmail || cfg.alertEmail;
     const budgetAlerts: budgets.CfnBudget.NotificationWithSubscribersProperty[] | undefined = budgetEmail
       ? [
-          ...[50, 75, 90, 100].map((threshold) => ({ notificationType: "ACTUAL", threshold })),
+          ...[50, 70, 85, 95].map((threshold) => ({ notificationType: "ACTUAL", threshold })),
           { notificationType: "FORECASTED", threshold: 100 },
         ].map((n) => ({ notification: { ...n, comparisonOperator: "GREATER_THAN", thresholdType: "PERCENTAGE" }, subscribers: [{ subscriptionType: "EMAIL", address: budgetEmail }] }))
       : undefined;
