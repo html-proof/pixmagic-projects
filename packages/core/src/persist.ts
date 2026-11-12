@@ -262,7 +262,7 @@ export async function removeOrders(store: Pick<Store, "id">, shopifyIds: string[
 }
 
 /**
- * Write many orders - with their line items and refunds - in one transaction of four
+ * Write many orders - with their line items - in one transaction of four
  * statements, instead of `upsertOrder`'s pre-read plus interactive transaction per order.
  *
  * `upsertOrder` costs about six round trips per order, which is fine for a webhook and
@@ -931,7 +931,6 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
   await systemDb.$transaction([
     systemDb.orderLineItem.deleteMany({ where: { storeId } }),
     systemDb.orderSale.deleteMany({ where: { storeId } }),
-    systemDb.refund.deleteMany({ where: { storeId } }),
     systemDb.order.deleteMany({ where: { storeId } }),
     systemDb.productVariant.deleteMany({ where: { storeId } }),
     systemDb.product.deleteMany({ where: { storeId } }),
