@@ -74,13 +74,26 @@ export interface EnvConfig {
    */
   migrateBeforeLive: boolean;
   /**
-   * The app's own address instead of CloudFront's. DNS for it is at Cloudflare (records DNS only,
-   * pointing at the distribution); the certificate is in ACM in us-east-1 (CloudFront's region),
+   * The app's own address instead of CloudFront's. DNS for it is at Cloudflare (proxied, pointing
+   * at the distribution); the certificate is in ACM in us-east-1 (CloudFront's region),
    * validated by a CNAME there (docs/aws-deployment.md, "Domain: bizinsights.io"). Page requests on any
    * other name (`redirects`, the cloudfront.net address) are redirected to `name`.
    * Unset: the app lives on the cloudfront.net address.
+   *
+   * `originLock`: only Cloudflare's proxy may use CloudFront (viewer-request.ts). The Data stack
+   * makes a secret, Cloudflare adds it to every request as the header `x-origin-lock` (a Transform
+   * Rule the owner sets, docs/aws-deployment.md "Origin lock"), and CloudFront's viewer function
+   * checks it. "report": the function knows the secret and `/edge-lock` says whether a request
+   * carried it, nothing is refused. "enforce": a request without it gets 403. Always "report"
+   * first, and "enforce" only once `https://<name>/edge-lock` answers 204: enforcing before
+   * Cloudflare sends the header takes the whole site down, and rolling the functions back doesn't
+   * undo it. Unset: no lock, no secret.
+   *
+   * `originLockRead`: CloudFormation copies the secret into the function when it deploys, and again
+   * only when the function's source changes. After the secret's value was changed, a new date here
+   * is that change (docs/aws-deployment.md, "Origin lock", has the order to do it in).
    */
-  domain?: { name: string; redirects: string[]; certificateArn: string };
+  domain?: { name: string; redirects: string[]; certificateArn: string; originLock?: "report" | "enforce"; originLockRead?: string };
   /** Prefix of the Cognito domain, <prefix>.auth.<region>.amazoncognito.com (unique in the region). */
   cognitoDomainPrefix: string;
   /**
@@ -184,6 +197,10 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "migrateBeforeLive
       name: "bizinsights.io",
       redirects: ["www.bizinsights.io"],
       certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7",
+      // Step one of two (docs/aws-migration/AWS_MIGRATION_PLAN.md, change 6): "enforce" once
+      // https://bizinsights.io/edge-lock answers 204, which is Cloudflare sending the header.
+      originLock: "report",
+      originLockRead: "2026-11-12",
     },
     cognitoDomainPrefix: "insights-605411278365",
     // The own sign-in domain (docs/cognito-setup.md, "Own sign-in domain"), beside the prefix
@@ -239,6 +256,9 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "migrateBeforeLive
     githubDeployBranch: "main",
   },
 };
+
+/** The origin lock's secret in Secrets Manager (config.ts `domain.originLock`): made by the Data stack, read by the App stack's deploy. */
+export const originLockSecretName = (cfg: Pick<EnvConfig, "name">) => `insights/${cfg.name}/origin-lock`;
 
 export function envConfig(context: (key: string) => unknown): EnvConfig {
   const name = String(context("env") ?? "production") as EnvConfig["name"];

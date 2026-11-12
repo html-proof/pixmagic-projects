@@ -134,6 +134,38 @@ export function configCheck(invoke, envName) {
   return { detail, warnings };
 }
 
+/**
+ * The origin lock (infra/cdk/lib/viewer-request.ts): what the two requests of the check "only
+ * Cloudflare's requests reach CloudFront" say, for the App stack's OriginLock output.
+ * `viaDomain` is the status of GET /edge-lock through the app's address (204: Cloudflare adds the
+ * secret), `direct` of a POST to CloudFront's own name, and `guessed` of the same with a made-up
+ * secret (403: refused at the edge). Returns the PASS line's detail and the warnings; throws what fails.
+ *
+ * "report" refuses nothing yet, so nothing fails: Cloudflare not sending the header is the owner's
+ * step still to do (a warning), and a failed smoke test would roll back functions that are fine.
+ * "enforce" must hold both ways, or the lock isn't one.
+ */
+export function originLockCheck(mode, { viaDomain, direct, guessed }, host) {
+  const sends = viaDomain === 204;
+  if (mode === "report") {
+    return {
+      detail: `report: Cloudflare ${sends ? "adds the secret" : `doesn't add the secret yet (/edge-lock ${viaDomain})`}; nothing refused`,
+      warnings: sends
+        ? []
+        : [
+            warning(
+              "Cloudflare isn't sending the origin lock's header",
+              `https://${host}/edge-lock answered ${viaDomain}, not 204: the Transform Rule that adds x-origin-lock is missing or has another value. Until it answers 204, config.ts originLock must stay "report" (docs/aws-deployment.md, Origin lock).`,
+            ),
+          ],
+    };
+  }
+  expect(sends, `https://${host}/edge-lock answered ${viaDomain}, not 204: Cloudflare isn't adding the secret, so every request is refused (docs/aws-deployment.md, Origin lock)`);
+  expect(direct === 403, `a request straight to CloudFront's name got ${direct}, not 403`);
+  expect(guessed === 403, `a request straight to CloudFront's name with a guessed secret got ${guessed}, not 403`);
+  return { detail: "enforce: Cloudflare adds the secret; CloudFront's own name answers 403", warnings: [] };
+}
+
 if (!process.env.VITEST) await main();
 
 async function main() {
@@ -323,6 +355,18 @@ async function main() {
     const r2 = await get(`${fnUrl}/api/healthz`, { headers: { "x-origin-verify": "guess" } });
     expect(r2.status === 403, `status with a guessed secret ${r2.status}`);
   });
+
+  // CloudFront's own name is public, and without the lock anyone could call it and skip Cloudflare
+  // (its rate limit and rules). Pages there redirect (above); anything else is refused once enforcing.
+  if (app.OriginLock && app.CloudFrontDomain) {
+    await check("only Cloudflare's requests reach CloudFront", async () => {
+      const post = async (headers) => (await get(`https://${app.CloudFrontDomain}/api/healthz`, { method: "POST", headers })).status;
+      const seen = { viaDomain: (await get(`${base}/edge-lock`)).status, direct: await post({}), guessed: await post({ "x-origin-lock": "guess" }) };
+      const { detail, warnings } = originLockCheck(app.OriginLock, seen, host);
+      for (const w of warnings) console.log(w);
+      return detail;
+    });
+  }
 
   // --- AWS side
   await check("database is private (no public address, not reachable)", async () => {

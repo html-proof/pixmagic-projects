@@ -26,7 +26,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
-| Secrets | Secrets Manager `insights/production/{app,db-owner,db-system,worker-cognito,evolution-api,evolution-db}` (`db-owner`: the cron and the admin host only; `db-system`: every function's database login, [system-database-role.md](system-database-role.md)); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
+| Secrets | Secrets Manager `insights/production/{app,db-owner,db-system,worker-cognito,evolution-api,evolution-db,origin-lock}` (`db-owner`: the cron and the admin host only; `db-system`: every function's database login, [system-database-role.md](system-database-role.md); `origin-lock`: what Cloudflare adds to each request, read by no function, [Origin lock](#origin-lock-only-cloudflare-reaches-cloudfront)); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | WhatsApp service | Evolution API 2.3.7 on ECS Fargate: service `insights-production-evolution-a` in cluster `insights-production-whatsapp` (one task, private subnets, no public address), reached by the functions only at `http://evolution-a.whatsapp.production.insights.internal:8080` (Cloud Map); its own database `evolution` on the same RDS instance; logs `/ecs/insights-production-evolution-a` ([whatsapp.md](whatsapp.md)) | `infra/cdk/lib/whatsapp-stack.ts` (stack `InsightsWhatsapp-production`), `apps/aws/src/evolutionDb.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$80/month (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
@@ -839,8 +839,9 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
     site's `apps/web/public/.well-known/security.txt` (it still gave the old contact address after
     the site's file changed). The site's file is the one to edit; it expires 2027-10-15, so renew its
     `Expires` line before then. Cloudflare's copy is kept, switched off: don't switch it back on.
-  - Rollback: switch the two records back to **DNS only**. Nothing in AWS has to change: from
-    anywhere but Cloudflare's ranges `CF-Connecting-IP` is ignored.
+  - Rollback: switch the two records back to **DNS only**. From anywhere but Cloudflare's ranges
+    `CF-Connecting-IP` is ignored. With the origin lock enforcing (below), set it to `"report"`
+    and deploy first: CloudFront then refuses what doesn't come through Cloudflare.
 - **One origin**: the session cookie, the CSRF check and every OAuth callback use APP_URL
   (`https://bizinsights.io`, set on the functions by the App stack). CloudFront answers on
   `bizinsights.io`, `www` and its own name; the viewer-request function sends GET/HEAD on the other two
@@ -859,6 +860,83 @@ Records before the switch (GoDaddy's parking page, imported by Cloudflare on 202
 rollback: `A bizinsights.io 15.197.148.33` and `A bizinsights.io 3.33.130.190` (both proxied),
 `CNAME www → bizinsights.io` (proxied). Putting them back (and `domain` out of config.ts) returns the
 app to `d2mr8m2p1qkh58.cloudfront.net`.
+
+### Origin lock: only Cloudflare reaches CloudFront
+
+`d2mr8m2p1qkh58.cloudfront.net` is a public name, and so are CloudFront's addresses: without a lock
+anyone can call them and skip Cloudflare, its rules and its rate limit. So Cloudflare adds a secret
+to every request it passes on, the header `x-origin-lock`, and CloudFront's viewer-request function
+(`infra/cdk/lib/viewer-request.ts`) answers **403** to a request without it. Page requests (GET,
+HEAD) on the other names still get their 301 to `https://bizinsights.io` first.
+
+- **The secret** is `insights/production/origin-lock` in Secrets Manager (US$0.40 a month): 48
+  letters and digits the Data stack generated; nobody has seen it and it is in no file. CloudFormation
+  copies it into the function's source when the App stack deploys (a dynamic reference, as for
+  `ORIGIN_VERIFY`), so it is not in this repository or in the template. The function takes the
+  header off before the origin, so the app never sees or logs it. It is a different secret from
+  `ORIGIN_VERIFY` (CloudFront → the function URL): Cloudflare's copy opens CloudFront only.
+- **The switch** is `domain.originLock` in `infra/cdk/lib/config.ts`: `"report"` (nothing is
+  refused) or `"enforce"`. The App stack's output `OriginLock` says which is deployed.
+- **The check**: `https://bizinsights.io/edge-lock` is answered by the function itself, **204** when
+  the request carried the secret and **403** when it didn't, in both modes. 204 means Cloudflare is
+  sending the header. The smoke tests ask it on every deploy: a warning while reporting, a failure
+  once enforcing, together with a POST straight to the cloudfront.net name that must get 403.
+- **Not locked**: `/_next/static/*` (the build's public files, from S3, no viewer function) and the
+  fallback distribution's "temporarily unavailable" page. Neither reaches the function or the database.
+- Cloudflare's address ranges are not required as well: `cloudflare.ts` is kept by hand, and a range
+  Cloudflare added would mean 403s for the clients behind it.
+
+**Giving Cloudflare the secret** (the owner; once, and again after a new value). In PowerShell,
+signed in with `aws login`, this puts the value on the clipboard without showing it:
+
+```powershell
+aws secretsmanager get-secret-value --secret-id insights/production/origin-lock --region ap-southeast-2 --query SecretString --output text | Set-Clipboard
+```
+
+`(Get-Clipboard).Length` should say 48. Then in the Cloudflare dashboard, zone `bizinsights.io`:
+**Rules → Overview → Create rule → Request Header Transform Rule**.
+
+| Field | Value |
+| --- | --- |
+| Rule name | `Origin lock for CloudFront` |
+| If incoming requests match | **Custom filter expression**: Hostname **equals** `bizinsights.io` **Or** Hostname **equals** `www.bizinsights.io` |
+| Then, modify request header | **Set static**, header name `x-origin-lock`, value: paste (Ctrl+V) |
+
+**Deploy**, then empty the clipboard (`Set-Clipboard -Value " "`) and check:
+
+```powershell
+curl.exe -s -o NUL -w "%{http_code}" https://bizinsights.io/edge-lock
+```
+
+**204** is right. 403 means the value or the header's name is wrong: edit the rule and paste again.
+"Set static" replaces a header of that name a client sent, so nobody can pass their own. The rule
+names the two hosts so the secret never goes to another origin of the zone.
+
+**Order, always**: `"report"` deployed → the rule in Cloudflare → `/edge-lock` answers 204 →
+`"enforce"`. Enforcing before Cloudflare sends the header answers 403 to everyone, and the
+deploy's rollback doesn't undo it: it moves the functions' aliases, not CloudFront's function.
+
+**If every page says "Forbidden" (403)**: Cloudflare stopped sending the header. Look at the
+Transform Rule first (deleted, disabled, its value changed): putting it back fixes the site within
+seconds. If that can't be done, switch the lock off at CloudFront: console → CloudFront → Functions
+→ `insights-production-viewer-request` → Build: change `var ENFORCE = true;` to `false`, **Save
+changes**, then Publish → **Publish function** (live in about a minute). Follow with a pull request
+that sets `originLock: "report"`, or the next deploy enforces again.
+
+**A new value** (the old one may have leaked, or Cloudflare's account changed hands). Three
+deploys, nothing refused in between:
+
+1. Pull request: `originLock: "report"`. Merge, Deploy.
+2. New value, not shown:
+   `aws secretsmanager put-secret-value --secret-id insights/production/origin-lock --region ap-southeast-2 --secret-string (aws secretsmanager get-random-password --password-length 48 --exclude-punctuation --query RandomPassword --output text) --query VersionId`
+3. Copy it to Cloudflare's rule as above (edit the rule's value).
+4. Pull request: `originLockRead` to today's date, so CloudFormation reads the secret again. Merge,
+   Deploy; `/edge-lock` answers 204 again (403 between steps 3 and 4 is expected).
+5. Pull request: `originLock: "enforce"`. Merge, Deploy.
+
+**Going back** to no lock: `originLock: "report"` (or remove it; the secret is kept, `RETAIN`).
+Before switching the two DNS records to DNS only (the rollback above), set `"report"` and deploy:
+with the lock enforcing, requests that don't come through Cloudflare are refused.
 
 ## Roll back
 

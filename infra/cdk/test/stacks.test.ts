@@ -24,7 +24,7 @@ const { AppStack } = await import("../lib/app-stack.js");
 const { AuthStack } = await import("../lib/auth-stack.js");
 const { CiStack } = await import("../lib/ci-stack.js");
 const { AuditStack, ACCOUNT_REGIONS, ANALYZER_NAME } = await import("../lib/audit-stack.js");
-const { viewerRequestCode } = await import("../lib/viewer-request.js");
+const { viewerRequestCode, ORIGIN_LOCK_HEADER, ORIGIN_LOCK_PROBE } = await import("../lib/viewer-request.js");
 const { MIGRATE_BEFORE_LIVE_CODE, MIGRATE_BEFORE_LIVE_FAILED } = await import("../lib/migrate-before-live.js");
 const { API_PATH_PATTERNS } = await import("../../../apps/aws/src/paths.js");
 
@@ -966,9 +966,109 @@ describe("the viewer-request function", () => {
   });
 
   it("fits CloudFront Functions (no modules, under 10 KB)", () => {
-    const code = viewerRequestCode("bizinsights.io");
+    const code = viewerRequestCode("bizinsights.io", { secret: "s".repeat(48), enforce: true, read: "2026-11-12" });
     expect(code).not.toMatch(/\b(import|require)\b/);
     expect(code.length).toBeLessThan(10_240);
+  });
+});
+
+describe("the origin lock", () => {
+  type Headers = Record<string, { value: string }>;
+  // Made up for the tests: production's is generated in Secrets Manager and never seen.
+  const SECRET = "Zx3kQ9mT4vB7nR2wY8cF6hJ1pL5sD0aGqWeRtYuIoPaSdFgH";
+  const handler = (enforce: boolean | undefined, canonical: string | undefined = "bizinsights.io") =>
+    new Function(`${viewerRequestCode(canonical, enforce === undefined ? undefined : { secret: SECRET, enforce, read: "2026-11-12" })}\nreturn handler;`)() as (e: unknown) => any; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const ask = (enforce: boolean | undefined, req: { method?: string; uri?: string; host?: string; sent?: string }) => {
+    const headers: Headers = { host: { value: req.host ?? "bizinsights.io" }, ...(req.sent === undefined ? {} : { [ORIGIN_LOCK_HEADER]: { value: req.sent } }) };
+    return handler(enforce)({ viewer: { ip: "172.70.1.2" }, request: { method: req.method ?? "GET", uri: req.uri ?? "/dashboard", querystring: {}, headers } });
+  };
+
+  it("reports before it refuses: every request is served, and /edge-lock says whether it carried the secret", () => {
+    for (const sent of [undefined, "guess", SECRET]) {
+      for (const method of ["GET", "POST"]) {
+        const r = ask(false, { method, uri: "/api/webhooks/shopify", sent });
+        expect(r.statusCode, `${method} ${sent}`).toBeUndefined();
+        // Never passed on: the app would log it with the other headers.
+        expect(r.headers[ORIGIN_LOCK_HEADER]).toBeUndefined();
+        expect(r.headers["x-insights-viewer-ip"]).toEqual({ value: "172.70.1.2" });
+      }
+    }
+    expect(ask(false, { uri: ORIGIN_LOCK_PROBE, sent: SECRET })).toMatchObject({ statusCode: 204, headers: { "cache-control": { value: "no-store" } } });
+    for (const sent of [undefined, "", "guess", SECRET.slice(1), `${SECRET}x`, SECRET.toLowerCase(), `${SECRET.slice(0, -1)}!`]) {
+      expect(ask(false, { uri: ORIGIN_LOCK_PROBE, sent }), String(sent)).toMatchObject({ statusCode: 403, headers: { "cache-control": { value: "no-store" } } });
+    }
+  });
+
+  it("refuses, once enforcing, whatever didn't come through Cloudflare: CloudFront's name, or its addresses with the domain as Host", () => {
+    for (const host of ["bizinsights.io", "d2mr8m2p1qkh58.cloudfront.net", "www.bizinsights.io"]) {
+      for (const sent of [undefined, "guess", SECRET.slice(1)]) {
+        expect(ask(true, { method: "POST", uri: "/api/webhooks/shopify", host, sent }), `${host} ${sent}`).toMatchObject({ statusCode: 403, body: "Forbidden" });
+      }
+    }
+    for (const uri of ["/", "/dashboard", "/api/healthz", "/api/me", ORIGIN_LOCK_PROBE]) {
+      expect(ask(true, { uri }).statusCode, uri).toBe(403);
+    }
+  });
+
+  it("serves Cloudflare's requests as before, without the secret's header", () => {
+    for (const [method, uri] of [["GET", "/dashboard"], ["POST", "/api/webhooks/shopify"], ["POST", "/api/pixel/events"], ["OPTIONS", "/api/me"]] as const) {
+      const r = ask(true, { method, uri, sent: SECRET });
+      expect(r.statusCode, uri).toBeUndefined();
+      expect(r.headers[ORIGIN_LOCK_HEADER]).toBeUndefined();
+      expect(r.headers["x-insights-viewer-host"]).toEqual({ value: "bizinsights.io" });
+    }
+    expect(ask(true, { uri: ORIGIN_LOCK_PROBE, sent: SECRET }).statusCode).toBe(204);
+  });
+
+  it("still sends pages on other names to the domain, with or without the secret", () => {
+    for (const host of ["d2mr8m2p1qkh58.cloudfront.net", "www.bizinsights.io"]) {
+      for (const sent of [undefined, SECRET]) {
+        const r = ask(true, { uri: "/login", host, sent });
+        expect(r.statusCode, `${host} ${sent}`).toBe(301);
+        expect(r.headers.location.value).toBe("https://bizinsights.io/login");
+      }
+    }
+  });
+
+  it("is nothing without one: no secret in the function, /edge-lock is the app's to answer", () => {
+    expect(ask(undefined, { uri: ORIGIN_LOCK_PROBE }).statusCode).toBeUndefined();
+    expect(ask(undefined, { method: "POST", uri: "/api/webhooks/shopify" }).statusCode).toBeUndefined();
+    expect(viewerRequestCode("bizinsights.io")).toContain('var LOCK = "";');
+    // On CloudFront's own name everyone calls it directly: a lock there would refuse them all.
+    expect(() => viewerRequestCode(undefined, { secret: SECRET, enforce: false, read: "2026-11-12" })).toThrow(/needs the app's own domain/);
+  });
+
+  it("is read again by CloudFormation when the mark in the function's source changes, and only then", () => {
+    const code = (read: string) => viewerRequestCode("bizinsights.io", { secret: "{{resolve:secretsmanager:x}}", enforce: true, read });
+    expect(code("2026-11-12")).toBe(code("2026-11-12"));
+    expect(code("2026-12-01")).not.toBe(code("2026-11-12"));
+    expect(code("2026-12-01").split("\n")[0]).toBe("// The origin lock's secret as read on 2026-12-01");
+    // It is source: nothing that could end the comment and start code.
+    expect(() => code("x\nENFORCE = false")).toThrow(/originLockRead/);
+  });
+
+  it("gets its secret from Secrets Manager when CloudFormation deploys: never in the repository or the template", () => {
+    const [secret] = Object.values(t.data.findResources("AWS::SecretsManager::Secret", { Properties: { Name: "insights/production/origin-lock" } }));
+    // The plain value (no JSON template), letters and digits, kept if the stack ever drops it.
+    expect(secret!.Properties.GenerateSecretString).toEqual({ ExcludePunctuation: true, PasswordLength: 48 });
+    expect(secret!.DeletionPolicy).toBe("Retain");
+    const [fn] = Object.values(t.app.findResources("AWS::CloudFront::Function"));
+    const code = JSON.stringify(fn!.Properties.FunctionCode);
+    expect(code).toContain("{{resolve:secretsmanager:insights/production/origin-lock:SecretString:::}}");
+    // By name, not by an export of the Data stack's: nothing to untangle if the lock is ever removed.
+    expect(code).not.toContain("Fn::ImportValue");
+    // None of the functions is given this one: only CloudFormation reads it.
+    expect(JSON.stringify(t.app.findResources("AWS::IAM::Policy"))).not.toContain("origin-lock");
+  });
+
+  it("reports in production (step one), and isn't made where the app lives on CloudFront's own name", () => {
+    const source = (app: Template) => JSON.stringify(Object.values(app.findResources("AWS::CloudFront::Function"))[0]!.Properties.FunctionCode);
+    expect(source(t.app)).toContain("var ENFORCE = false;");
+    t.app.hasOutput("OriginLock", { Value: "report" });
+    const staging = synth({ env: "staging" });
+    staging.data.resourcePropertiesCountIs("AWS::SecretsManager::Secret", { Name: Match.stringLikeRegexp("origin-lock") }, 0);
+    expect(source(staging.app)).not.toContain("resolve:secretsmanager");
+    expect(staging.app.findOutputs("OriginLock")).toEqual({});
   });
 });
 
