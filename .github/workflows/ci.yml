@@ -488,9 +488,25 @@ jobs:
           cache: ${{ vars.SELF_HOSTED_RUNNER == '' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       # The suite starts its own Cognito emulator and managed-login stand-in (playwright.config.ts).
+      # A Postgres whose first start fails is started again by Docker (restart: unless-stopped), and
+      # then skips the rest of its setup. `--wait` gives up if it looks between the two ("container
+      # ... is unhealthy" a second after "Started", with no reason given) and passes if it doesn't:
+      # main's runs for #379 and #380 (2026-11-12), where infra/postgres/init.sql failed on an empty
+      # database. So a restart fails this step every time, in the pull request that causes it, and
+      # any failure here prints the containers and their logs (no secrets: the development password).
       - name: Start dev stack (Postgres, Mailpit)
         if: vars.SELF_HOSTED_RUNNER == ''
-        run: docker compose up -d --wait postgres mailpit
+        run: |
+          status=0
+          docker compose up -d --wait postgres mailpit || status=$?
+          restarts=$(docker inspect --format '{{.RestartCount}}' "$(docker compose ps -aq postgres)" || echo unknown)
+          echo "docker compose up: exit $status. Postgres restarts: $restarts."
+          if [[ $status != 0 || $restarts != 0 ]]; then
+            docker compose ps -a || true
+            docker compose logs --timestamps postgres mailpit || true
+            echo "::error::Postgres did not start cleanly (docker compose up: exit $status, restarts: $restarts). Its log is above."
+            exit 1
+          fi
       # Without Docker: the same two as local processes, and every e2e port free (8789 and the
       # emulator ports may be a local demo on that PC).
       - name: Start dev stack without Docker (self-hosted runner)
