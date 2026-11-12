@@ -44,6 +44,8 @@ export class DataStack extends Stack {
   /** The database's: other stacks add who else may reach PostgreSQL (the WhatsApp service, whatsapp-stack.ts). */
   readonly dbSg: ec2.SecurityGroup;
   readonly db: rds.DatabaseInstance;
+  /** PostgreSQL's own log in CloudWatch Logs (slow statements, lock waits, refused logins). */
+  readonly dbLogGroupName: string;
   readonly dbSecret: secretsmanager.ISecret;
   /** The system role's login (SYSTEM_DB_USER, SYSTEM_DB_PASSWORD): the cron's migrate action makes the role from it. */
   readonly systemDbSecret: secretsmanager.Secret;
@@ -166,14 +168,20 @@ export class DataStack extends Stack {
       removalPolicy: cfg.name === "production" ? RemovalPolicy.SNAPSHOT : RemovalPolicy.DESTROY,
       autoMinorVersionUpgrade: true,
       enablePerformanceInsights: true,
-      // Enhanced Monitoring: the host's CPU, memory, disk and per-process figures every minute
-      // (CloudWatch Logs, RDSOSMetrics). Turning it on or off doesn't restart the database.
-      monitoringInterval: Duration.seconds(60),
+      // Enhanced Monitoring (the host's per-process figures every minute, in CloudWatch Logs) is off
+      // since 2026-11-12: nothing read it, and CloudWatch's own metrics feed every database alarm.
+      // 0 says "off" outright; leaving the property out would keep what the instance has. Turning
+      // it on or off doesn't restart the database. Back on: Duration.seconds(60).
+      monitoringInterval: Duration.seconds(0),
       cloudwatchLogsExports: ["postgresql"],
+      // The log group is RDS's own and kept its lines for good; the App stack counts failed logins
+      // in it (app-stack.ts, db-login-failures).
+      cloudwatchLogsRetention: cfg.logRetentionDays as logs.RetentionDays,
       // whatsapp-stack.ts checks the database's certificate against this root alone (DB_CA there).
       caCertificate: rds.CaCertificate.RDS_CA_RSA2048_G1,
     });
     this.dbSecret = this.db.secret!;
+    this.dbLogGroupName = `/aws/rds/instance/${prefix}/postgresql`;
     // The system paths' own database login, app_system (docs/system-database-role.md): not the
     // tables' owner, so row-level security applies to it. Generated here once and never seen by
     // anyone; the migrate action sets the role's password from it. Letters and digits only: it goes

@@ -10,6 +10,8 @@ import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
 import * as cwActions from "aws-cdk-lib/aws-cloudwatch-actions";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as destinations from "aws-cdk-lib/aws-lambda-destinations";
@@ -36,6 +38,7 @@ const DB_SIZES: Record<string, { connections: number; lowMemoryMb: number }> = {
 };
 import type { DataStack } from "./data-stack.js";
 import { loggedBucket } from "./s3-access-logs.js";
+import { DATABASE_CHANGES, IAM_CHANGES, ROOT_SIGN_IN, TRAIL_CHANGES, databaseNetworkChanges, securityEventMessage } from "./security-events.js";
 import { evolutionUrl } from "./whatsapp-stack.js";
 import { viewerRequestCode } from "./viewer-request.js";
 
@@ -473,7 +476,12 @@ export class AppStack extends Stack {
 
     // --- Alarms → SNS → email.
     const topic = new sns.Topic(this, "Alarms", { topicName: `${prefix}-alarms`, displayName: `Insights ${cfg.name} alarms` });
-    if (cfg.alertEmail) topic.addSubscription(new subs.EmailSubscription(cfg.alertEmail));
+    // An email subscription counts only once its address clicks "Confirm subscription" in AWS's
+    // first email; unconfirmed, SNS drops it after a few days while CloudFormation still lists it,
+    // and no later deploy brings it back. That happened to the first one (found 2026-11-12: the
+    // topic had no subscriber at all). The id is its own, not the address's, and was renamed then so
+    // CloudFormation made the subscription again; if it is ever lost the same way, rename it again.
+    if (cfg.alertEmail) new sns.Subscription(this, "AlarmEmail2", { topic, protocol: sns.SubscriptionProtocol.EMAIL, endpoint: cfg.alertEmail });
     const alarm = (id: string, metric: cloudwatch.IMetric, threshold: number, description: string, periods = 1, op = cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD) => {
       const a = new cloudwatch.Alarm(this, id, {
         alarmName: `${prefix}-${id}`,
@@ -632,6 +640,40 @@ export class AppStack extends Stack {
       defaultValue: 0,
     });
     alarm("ad-figures-differ", figuresDiffer.metric({ period: hour, statistic: "Sum" }), 1, "Stored ad figures differ from what the platform reports for the same week: see docs/RUNBOOK.md");
+    // Logins PostgreSQL refused: a wrong password, or a connection its rules don't admit (no TLS, an
+    // unknown role or database). Only the functions, the WhatsApp service and the admin host can
+    // reach the port, each with a generated password, so in normal running there are none: five in
+    // five minutes is a secret out of step after a change, or someone inside the network guessing.
+    // In place of GuardDuty's RDS login protection (docs/aws-deployment.md, "Security events").
+    const dbLoginFailures = new logs.MetricFilter(this, "DbLoginFailures", {
+      logGroup: logs.LogGroup.fromLogGroupName(this, "DbLog", data.dbLogGroupName),
+      filterPattern: logs.FilterPattern.anyTerm("password authentication failed", "no pg_hba.conf entry"),
+      metricNamespace: "Insights",
+      metricName: `${cfg.name}-db-login-failures`,
+      metricValue: "1",
+      defaultValue: 0,
+    });
+    alarm("db-login-failures", dbLoginFailures.metric({ period: five, statistic: "Sum" }), 5, "PostgreSQL refused five or more logins in five minutes: a secret out of step, or someone guessing (docs/aws-deployment.md, Security events)");
+
+    // Changes to the account that are worth an email as they happen (security-events.ts). The
+    // account's, not an environment's: production's topic gets them.
+    if (cfg.name === "production") {
+      const patterns: Record<string, [string, events.EventPattern]> = {
+        Database: ["a database, snapshot or backup deleted or changed", DATABASE_CHANGES],
+        DatabaseNetwork: ["a rule added to the database's security group", databaseNetworkChanges(data.dbSg.securityGroupId)],
+        Trail: ["the audit trail stopped, deleted or redirected", TRAIL_CHANGES],
+        Iam: ["a new IAM user or access key, or a policy attached", IAM_CHANGES],
+        RootSignIn: ["the root user signing in to the console", ROOT_SIGN_IN],
+      };
+      for (const [id, [what, eventPattern]] of Object.entries(patterns)) {
+        new events.Rule(this, `Security${id}`, {
+          ruleName: `${prefix}-security-${id.replace(/(?<=.)[A-Z]/g, (c) => `-${c}`).toLowerCase()}`,
+          description: `Emails the alarm topic: ${what}`,
+          eventPattern,
+          targets: [new eventTargets.SnsTopic(topic, { message: securityEventMessage() })],
+        });
+      }
+    }
 
     new cloudwatch.Dashboard(this, "Dashboard", {
       dashboardName: prefix,

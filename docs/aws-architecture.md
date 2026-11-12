@@ -40,7 +40,7 @@ Principles:
 | Sign-in | **Cognito** (Phase 1) | Replaced Firebase Authentication, of which nothing is left in the app ([cognito-setup.md](cognito-setup.md), section 4). |
 | Session, encryption, OAuth client secrets | **Secrets Manager** (+ **KMS** key) | Read at cold start; no rotation (section 4). |
 | Safe deploys, instant rollback | **Lambda versions + aliases** with **CodeDeploy** canary | 10% for 5 minutes, automatic rollback on alarms. |
-| Backups | RDS automated backups (14 days) + **AWS Backup** monthly copy | Point-in-time restore to any second. |
+| Backups | RDS automated backups (7 days since 2026-11-12) + **AWS Backup** monthly copy | Point-in-time restore to any second. |
 | Live dashboards (push updates; on an unmerged branch) | **AppSync Events** (managed WebSocket pub/sub), or keep polling | Decide when that branch lands; polling works meanwhile. |
 
 Third parties (Shopify, Meta Graph/WhatsApp Cloud API, Google Ads/AdSense, Gmail/Microsoft Graph,
@@ -143,9 +143,9 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 
 ## 4. Data
 
-- **RDS PostgreSQL 17**, gp3 storage with autoscaling, encrypted, deletion protection, 14-day
-  automated backups with point-in-time restore, Performance Insights (free tier), Enhanced
-  Monitoring every 60 seconds (OS metrics in CloudWatch Logs, `RDSOSMetrics`), parameter group
+- **RDS PostgreSQL 17**, gp3 storage with autoscaling, encrypted, deletion protection, 7-day
+  automated backups with point-in-time restore, Performance Insights (free tier; Enhanced
+  Monitoring was on until 2026-11-12, when nothing was found to read it), parameter group
   with `rds.force_ssl=1`. Single-AZ (lean) or Multi-AZ (high availability, automatic failover).
 - **Connections**: three logins, each password in Secrets Manager: the tables' owner `app`
   (`insights/<env>/db-owner`: migrations and maintenance, for the cron function and the admin host

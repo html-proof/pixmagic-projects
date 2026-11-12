@@ -1,6 +1,6 @@
 # AWS cost reduction: status
 
-Last updated **2026-11-08**. The plan and the numbers behind each change are in
+Last updated **2026-11-12**. The plan and the numbers behind each change are in
 [AWS_MIGRATION_PLAN.md](AWS_MIGRATION_PLAN.md). Update this page in the same pull request as each
 change, or the day an owner-only step is done.
 
@@ -10,13 +10,16 @@ change, or the day an owner-only step is done.
 | --- | --- | --- | --- | --- |
 | 1 | Support plan Business Support+ → Basic | 29.00 | Not started: AWS allows it from ~2026-11-14 04:43 UTC | Owner (console) |
 | 2 | 1-year reserved instance for the database | 7.96 | Not started: two orders failed payment on 2026-10-18 | Owner: a payment method AWS can charge |
-| 3 | X-Ray tracing off | 0.46 | Pull request open (2026-11-06), with change 5 | Its Deploy |
-| 4 | GuardDuty Advanced RDS off | 6.78 | Not started; trial ends ~2026-11-15 | Owner's decision |
-| 5 | WhatsApp service on Fargate Spot | up to ~12.10 | Owner said yes 2026-11-06; pull request open with change 3; switch tried on a throwaway stack first | Its Deploy, then a week of billing for the real rate |
+| 3 | X-Ray tracing off | 0.46 | **Live** (#343; checked 2026-11-08: api, jobs and cron `live` on `PassThrough`) | — |
+| 4 | GuardDuty RDS protection off, both features (`RDS_LOGIN_EVENTS` 2.26 and Advanced RDS, `RDS_DATA_RISK`, 6.78) | ~9.04 | Our own checks in its place: change 10. Both features still `ENABLED` on 2026-11-12, 3 trial days left | Owner: one command ([aws-deployment.md](../aws-deployment.md#security-events)), once the alarm email is confirmed |
+| 5 | WhatsApp service on Fargate Spot | up to ~12.10 | **Live** (#343; checked 2026-11-08: `insights-production-evolution-a` 1/1 on `FARGATE_SPOT`) | A week of billing for the real rate |
 | 6 | AWS WAF → Cloudflare's rules | 10.08 | Not started | Owner's decision |
 | 7 | Secrets Manager → SSM SecureString | up to 2.43 | Not started (optional) | — |
-| 8 | Database single-AZ | 21.74 | Owner said yes 2026-11-08 (the bill); pull request with change 9 | Its Deploy |
-| 9 | One NAT instance (nat-b, in the database's zone) | ~8.24 | Owner said yes 2026-11-08; pull request with change 8 | Its Deploy |
+| 8 | Database single-AZ | 21.74 | **Live** 2026-11-08, release 174 (#357): `MultiAZ` false, primary 2b, same instance | — |
+| 9 | One NAT instance (nat-b, in the database's zone) | ~8.24 | **Live** 2026-11-08, release 174 (#357): nat-a terminated, both app subnets route to nat-b | — |
+| 10 | Our own security monitoring: `db-login-failures` alarm, five EventBridge rules to the alarm topic | −0.40 (it costs that) | Pull request 2026-11-12 | Its Deploy |
+| 11 | Database: Enhanced Monitoring off, backups 14 → 7 days, the postgresql log expires after 90 days | ~1-3 (the bill gives the figure) | Pull request 2026-11-12, with change 10 | Its Deploy |
+| 12 | The alarm email reaches someone | 0 | The topic had no subscriber on 2026-11-12; a confirmation email was sent that day | Owner: click "Confirm subscription" |
 
 ## Services
 
@@ -63,3 +66,19 @@ change, or the day an owner-only step is done.
   (CloudFormation's conditional flag for `MultiAZ`; its own reference says some interruptions, and
   the same instance, created 2026-10-15, went Multi-AZ in place on 2026-10-17), appSubnet1's route
   moves to nat-b, nat-a and its three alarms and launch snapshot are deleted. Nothing else changes.
+- **2026-11-08**: #357 merged (e3f7811b), Deploy to AWS green, **release 174** live (`/api/version`,
+  `readyz` 200). Checked after it: the database `available`, single-AZ in 2b, created 2026-10-15 (not
+  replaced); nat-a terminated, appSubnet1 and appSubnet2 both `0.0.0.0/0` → nat-b, its three alarms
+  OK; no errors in api, jobs or cron, no alarm in ALARM, the dead-letter queue empty, the WhatsApp
+  task 1/1. Changes 3 and 5 (#343) checked live the same day. Left for the owner: change 1 from
+  2026-11-14 04:43 UTC, change 4 before GuardDuty's trial ends (~2026-11-15).
+- **2026-11-12**: the owner's "just do it" to the cost recommendations of that day (eight items).
+  Read-only checks first: the alarm topic had **no subscriber** (the first subscription was never
+  confirmed and SNS had dropped it), so a new confirmation email went to the owner's address;
+  GuardDuty's `RDS_LOGIN_EVENTS` and `RDS_DATA_RISK` both `ENABLED` with 3 trial days left; the
+  database on Enhanced Monitoring (60 s, 92 MB of `RDSOSMetrics`), 14-day backups, Performance
+  Insights on its free 7 days. One pull request for changes 10 and 11 and the subscription's new
+  id (change 12). Not done, each for its own reason: the support plan (AWS allows it from
+  2026-11-14 04:43 UTC, root console); GuardDuty's two RDS features (the owner's command, after
+  the alarm email is confirmed); the WAF, the WhatsApp service, the old tables and the old
+  Cloudflare deployment (each waits for the owner's answer).

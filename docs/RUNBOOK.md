@@ -263,7 +263,7 @@ bizinsights stays installed in the shop until the merchant removes it in Shopify
 - An account: logged as `account deletion: Cognito users deleted but the user row was not`, auth event `account_deletion_incomplete`. Its sign-in is already gone (and any workspace it was the only owner of, deleted first). Finish with `UPDATE zapier_grants SET revoked_at = now(), revoked_reason = 'account_deleted' WHERE user_id = '<userId>' AND revoked_at IS NULL;` and `DELETE FROM users WHERE id = '<userId>';` (memberships go with it).
 
 ### Back up and restore the database
-RDS backs up `insights-production` by itself: automated backups kept 14 days, restorable to any second in that window, and a final snapshot if the instance is ever deleted. Nothing to schedule.
+RDS backs up `insights-production` by itself: automated backups kept 7 days (14 until 2026-11-12), restorable to any second in that window, and a final snapshot if the instance is ever deleted. Nothing to schedule.
 
 Restore into a **new** instance (RDS console → the instance → Actions → Restore to point in time, or a dump from the artifacts bucket through the admin host; aws-deployment.md, "Database"), verify it, and only then make it the app's database (the functions get `DB_HOST` from the Data stack, `infra/cdk/lib/data-stack.ts`). After a restore, re-sync stores to catch up on data since the restore point (webhooks during the gap were acked by the old database).
 

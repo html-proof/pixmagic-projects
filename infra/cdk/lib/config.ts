@@ -167,7 +167,9 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "migrateBeforeLive
     dbMultiAz: false,
     dbAllocatedStorageGb: 20,
     dbMaxStorageGb: 100,
-    dbBackupDays: 14,
+    // 7 days of point-in-time restore since 2026-11-12 (14 before): half the backup storage beyond
+    // the free allowance, and a week is still longer than any fault has taken to notice.
+    dbBackupDays: 7,
     natGateways: 1,
     // The database's AZ: the instance there (insights-production-nat-b) stays, nat-a goes.
     natAz: "ap-southeast-2b",

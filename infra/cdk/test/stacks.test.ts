@@ -76,7 +76,8 @@ describe("the data stack", () => {
       PubliclyAccessible: false,
       StorageEncrypted: true,
       DeletionProtection: true,
-      BackupRetentionPeriod: 14,
+      // A week of point-in-time restore (14 days until 2026-11-12).
+      BackupRetentionPeriod: 7,
       MultiAZ: false,
       DBInstanceClass: "db.t4g.micro",
       Engine: "postgres",
@@ -88,12 +89,15 @@ describe("the data stack", () => {
     t.data.hasResource("AWS::RDS::DBInstance", { DeletionPolicy: "Snapshot" });
     // Point-in-time backups outlive the instance.
     t.data.hasResourceProperties("AWS::RDS::DBInstance", { DeleteAutomatedBackups: false });
-    // Enhanced Monitoring every minute, through RDS's own role.
-    t.data.hasResourceProperties("AWS::RDS::DBInstance", { MonitoringInterval: 60, MonitoringRoleArn: { "Fn::GetAtt": [Match.stringLikeRegexp("^DbMonitoringRole"), "Arn"] } });
-    t.data.hasResourceProperties("AWS::IAM::Role", {
-      AssumeRolePolicyDocument: { Statement: [Match.objectLike({ Principal: { Service: "monitoring.rds.amazonaws.com" } })] },
-      ManagedPolicyArns: [{ "Fn::Join": ["", ["arn:", { Ref: "AWS::Partition" }, ":iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"]] }],
-    });
+    // Enhanced Monitoring off, said outright (0), and its role gone with it (since 2026-11-12).
+    t.data.hasResourceProperties("AWS::RDS::DBInstance", { MonitoringInterval: 0, MonitoringRoleArn: Match.absent() });
+    expect(JSON.stringify(t.data.findResources("AWS::IAM::Role"))).not.toContain("monitoring.rds.amazonaws.com");
+    // PostgreSQL's log goes to CloudWatch Logs and expires like the functions' logs.
+    t.data.hasResourceProperties("AWS::RDS::DBInstance", { EnableCloudwatchLogsExports: ["postgresql"] });
+    // (Its name is built from the instance: /aws/rds/instance/<the instance>/postgresql.)
+    const [retention] = Object.values(t.data.findResources("Custom::LogRetention"));
+    expect(retention!.Properties.RetentionInDays).toBe(90);
+    expect(retention!.Properties.LogGroupName).toEqual({ "Fn::Join": ["", ["/aws/rds/instance/", { Ref: expect.stringMatching(/^Db/) }, "/postgresql"]] });
     t.data.hasResourceProperties("AWS::RDS::DBParameterGroup", { Parameters: Match.objectLike({ "rds.force_ssl": "1", log_parameter_max_length: "0" }) });
   });
 
@@ -460,8 +464,82 @@ describe("the app stack", () => {
     // Sized for the instance class: 75% of a t4g.micro's ~80 connections.
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-db-connections", Threshold: 60 });
     t.app.hasResourceProperties("AWS::SNS::TopicPolicy", {
-      PolicyDocument: { Statement: [Match.objectLike({ Action: "sns:Publish", Principal: { Service: ["cloudwatch.amazonaws.com", "events.rds.amazonaws.com"] } })] },
+      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Action: "sns:Publish", Principal: { Service: ["cloudwatch.amazonaws.com", "events.rds.amazonaws.com"] } })]) },
     });
+  });
+
+  it("alarms on logins PostgreSQL refuses", () => {
+    t.app.hasResourceProperties("AWS::Logs::MetricFilter", {
+      LogGroupName: "/aws/rds/instance/insights-production/postgresql",
+      FilterPattern: '?"password authentication failed" ?"no pg_hba.conf entry"',
+      MetricTransformations: [Match.objectLike({ MetricNamespace: "Insights", MetricName: "production-db-login-failures", MetricValue: "1", DefaultValue: 0 })],
+    });
+    t.app.hasResourceProperties("AWS::CloudWatch::Alarm", {
+      AlarmName: "insights-production-db-login-failures",
+      MetricName: "production-db-login-failures",
+      Period: 300,
+      Statistic: "Sum",
+      Threshold: 5,
+      TreatMissingData: "notBreaching",
+      AlarmActions: [{ Ref: Match.stringLikeRegexp("^Alarms") }],
+    });
+  });
+
+  it("emails the alarm topic when the database, its network, the audit trail or IAM is changed, and when root signs in", () => {
+    const rules = Object.fromEntries(Object.values(t.app.findResources("AWS::Events::Rule")).map((r) => [r.Properties.Name as string, r.Properties]));
+    expect(Object.keys(rules).sort()).toEqual(["database", "database-network", "iam", "root-sign-in", "trail"].map((n) => `insights-production-security-${n}`));
+    const api = "AWS API Call via CloudTrail";
+    expect(rules["insights-production-security-database"].EventPattern).toEqual({
+      source: ["aws.rds"],
+      "detail-type": [api],
+      detail: { eventSource: ["rds.amazonaws.com"], eventName: [{ prefix: "Delete" }, { prefix: "Modify" }] },
+    });
+    // Only the database's own security group: the functions' and the WhatsApp service's change with deploys.
+    expect(rules["insights-production-security-database-network"].EventPattern).toEqual({
+      source: ["aws.ec2"],
+      "detail-type": [api],
+      detail: { eventSource: ["ec2.amazonaws.com"], eventName: ["AuthorizeSecurityGroupIngress"], requestParameters: { groupId: [{ "Fn::ImportValue": expect.stringMatching(/DbSg/) }] } },
+    });
+    expect(rules["insights-production-security-trail"].EventPattern.detail).toEqual({ eventSource: ["cloudtrail.amazonaws.com"], eventName: ["StopLogging", "DeleteTrail", "UpdateTrail"] });
+    expect(rules["insights-production-security-iam"].EventPattern).toEqual({
+      source: ["aws.iam"],
+      "detail-type": [api],
+      detail: { eventSource: ["iam.amazonaws.com"], eventName: ["CreateUser", "CreateAccessKey", { prefix: "Attach" }] },
+    });
+    expect(rules["insights-production-security-root-sign-in"].EventPattern).toEqual({
+      source: ["aws.signin"],
+      "detail-type": ["AWS Console Sign In via CloudTrail"],
+      detail: { eventName: ["ConsoleLogin"], userIdentity: { type: ["Root"] } },
+    });
+    // Each one to the alarm topic, as a sentence saying what was called, by whom and from where.
+    for (const rule of Object.values(rules)) {
+      expect(rule.State).toBe("ENABLED");
+      expect(rule.Targets).toHaveLength(1);
+      expect(rule.Targets[0].Arn).toEqual({ Ref: expect.stringMatching(/^Alarms/) });
+      expect(rule.Targets[0].InputTransformer.InputPathsMap).toMatchObject({ "detail-eventName": "$.detail.eventName", "detail-userIdentity-arn": "$.detail.userIdentity.arn", "detail-sourceIPAddress": "$.detail.sourceIPAddress" });
+      expect(rule.Targets[0].InputTransformer.InputTemplate).toContain("What:  <detail-eventName>");
+    }
+    // EventBridge may publish to the topic.
+    t.app.hasResourceProperties("AWS::SNS::TopicPolicy", {
+      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Action: "sns:Publish", Principal: { Service: "events.amazonaws.com" } })]) },
+    });
+    // The account's events, so staging's copy has no rules.
+    synth({ env: "staging" }).app.resourceCountIs("AWS::Events::Rule", 0);
+  });
+
+  it("passes IAM changes and root sign-ins on from us-east-1, the only Region that sees them", () => {
+    const rules = Object.values(t.edge.findResources("AWS::Events::Rule")).map((r) => r.Properties);
+    expect(rules.map((r) => r.EventPattern.source[0]).sort()).toEqual(["aws.iam", "aws.signin"]);
+    for (const rule of rules) {
+      expect(rule.Targets).toEqual([{ Id: "Target0", Arn: "arn:aws:events:ap-southeast-2:605411278365:event-bus/default", RoleArn: { "Fn::GetAtt": [expect.stringMatching(/EventsRole/), "Arn"] } }]);
+    }
+    // The same patterns the App stack's rules email.
+    const appRules = Object.values(t.app.findResources("AWS::Events::Rule")).map((r) => JSON.stringify(r.Properties.EventPattern));
+    for (const rule of rules) expect(appRules).toContain(JSON.stringify(rule.EventPattern));
+    // The role may put events on that bus and nothing else.
+    const statements = Object.values(t.edge.findResources("AWS::IAM::Policy")).flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string; Resource: string }>);
+    expect(statements.filter((s) => s.Action === "events:PutEvents").map((s) => s.Resource)).toEqual(Array(rules.length).fill("arn:aws:events:ap-southeast-2:605411278365:event-bus/default"));
+    synth({ env: "staging" }).edge.resourceCountIs("AWS::Events::Rule", 0);
   });
 
   it("emails the alarms to the owner in production, and to nobody in staging", () => {
