@@ -13,7 +13,7 @@ change, or the day an owner-only step is done.
 | 3 | X-Ray tracing off | 0.46 | **Live** (#343; checked 2026-11-08: api, jobs and cron `live` on `PassThrough`) | — |
 | 4 | GuardDuty RDS protection off, both features (`RDS_LOGIN_EVENTS` 2.26 and Advanced RDS, `RDS_DATA_RISK`, 6.78) | ~9.04 | Our own checks in its place: change 10. Both features still `ENABLED` on 2026-11-12, 3 trial days left | Owner: one command ([aws-deployment.md](../aws-deployment.md#security-events)), once the alarm email is confirmed |
 | 5 | WhatsApp service on Fargate Spot | up to ~12.10 | **Live** (#343; checked 2026-11-08: `insights-production-evolution-a` 1/1 on `FARGATE_SPOT`) | A week of billing for the real rate |
-| 6 | AWS WAF → Cloudflare's rules | 10.08 (less 0.40 for the lock's secret) | **In progress** (owner's "just do it", 2026-11-12). Step 1 of 3, the origin lock: `"report"` in its pull request, nothing refused yet. The WAF still on | Owner: add the header in Cloudflare ([aws-deployment.md](../aws-deployment.md#origin-lock-only-cloudflare-reaches-cloudfront)) once the lock's first deploy is live |
+| 6 | AWS WAF → Cloudflare's rules | 10.08 (less 0.40 for the lock's secret) | **In progress** (owner's "just do it", 2026-11-12). Step 1 of 3, the origin lock: `"report"` **live** 2026-11-12, release 180 (#375), nothing refused yet; `/edge-lock` answers 403 until Cloudflare sends the header. The WAF still on | Owner: add the header in Cloudflare ([aws-deployment.md](../aws-deployment.md#origin-lock-only-cloudflare-reaches-cloudfront)); then the lock enforces, then the rate rule, then the WAF goes |
 | 7 | Secrets Manager → SSM SecureString | up to 2.43 | Not started (optional) | — |
 | 8 | Database single-AZ | 21.74 | **Live** 2026-11-08, release 174 (#357): `MultiAZ` false, primary 2b, same instance | — |
 | 9 | One NAT instance (nat-b, in the database's zone) | ~8.24 | **Live** 2026-11-08, release 174 (#357): nat-a terminated, both app subnets route to nat-b | — |
@@ -97,6 +97,16 @@ change, or the day an owner-only step is done.
   to the cloudfront.net name reached the app that day (404 from `/api/healthz`): the side door is
   real. First pull request: the origin lock in `"report"`, the secret
   `insights/production/origin-lock`, `/edge-lock`, the smoke check.
+- **2026-11-12**: #375 merged (920e82e3), Deploy to AWS green, **release 180** (`/api/version`,
+  `healthz` 200, smoke tests 35 of 35). Checked after it: the secret exists and the live function's
+  copy is the same 48 letters and digits (CloudFormation resolved the reference; compared by a
+  script, never shown), `ENFORCE` false, the stack's `OriginLock` output `report`;
+  `https://bizinsights.io/edge-lock` 403 (Cloudflare doesn't send the header yet), pages and the
+  API as before, the cloudfront.net name still 301 for a page and still serving a POST. Before the
+  merge the function ran in CloudFront's own runtime (`aws cloudfront test-function` on a
+  throwaway, unpublished function, deleted after): 18 requests in both modes, each as designed.
+  Left for the owner: the Transform Rule in Cloudflare; `"enforce"` follows once `/edge-lock`
+  answers 204.
 - **2026-11-12**: #371 merged (d56f0305), Deploy to AWS green, **release 178**; #372 merged
   (b54089df) with `AWS_WHATSAPP=off`, Deploy green, **release 179** (`/api/version`, `readyz` 200).
   Checked after each: the database `available` and the same instance, nothing pending; no alarm in
