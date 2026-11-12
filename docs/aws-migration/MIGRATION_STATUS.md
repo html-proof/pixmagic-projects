@@ -21,6 +21,7 @@ change, or the day an owner-only step is done.
 | 11 | Database: Enhanced Monitoring off, backups 14 → 7 days, the postgresql log expires after 90 days | ~1-3 (the bill gives the figure) | **Live** 2026-11-12, release 178 (#371): `MonitoringInterval` 0, backups 7 days, the log group on 90 days; the same instance (created 2026-10-15) | — |
 | 12 | The alarm email reaches someone | 0 | The topic had no subscriber on 2026-11-12; a confirmation email was sent that day and the deploy's subscription (#371) is the same one. Still `PendingConfirmation` at release 179 | Owner: click "Confirm subscription" in AWS's email (spam too) |
 | 13 | WhatsApp service switched off (`AWS_WHATSAPP=off`: no Fargate task; everything else kept) | ~5-7 on Spot (17.29 on demand) | **Live** 2026-11-12, release 179 (#372): the ECS service at 0 of 0 tasks, no `whatsapp-service-*` alarm, the app answers WhatsApp isn't set up | A week of billing for the figure |
+| 14 | 26 unused tables dropped (the two old WhatsApp designs, `email_otps`, `funnel_daily`), all empty | ~0 (tidiness) | Pull request 2026-11-12 (the owner's yes that day; kept on 2026-10-29). `refunds` stays: it holds 2 rows | Its Deploy |
 
 ## Services
 

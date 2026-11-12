@@ -16,6 +16,5 @@ export * from "./teamAlerts.js";
 export * from "./overview.js";
 export * from "./sweep.js";
 export * from "./privacy.js";
-export * from "./legacy.js";
 export * from "./purge.js";
 export * from "./cloud.js";

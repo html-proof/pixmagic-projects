@@ -806,7 +806,7 @@ Shoppers who decline analytics consent are not tracked, so funnel numbers are be
 
 Visits are compared only from the first whole day after the pixel was put in place (`historyFrom`, see Conventions: "No earlier data").
 
-`funnel_daily` is no longer written or read. It holds whatever the pre-visit pixel recorded and can be dropped once nothing needs that history.
+`funnel_daily`, which the pre-visit pixel wrote, was dropped empty on 2026-11-12.
 
 ### Shopping Funnel page (/funnel)
 

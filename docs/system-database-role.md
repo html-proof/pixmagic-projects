@@ -73,9 +73,8 @@ anyone remembering it, and `apps/api/test/systemRole.test.ts` checks it.
 **Tables that belong to no workspace**: the system role may read and write them in every scope.
 They hold people and intake records, not a workspace's data, and sign-in reads them before any
 workspace is known.
-- `users`, `auth_identities`, `auth_events`, `user_sessions`, `email_otps` and `pixel_events_seen`
+- `users`, `auth_identities`, `auth_events`, `user_sessions` and `pixel_events_seen`
   have row-level security, so each gets a `system_any` policy, named one by one in `init.sql`.
-- `wa_webhook_events` has no row-level security.
 - `workspaces` shows the scope's own row under `forTenant` and every row under `crossTenant`.
 
 ## Where the scope is set

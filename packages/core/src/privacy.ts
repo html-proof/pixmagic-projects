@@ -18,7 +18,6 @@ import { normalizePhone } from "@app/shared";
 import { normalizeEmail } from "@app/shared/email";
 import { customerKey } from "./persist.js";
 import { waPhoneHash } from "./whatsapp/common.js";
-import { legacyRecordCount } from "./whatsapp/legacy.js";
 import { whatsappExportFor } from "./whatsapp/privacy.js";
 import { isUniqueViolation, recipientHash } from "./email/common.js";
 import { smsExportFor } from "./sms/privacy.js";
@@ -84,10 +83,7 @@ export async function customerDataExport(tx: Tx, request: DataRequest) {
       })
     : [];
 
-  const [whatsapp, olderWhatsappRecords] = await Promise.all([
-    whatsappExportFor(tx, workspaceId, storeId, { phoneHash: request.phoneHash, customerId: request.customerId }),
-    legacyRecordCount(storeId, { phoneHash: request.phoneHash, customerKey: request.customerKey }),
-  ]);
+  const whatsapp = await whatsappExportFor(tx, workspaceId, storeId, { phoneHash: request.phoneHash, customerId: request.customerId });
 
   const [emailMessages, emailEvents] = request.emailHash
     ? await Promise.all([
@@ -129,7 +125,7 @@ export async function customerDataExport(tx: Tx, request: DataRequest) {
       referrerHost: o.referrerHost,
       lineItems: o.lineItems.map((l) => ({ title: l.title, sku: l.sku, quantity: l.quantity, price: money(l.price), discount: money(l.discount) })),
     })),
-    whatsapp: { ...whatsapp, olderRecords: olderWhatsappRecords },
+    whatsapp,
     email: {
       messages: emailMessages.map((m) => ({
         kind: m.kind,

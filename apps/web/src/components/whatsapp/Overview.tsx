@@ -41,12 +41,6 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
         </div>
       )}
 
-      {o.retired && (
-        <Alert kind="info">
-          This store&apos;s earlier WhatsApp Business connection{o.retired.displayPhoneNumber ? ` (${o.retired.displayPhoneNumber})` : ""} was retired when WhatsApp Automation moved to its new service. Connect again below; nothing from the earlier one sends.
-        </Alert>
-      )}
-
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <FigureTile
           testId="wa-figure-connection"
