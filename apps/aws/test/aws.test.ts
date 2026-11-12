@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { originCheck } from "../src/app.js";
 import { dynamoCoord } from "../src/dynamoCoord.js";
 import { API_PATH_PATTERNS, apiPath } from "../src/paths.js";
-import { loadSecrets } from "../src/secrets.js";
+import { loadSecrets, secretParameterName } from "../src/secrets.js";
 import { parseHeaders, staticSite } from "../src/staticSite.js";
 
 /** A DynamoDB that keeps items in a Map and understands exactly the requests dynamoCoord sends. */
@@ -199,21 +199,41 @@ describe("the function URL's origin check", () => {
 });
 
 describe("secrets at cold start", () => {
-  it("puts each secret's keys in the environment and builds verified-TLS database URLs", async () => {
-    const values: Record<string, Record<string, string>> = {
-      app: { SESSION_SECRET: "s", APP_RLS_PASSWORD: "p@ss/w:rd" },
-      cognito: { COGNITO_CLIENT_SECRET: "c" },
-      db: { username: "app", password: "m a&s" },
-      system: { SYSTEM_DB_USER: "app_system", SYSTEM_DB_PASSWORD: "sy s&" },
-    };
+  /**
+   * Stand-ins for the two stores: `parameters` by name (/insights/…), `secrets` by id. A parameter
+   * given as a number answers with that HTTP status, as AWS does for one the role may not read.
+   */
+  function stores(parameters: Record<string, Record<string, string> | string | number>, secrets: Record<string, Record<string, string>>) {
+    const asked: string[] = [];
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
-      const { SecretId } = JSON.parse(await new Request(input, init).text());
-      return new Response(JSON.stringify({ SecretString: JSON.stringify(values[SecretId]) }));
+      const request = new Request(input, init);
+      const body = JSON.parse(await request.text()) as { Name?: string; SecretId?: string; WithDecryption?: boolean };
+      if (request.headers.get("x-amz-target") === "AmazonSSM.GetParameter") {
+        asked.push(`parameter ${body.Name}${body.WithDecryption ? " (decrypted)" : ""}`);
+        const value = parameters[body.Name!];
+        if (value === undefined) return new Response(JSON.stringify({ __type: "ParameterNotFound" }), { status: 400 });
+        if (typeof value === "number") return new Response(JSON.stringify({ __type: "AccessDeniedException" }), { status: value });
+        return new Response(JSON.stringify({ Parameter: { Name: body.Name, Value: typeof value === "string" ? value : JSON.stringify(value) } }));
+      }
+      asked.push(`secret ${body.SecretId}`);
+      const value = secrets[body.SecretId!];
+      if (!value) return new Response(JSON.stringify({ __type: "ResourceNotFoundException" }), { status: 400 });
+      return new Response(JSON.stringify({ SecretString: JSON.stringify(value) }));
     }) as typeof fetch;
+    return { fetchImpl, asked };
+  }
+  const AWS = { AWS_REGION: "ap-southeast-2", AWS_ACCESS_KEY_ID: "AKIA", AWS_SECRET_ACCESS_KEY: "s" };
+  const values = {
+    app: { SESSION_SECRET: "s", APP_RLS_PASSWORD: "p@ss/w:rd" },
+    cognito: { COGNITO_CLIENT_SECRET: "c" },
+    db: { username: "app", password: "m a&s" },
+    system: { SYSTEM_DB_USER: "app_system", SYSTEM_DB_PASSWORD: "sy s&" },
+  };
+
+  it("puts each secret's keys in the environment and builds verified-TLS database URLs", async () => {
+    const { fetchImpl } = stores({}, values);
     const env: NodeJS.ProcessEnv = {
-      AWS_REGION: "ap-southeast-2",
-      AWS_ACCESS_KEY_ID: "AKIA",
-      AWS_SECRET_ACCESS_KEY: "s",
+      ...AWS,
       APP_SECRET_ARN: "app",
       COGNITO_WORKER_SECRET_ARN: "cognito",
       DB_SECRET_ARN: "db",
@@ -233,16 +253,96 @@ describe("secrets at cold start", () => {
   });
 
   it("gives the api and jobs functions, which have no owner's secret, no owner's login", async () => {
-    const asked: string[] = [];
-    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
-      const { SecretId } = JSON.parse(await new Request(input, init).text());
-      asked.push(SecretId);
-      return new Response(JSON.stringify({ SecretString: JSON.stringify({ SYSTEM_DB_PASSWORD: "sys" }) }));
-    }) as typeof fetch;
-    const env: NodeJS.ProcessEnv = { AWS_REGION: "ap-southeast-2", AWS_ACCESS_KEY_ID: "AKIA", AWS_SECRET_ACCESS_KEY: "s", SYSTEM_DB_SECRET_ARN: "system", DB_HOST: "db.example", DB_NAME: "app" };
+    const { fetchImpl, asked } = stores({}, { system: { SYSTEM_DB_PASSWORD: "sys" } });
+    const env: NodeJS.ProcessEnv = { ...AWS, SYSTEM_DB_SECRET_ARN: "system", DB_HOST: "db.example", DB_NAME: "app" };
     await loadSecrets(env, fetchImpl);
-    expect(asked).toEqual(["system"]);
+    expect(asked.filter((a) => a.startsWith("secret "))).toEqual(["secret system"]);
     expect(env.DATABASE_URL).toBe("postgresql://app_system:sys@db.example:5432/app?sslmode=verify-full");
     expect(env.OWNER_DATABASE_URL).toBeUndefined();
+  });
+
+  // The move to Parameter Store (docs/aws-migration/SECRETS_TO_PARAMETER_STORE.md): each secret's
+  // copy is a SecureString parameter named like the secret after a slash, holding the same JSON.
+  const APP_ARN = "arn:aws:secretsmanager:ap-southeast-2:605411278365:secret:insights/production/app-AbC123";
+  const DB_ARN = "arn:aws:secretsmanager:ap-southeast-2:605411278365:secret:insights/production/db-owner-xY9zQ0";
+
+  it("names a secret's parameter after the secret, given by name or by ARN", () => {
+    expect(secretParameterName("insights/production/db-system")).toBe("/insights/production/db-system");
+    expect(secretParameterName(APP_ARN)).toBe("/insights/production/app");
+    expect(secretParameterName(DB_ARN)).toBe("/insights/production/db-owner");
+    // A name that only looks like it ends in a suffix is a name: evolution-db stays whole.
+    expect(secretParameterName("insights/production/evolution-db")).toBe("/insights/production/evolution-db");
+  });
+
+  it("reads each secret from its parameter, decrypted, and never asks Secrets Manager when it is there", async () => {
+    const { fetchImpl, asked } = stores(
+      {
+        "/insights/production/app": values.app,
+        "/insights/production/db-system": values.system,
+        "/insights/production/db-owner": values.db,
+        "/insights/production/runtime": { APP_URL: "https://bizinsights.io" },
+      },
+      {},
+    );
+    const env: NodeJS.ProcessEnv = { ...AWS, APP_SECRET_ARN: APP_ARN, SYSTEM_DB_SECRET_ARN: "insights/production/db-system", DB_SECRET_ARN: DB_ARN, RUNTIME_PARAM: "/insights/production/runtime", DB_HOST: "db.example", DB_NAME: "app" };
+    const report = await loadSecrets(env, fetchImpl);
+    expect(asked).toEqual([
+      "parameter /insights/production/app (decrypted)",
+      "parameter /insights/production/db-system (decrypted)",
+      // Not a secret: read as before.
+      "parameter /insights/production/runtime",
+      "parameter /insights/production/db-owner (decrypted)",
+    ]);
+    expect(report).toEqual({
+      sources: { "insights/production/app": "parameter", "insights/production/db-system": "parameter", "insights/production/db-owner": "parameter" },
+      fallbacks: {},
+    });
+    expect(env.SESSION_SECRET).toBe("s");
+    expect(env.APP_URL).toBe("https://bizinsights.io");
+    expect(env.DATABASE_URL).toBe("postgresql://app_system:sy%20s%26@db.example:5432/app?sslmode=verify-full");
+    expect(env.OWNER_DATABASE_URL).toBe("postgresql://app:m%20a%26s@db.example:5432/app?sslmode=verify-full");
+    expect(env.APP_DATABASE_URL).toBe("postgresql://app_rls:p%40ss%2Fw%3Ard@db.example:5432/app?sslmode=verify-full");
+  });
+
+  it("reads the secret itself when its parameter is missing, refused or not the secret's JSON, and says why", async () => {
+    const secrets = { [APP_ARN]: values.app, "insights/production/db-system": values.system, "insights/production/evolution-api": { EVOLUTION_API_KEY: "k" } };
+    const { fetchImpl, asked } = stores({ "/insights/production/db-system": 400, "/insights/production/evolution-api": "not json {" }, secrets);
+    const env: NodeJS.ProcessEnv = { ...AWS, APP_SECRET_ARN: APP_ARN, SYSTEM_DB_SECRET_ARN: "insights/production/db-system", EVOLUTION_SECRET_ARN: "insights/production/evolution-api", DB_HOST: "db.example", DB_NAME: "app" };
+    const report = await loadSecrets(env, fetchImpl);
+    expect(asked).toEqual([
+      "parameter /insights/production/app (decrypted)",
+      `secret ${APP_ARN}`,
+      "parameter /insights/production/evolution-api (decrypted)",
+      "secret insights/production/evolution-api",
+      "parameter /insights/production/db-system (decrypted)",
+      "secret insights/production/db-system",
+    ]);
+    expect(report.sources).toEqual({ "insights/production/app": "secret", "insights/production/evolution-api": "secret", "insights/production/db-system": "secret" });
+    // Why, by AWS's own error name; the refused text is never part of it.
+    expect(report.fallbacks).toEqual({
+      "insights/production/app": "400 ParameterNotFound",
+      "insights/production/evolution-api": "not a JSON object",
+      "insights/production/db-system": "400 AccessDeniedException",
+    });
+    expect(env.SESSION_SECRET).toBe("s");
+    expect(env.EVOLUTION_API_KEY).toBe("k");
+    expect(env.DATABASE_URL).toBe("postgresql://app_system:sy%20s%26@db.example:5432/app?sslmode=verify-full");
+  });
+
+  it("reads the secret when Parameter Store can't be reached at all", async () => {
+    const { fetchImpl } = stores({}, { "insights/production/db-system": values.system });
+    const failing = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (new Request(input, init).headers.get("x-amz-target") === "AmazonSSM.GetParameter") throw new TypeError("fetch failed");
+      return fetchImpl(input, init);
+    }) as typeof fetch;
+    const env: NodeJS.ProcessEnv = { ...AWS, SYSTEM_DB_SECRET_ARN: "insights/production/db-system", DB_HOST: "db.example", DB_NAME: "app" };
+    const report = await loadSecrets(env, failing);
+    expect(report).toEqual({ sources: { "insights/production/db-system": "secret" }, fallbacks: { "insights/production/db-system": "TypeError" } });
+    expect(env.SYSTEM_DB_PASSWORD).toBe("sy s&");
+  });
+
+  it("still fails, naming the secret, when neither store has it", async () => {
+    const { fetchImpl } = stores({}, {});
+    await expect(loadSecrets({ ...AWS, APP_SECRET_ARN: "insights/production/app" }, fetchImpl)).rejects.toThrow("Reading secret insights/production/app failed (400 ResourceNotFoundException)");
   });
 });

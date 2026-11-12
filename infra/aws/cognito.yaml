@@ -259,8 +259,12 @@ Resources:
 
   # The app client's secret, read by the API function at cold start (COGNITO_WORKER_SECRET_ARN).
   # The pool's admin calls are signed with the function's own role, which infra/cdk grants them.
+  # Retain: removing it from this template must not delete it at once (CloudFormation deletes a
+  # secret with no recovery window).
   WorkerSecrets:
     Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub insights/${Environment}/worker-cognito
       Description: Insights Worker secrets for Cognito (app client secret, admin access key)

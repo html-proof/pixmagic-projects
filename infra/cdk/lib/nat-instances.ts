@@ -31,6 +31,8 @@ export const SWAP_FILE_COMMANDS = [
  */
 export class NatInstancePerAz extends ec2.NatProvider {
   private readonly byAz = new Map<string, ec2.Instance>();
+  /** The instances' role, once the VPC has configured them. */
+  role?: iam.Role;
 
   constructor(private readonly props: { instanceType: ec2.InstanceType; namePrefix: string }) {
     super();
@@ -54,11 +56,11 @@ export class NatInstancePerAz extends ec2.NatProvider {
       allowAllOutbound: true,
     });
     sg.addIngressRule(ec2.Peer.ipv4(vpc.vpcCidrBlock), ec2.Port.allTraffic(), "Traffic from inside the VPC on its way out");
-    const role = new iam.Role(vpc, "NatRole", {
+    const role = (this.role = new iam.Role(vpc, "NatRole", {
       roleName: `${this.props.namePrefix}-nat`,
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore")],
-    });
+    }));
 
     for (const subnet of options.natSubnets) {
       const userData = ec2.UserData.forLinux();

@@ -29,6 +29,7 @@ import type { Construct } from "constructs";
 import { API_PATH_PATTERNS } from "../../../apps/aws/src/paths.js";
 import { FUNCTION_DIR, REPO_ROOT, originLockSecretName, type EnvConfig } from "./config.js";
 import { migrateBeforeLive } from "./migrate-before-live.js";
+import { readSecretParameters, secretParameters, type SecretName } from "./secret-parameters.js";
 
 /** Per RDS class: its connection limit (approximate) and the free memory that means "too small". */
 const DB_SIZES: Record<string, { connections: number; lowMemoryMb: number }> = {
@@ -221,6 +222,10 @@ export class AppStack extends Stack {
         f.addToRolePolicy(new iam.PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [`arn:aws:secretsmanager:${cfg.region}:${cfg.account}:secret:${cognitoSecret}-*`] }));
       }
       f.addToRolePolicy(new iam.PolicyStatement({ actions: ["ssm:GetParameter"], resources: [`arn:aws:ssm:${cfg.region}:${cfg.account}:parameter${this.runtimeParam}`] }));
+      // Each secret it may read above, as its copy in Parameter Store (secret-parameters.ts): read
+      // first at cold start, the secret itself when that fails (apps/aws/src/secrets.ts).
+      const copies: SecretName[] = ["app", "db-system", "evolution-api", ...(name === "api" ? (["worker-cognito"] as const) : []), ...(name === "cron" ? (["db-owner", "evolution-db"] as const) : [])];
+      f.addToRolePolicy(readSecretParameters(cfg, copies));
       f.addToRolePolicy(new iam.PolicyStatement({ actions: ["ses:SendEmail", "ses:SendRawEmail"], resources: [`arn:aws:ses:${cfg.region}:${cfg.account}:identity/*`, `arn:aws:ses:${cfg.region}:${cfg.account}:configuration-set/*`] }));
       // Releases move the `live` alias once the new cron version has run the release's migrations
       // (MigrateBeforeLive below); rolling back moves it to the previous version (scripts/rollback.mjs).
@@ -238,6 +243,12 @@ export class AppStack extends Stack {
     // The S3 uploads go on alongside; Live-api also waits for them (below).
     const migrated = cfg.migrateBeforeLive ? migrateBeforeLive(this, cfg, cron.fn.currentVersion, this.runtimeParam) : undefined;
     if (migrated) for (const f of [api, jobs, cron]) f.alias.node.addDependency(migrated);
+    // The secrets' copies in Parameter Store are written before the new code goes live, so its first
+    // instance already finds them (secret-parameters.ts; docs/aws-migration/SECRETS_TO_PARAMETER_STORE.md).
+    const copied = secretParameters(this, cfg, commit);
+    for (const f of [api, jobs, cron]) f.alias.node.addDependency(copied);
+    // The gate's migrate run is then the new code's first read of them, before anything is live.
+    migrated?.node.addDependency(copied);
     // Customer Messaging's calls to AWS End User Messaging SMS, each function only what it does.
     // Sending is scoped to this account's configuration sets and origination identities, in any
     // region (Indian local routes are in ap-south-1); the Describe calls have no resource-level
@@ -735,6 +746,7 @@ export class AppStack extends Stack {
     new CfnOutput(this, "FallbackDomain", { value: fallback.distributionDomainName, description: "Where CloudFront gets the page it shows while the app can't answer (any path; a 503)" });
     new CfnOutput(this, "ApiFunctionUrl", { value: url.url, description: "Direct function URL (answers 403 to anything not from CloudFront)" });
     new CfnOutput(this, "CronFunction", { value: cron.alias.functionArn, description: "Invoke with {\"action\":\"migrate\"} or {\"action\":\"counts\"}" });
+    new CfnOutput(this, "SecretCopies", { value: copied.getAttString("Copied"), description: "What the release did with each secret's copy in Parameter Store (names only)" });
     if (migrated) new CfnOutput(this, "MigratedBeforeLive", { value: migrated.getAttString("Applied"), description: "What the migrate gate did with the newest cron version before moving live (applied, or why it skipped)" });
     // The versions this stack points `live` at. rollback.mjs moves the aliases behind CloudFormation's
     // back, so a Deploy run again for the same commit ("no changes") would leave them on the release

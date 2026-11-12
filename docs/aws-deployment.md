@@ -26,7 +26,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
-| Secrets | Secrets Manager `insights/production/{app,db-owner,db-system,worker-cognito,evolution-api,evolution-db,origin-lock}` (`db-owner`: the cron and the admin host only; `db-system`: every function's database login, [system-database-role.md](system-database-role.md); `origin-lock`: what Cloudflare adds to each request, read by no function, [Origin lock](#origin-lock-only-cloudflare-reaches-cloudfront)); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
+| Secrets | Secrets Manager `insights/production/{app,db-owner,db-system,worker-cognito,evolution-api,evolution-db,origin-lock}`, each with a copy in Parameter Store under the same name after a slash (`/insights/production/app`, …), which the functions read first: the move to Parameter Store, [SECRETS_TO_PARAMETER_STORE.md](aws-migration/SECRETS_TO_PARAMETER_STORE.md) (`db-owner`: the cron and the admin host only; `db-system`: every function's database login, [system-database-role.md](system-database-role.md); `origin-lock`: what Cloudflare adds to each request, read by no function, [Origin lock](#origin-lock-only-cloudflare-reaches-cloudfront)); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | WhatsApp service | Evolution API 2.3.7 on ECS Fargate: service `insights-production-evolution-a` in cluster `insights-production-whatsapp` (one task, private subnets, no public address), reached by the functions only at `http://evolution-a.whatsapp.production.insights.internal:8080` (Cloud Map); its own database `evolution` on the same RDS instance; logs `/ecs/insights-production-evolution-a` ([whatsapp.md](whatsapp.md)) | `infra/cdk/lib/whatsapp-stack.ts` (stack `InsightsWhatsapp-production`), `apps/aws/src/evolutionDb.ts` |
 | Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$50/month, tax included (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
@@ -71,7 +71,9 @@ node infra/cdk/scripts/put-secrets.mjs --from C:\Users\Seban\Videos\saas-project
 
 It copies the values that must equal production's (TOKEN_ENCRYPTION_KEYS decrypts every stored
 store and ad-platform token; OTP_PEPPER keys stored customer hashes; SHOPIFY_API_SECRET), generates
-SESSION_SECRET and APP_RLS_PASSWORD, and prints key names only. A secret only its owner has
+SESSION_SECRET and APP_RLS_PASSWORD, and prints key names only. It writes the secret and then its
+copy in Parameter Store (`/insights/production/app`, what the functions read first); should the
+copy fail, it says so, and the next Deploy to AWS copies it. A secret only its owner has
 (META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET, ...): copy it to the clipboard and run
 
 ```powershell
@@ -1135,7 +1137,9 @@ would ship whatever `$LATEST` has.
 
 A Deploy to AWS run does this by itself when the deploy changed `/insights/production/runtime` (its
 step "Restart the functions on changed runtime settings", with the run's id in the description): a
-secret changed in Secrets Manager alone still needs the loop above. Its log says "Runtime settings
+secret changed in Secrets Manager alone still needs the loop above (and, changed any other way
+than with `put-secrets.mjs`, a Deploy to AWS first: the functions read its copy in Parameter Store,
+which only `put-secrets.mjs` and a deploy write). Its log says "Runtime settings
 unchanged: nothing to restart." on most runs. "Couldn't read the runtime settings" means it restarted
 nothing, and the AWS CLI's error just above it says why. Until 2026-11-01 every run said that: on the
 PC's runner, Git Bash rewrote `--name /insights/production/runtime` into a Windows path

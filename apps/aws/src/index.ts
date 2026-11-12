@@ -103,7 +103,11 @@ function ensureSecrets(): Promise<void> {
     // a variable the function was given wins, and the secrets fill whatever is still empty, as
     // when the settings were in the environment.
     for (const [k, v] of Object.entries(APP_SETTINGS)) process.env[k] ??= v;
-    await loadSecrets();
+    const { sources, fallbacks } = await loadSecrets();
+    // Which store answered for each secret (names only): Secrets Manager can go once every line
+    // says "parameter" (docs/aws-migration/SECRETS_TO_PARAMETER_STORE.md).
+    logger.info({ sources }, "secrets loaded");
+    for (const [name, why] of Object.entries(fallbacks)) logger.warn({ name, why }, "this secret's copy in Parameter Store couldn't be read: read from Secrets Manager instead");
     // On AWS the function's own role makes Cognito's admin calls (least privilege, no long-lived keys).
     if (!process.env.COGNITO_ADMIN_ACCESS_KEY_ID && process.env.AWS_ACCESS_KEY_ID) {
       process.env.COGNITO_ADMIN_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID;
