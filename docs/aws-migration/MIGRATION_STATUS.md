@@ -17,10 +17,10 @@ change, or the day an owner-only step is done.
 | 7 | Secrets Manager → SSM SecureString | up to 2.43 | Not started (optional) | — |
 | 8 | Database single-AZ | 21.74 | **Live** 2026-11-08, release 174 (#357): `MultiAZ` false, primary 2b, same instance | — |
 | 9 | One NAT instance (nat-b, in the database's zone) | ~8.24 | **Live** 2026-11-08, release 174 (#357): nat-a terminated, both app subnets route to nat-b | — |
-| 10 | Our own security monitoring: `db-login-failures` alarm, five EventBridge rules to the alarm topic | −0.40 (it costs that) | Pull request 2026-11-12 | Its Deploy |
-| 11 | Database: Enhanced Monitoring off, backups 14 → 7 days, the postgresql log expires after 90 days | ~1-3 (the bill gives the figure) | Pull request 2026-11-12, with change 10 | Its Deploy |
-| 12 | The alarm email reaches someone | 0 | The topic had no subscriber on 2026-11-12; a confirmation email was sent that day | Owner: click "Confirm subscription" |
-| 13 | WhatsApp service switched off (`AWS_WHATSAPP=off`: no Fargate task; everything else kept) | ~5-7 on Spot (17.29 on demand) | Pull request 2026-11-12; no message through it since 2026-10-30 | Its Deploy |
+| 10 | Our own security monitoring: `db-login-failures` alarm, five EventBridge rules to the alarm topic | −0.40 (it costs that) | **Live** 2026-11-12, release 178 (#371): the alarm in `OK`, five rules in Sydney and two in us-east-1 `ENABLED` | The alarm email confirmed (change 12) |
+| 11 | Database: Enhanced Monitoring off, backups 14 → 7 days, the postgresql log expires after 90 days | ~1-3 (the bill gives the figure) | **Live** 2026-11-12, release 178 (#371): `MonitoringInterval` 0, backups 7 days, the log group on 90 days; the same instance (created 2026-10-15) | — |
+| 12 | The alarm email reaches someone | 0 | The topic had no subscriber on 2026-11-12; a confirmation email was sent that day and the deploy's subscription (#371) is the same one. Still `PendingConfirmation` at release 179 | Owner: click "Confirm subscription" in AWS's email (spam too) |
+| 13 | WhatsApp service switched off (`AWS_WHATSAPP=off`: no Fargate task; everything else kept) | ~5-7 on Spot (17.29 on demand) | **Live** 2026-11-12, release 179 (#372): the ECS service at 0 of 0 tasks, no `whatsapp-service-*` alarm, the app answers WhatsApp isn't set up | A week of billing for the figure |
 
 ## Services
 
@@ -89,3 +89,9 @@ change, or the day an owner-only step is done.
   repository variable, and the pull request makes "off" clean: the functions get no
   `EVOLUTION_API_URL` (the page says WhatsApp isn't set up) and `whatsapp-service-unreachable`
   isn't made. Back on: delete the variable, run Deploy to AWS ([../whatsapp.md](../whatsapp.md), "Cost").
+- **2026-11-12**: #371 merged (d56f0305), Deploy to AWS green, **release 178**; #372 merged
+  (b54089df) with `AWS_WHATSAPP=off`, Deploy green, **release 179** (`/api/version`, `readyz` 200).
+  Checked after each: the database `available` and the same instance, nothing pending; no alarm in
+  ALARM; no API errors in the half hour after. Left for the owner: confirm the alarm email, then
+  change 4 (the command in [aws-deployment.md](../aws-deployment.md#security-events)) before
+  GuardDuty's trial ends ~2026-11-15, and change 1 from 2026-11-14 04:43 UTC.
