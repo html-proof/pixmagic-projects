@@ -5,7 +5,7 @@ import { logger } from "./logger.js";
 import type { NormalizedLineItem, NormalizedOrder, NormalizedProduct, NormalizedSale, NormalizedVariant } from "./normalize.js";
 import { releaseAdLoginsWhere, revokeAdAccessIfUnused } from "./adConnections.js";
 import type { FetchLike } from "./shopify.js";
-import { purgeLegacyWhatsappOps, purgeWhatsappStoreOps } from "./whatsapp/purge.js";
+import { purgeWhatsappStoreOps } from "./whatsapp/purge.js";
 import { purgeZapierStoreOps } from "./zapier/manage.js";
 
 type StoreCtx = Pick<Store, "id" | "workspaceId" | "timezone" | "grantedScopes">;
@@ -956,7 +956,6 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     // behind would tell the next connect's backfill that the history is read already.
     systemDb.shopifyMarketingDay.deleteMany({ where: { storeId } }),
     systemDb.shopifyMarketingSync.deleteMany({ where: { storeId } }),
-    systemDb.funnelDaily.deleteMany({ where: { storeId } }),
     systemDb.funnelVisit.deleteMany({ where: { storeId } }),
     systemDb.funnelProductVisit.deleteMany({ where: { storeId } }),
     systemDb.funnelActionCheck.deleteMany({ where: { storeId } }),
@@ -967,9 +966,7 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     systemDb.adConnection.deleteMany({ where: { storeId } }),
     // WhatsApp Automation: customers' numbers, consent, messages, automations, campaigns and the
     // store's connection (its Evolution API instance goes first: the erase's caller deletes it).
-    // Then what the retired WhatsApp features still hold until their tables are dropped.
     ...purgeWhatsappStoreOps(storeId),
-    ...purgeLegacyWhatsappOps(storeId),
     // Customer Messaging (SMS): customers' numbers, consent history, texts, costs, and the store's sender.
     systemDb.smsDeliveryEvent.deleteMany({ where: { storeId } }),
     systemDb.smsCostRecord.deleteMany({ where: { storeId } }),

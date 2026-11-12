@@ -23,7 +23,6 @@ import { env } from "../env.js";
 import { connectionOf, dailyLimitOf, settingsOf, waDecrypt, type WaSettingsView } from "./common.js";
 import { statusReasonLabel } from "./connection.js";
 import { evolutionConfigured } from "./evolution.js";
-import { retiredConnection } from "./legacy.js";
 import { sentToday } from "./messages.js";
 import { automationProblemsFor } from "./automations.js";
 import { testIsLinkedNumber } from "./settings.js";
@@ -153,7 +152,7 @@ async function stats(storeId: string, since: Date) {
 
 export async function whatsappOverview(store: Store, opts: { contacts: boolean }) {
   const now = Date.now();
-  const [conn, settings, retired] = await Promise.all([connectionOf(store.id), settingsOf(store), retiredConnection(store.id)]);
+  const [conn, settings] = await Promise.all([connectionOf(store.id), settingsOf(store)]);
   const automations = await systemDb.wappAutomation.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "asc" } });
   const active = automations.filter((a) => a.status === "active");
   const blocked: Array<{ id: string; name: string; problems: string[] }> = [];
@@ -217,7 +216,6 @@ export async function whatsappOverview(store: Store, opts: { contacts: boolean }
       lastCheckedAt: conn?.lastCheckedAt ?? null,
     },
     recent: recent.map((m) => waMessageView(m, opts)),
-    retired,
     notice: EVOLUTION_NOTICE,
   };
 }

@@ -149,7 +149,6 @@ export interface WaOverview {
   };
   health: { lastWebhookAt: string | null; lastEventAt: string | null; lastCheckedAt: string | null };
   recent: WaMessage[];
-  retired: { displayPhoneNumber: string | null; connectedAt: string } | null;
   /** Evolution API's licence notice. */
   notice: string;
   can: WaCan;

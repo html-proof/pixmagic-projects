@@ -273,7 +273,6 @@ DELETE FROM webhook_events WHERE received_at < now() - interval '30 days' AND st
 DELETE FROM pixel_events_seen WHERE seen_at < now() - interval '14 days';
 -- Storefront visits behind the funnel: keep 13 months so a 12-month comparison still works.
 DELETE FROM funnel_visits WHERE day < to_char(now() - interval '13 months', 'YYYY-MM-DD');
-DELETE FROM email_otps WHERE created_at < now() - interval '1 day';
 ```
 
 ## Local stack recovery

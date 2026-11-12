@@ -18,7 +18,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rls;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['email_otps', 'pixel_events_seen', 'auth_identities', 'auth_events', 'user_sessions', 'zapier_tokens', '_prisma_migrations',
+  FOREACH t IN ARRAY ARRAY['pixel_events_seen', 'auth_identities', 'auth_events', 'user_sessions', 'zapier_tokens', '_prisma_migrations',
                            -- The self-hosted runtime's queue, schedules and coordinator (migration 20261106120000_selfhost_runtime).
                            'job_queue', 'job_dead', 'schedule_ticks', 'coord_entries',
                            -- The app's own sign-in directory (migration 20261107120000_own_sign_in).
@@ -90,7 +90,7 @@ BEGIN
   -- Tables that belong to no workspace (people, sign-in, intake): the system paths read them in every
   -- scope, since sign-in needs them before any workspace is known. Named one by one, so a table only
   -- joins this list in review.
-  FOREACH t IN ARRAY ARRAY['users', 'auth_identities', 'auth_events', 'user_sessions', 'email_otps', 'pixel_events_seen', 'auth_accounts', 'auth_refresh_tokens'] LOOP
+  FOREACH t IN ARRAY ARRAY['users', 'auth_identities', 'auth_events', 'user_sessions', 'pixel_events_seen', 'auth_accounts', 'auth_refresh_tokens'] LOOP
     IF to_regclass(format('public.%I', t)) IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = format('public.%I', t)::regclass AND p.polname = 'system_any') THEN
       EXECUTE format('CREATE POLICY system_any ON public.%I TO app_system USING (true) WITH CHECK (true)', t);

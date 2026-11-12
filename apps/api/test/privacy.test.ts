@@ -40,10 +40,6 @@ async function scenario() {
     },
   });
   await systemDb.wappConsentEvent.create({ data: { workspaceId: ws, storeId: store.id, contactId: contact.id, scope: "marketing", status: "opted_in", source: "whatsapp_start", occurredAt: new Date("2026-10-02T00:00:00Z") } });
-  // And what the earlier WhatsApp feature still holds about them (found by the same hash).
-  await systemDb.whatsappContact.create({
-    data: { workspaceId: ws, storeId: store.id, phoneHash: waPhoneHash(store.id, "61412345678"), phoneEnc: "legacy", phoneMasked: "+61 •••••• 678", customerKey: customerKey(store, "7") },
-  });
   const { request } = await recordDataRequest(store, { requestId: "9999", customerId: "7", phone: "+61 412 345 678", email: "pat@example.com", ordersRequested: [] });
   await systemDb.alert.create({ data: { workspaceId: ws, storeId: store.id, severity: "warning", code: "privacy_request", message: "m" } });
   return { owner, ws, store, request };
@@ -70,7 +66,8 @@ describe("privacy requests", () => {
     expect(body.orders[0]).toMatchObject({ total: "49", currency: "USD" });
     expect(body.whatsapp.contacts).toEqual([expect.objectContaining({ phone: "+61412345678", firstName: "Pat", marketing: "opted_in" })]);
     expect(body.whatsapp.consent).toEqual([expect.objectContaining({ scope: "marketing", status: "opted_in", source: "whatsapp_start" })]);
-    expect(body.whatsapp.olderRecords).toBe(1);
+    // The retired WhatsApp tables are gone (2026-11-12), and their count with them.
+    expect(body.whatsapp).not.toHaveProperty("olderRecords");
     expect(body.request).toMatchObject({ shopifyRequestId: "9999", customerId: "7" });
 
     const after = await systemDb.dataRequest.findUniqueOrThrow({ where: { id: request.id } });

@@ -129,7 +129,7 @@ time limit (`withTimeout`: 30 s, 10 s for Cognito), so a hung provider fails lik
 | Store connection and sync | api `routes/shopify.ts`, `connectStore.ts`, `sync.ts`; worker | stores, sync_jobs, webhook_events |
 | Commerce data | core `shopifyQueries.ts` (what is asked), `normalize.ts` + `persist.ts` | orders, order_line_items, refunds, products, product_variants |
 | Aggregates | core `persist.ts` (`recomputeDays`) | daily_store_metrics |
-| Storefront funnel | api `routes/pixel.ts` | funnel_visits, funnel_daily, pixel_events_seen |
+| Storefront funnel | api `routes/pixel.ts` | funnel_visits, funnel_product_visits, pixel_events_seen |
 | Advertising | core `ads/` (one client per platform), `adConnections/` (connections, tokens, sync, reports) | ad_connections, ad_campaign_daily, adsense_daily |
 | WhatsApp | core `whatsapp/*` | whatsapp_* (9 tables), order_tracking(_events), abandoned_checkouts, customer_reviews |
 

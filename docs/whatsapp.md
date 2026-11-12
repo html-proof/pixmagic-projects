@@ -152,7 +152,7 @@ provider), so the running task moves at once.
 | Campaigns | `whatsapp/campaigns.ts` |
 | Settings, the test number, Pause all automation | `whatsapp/settings.ts` |
 | The 15-minute sweep, retention | `whatsapp/sweep.ts` |
-| Privacy (export, customers/redact, key rotation), erasing a store, the old tables | `whatsapp/privacy.ts`, `whatsapp/purge.ts`, `whatsapp/legacy.ts` |
+| Privacy (export, customers/redact, key rotation), erasing a store | `whatsapp/privacy.ts`, `whatsapp/purge.ts` |
 | Merchant API | `apps/api/src/routes/whatsapp.ts`; machine endpoints: `whatsappWebhook.ts` |
 | Jobs | `apps/worker/src/handlers/integrations.ts` (`runWhatsappJob`), `apps/worker/src/index.ts` (queue, sweep) |
 | Evolution's database (role, database, nightly prune) | `apps/aws/src/evolutionDb.ts`, the cron's `evolution-db` action |
@@ -493,17 +493,20 @@ now"); people with a role (admins, developers, testers) can connect their own bu
 
 ## The old tables
 
-Two earlier designs, both erase-only now (`whatsapp/legacy.ts`): customers/redact and shop/redact
-erase there, and a data request counts what they hold. No store connected through the 2026-10-25
-design, so it left no token at Nango, and erasing a store no longer asks Nango for one
-([ads-setup.md](ads-setup.md#leaving-nango), step (c)).
+**Dropped on 2026-11-12** (migration `20261112120000_drop_retired_tables`; the owner's yes that day,
+item 6 of the cost recommendations). They were the tables of two earlier designs, kept erase-only
+since 2026-10-26 so a rollback still found them:
 
-- 2026-10-10 to 2026-10-24: `whatsapp_*`, `order_trackings`, `order_tracking_events`,
+- 2026-10-10 to 2026-10-24: `whatsapp_*` (9 tables), `order_trackings`, `order_tracking_events`,
   `abandoned_checkouts`, `customer_reviews`.
-- 2026-10-25: `wa_*` (Meta Cloud API, the token at Nango).
+- 2026-10-25: `wa_*` (11 tables; Meta Cloud API, the token at Nango).
 
-**Next step, a follow-up pull request** once this release is the one a failed deploy rolls back to:
-drop both sets (after recording their row counts), remove their models and `legacy.ts`.
+Every one held 0 rows on production on 2026-10-29 and again on 2026-11-12 right before the drop
+(the cron's `counts` action), so no customer's or store's data went with them, and a manual
+snapshot of the database was taken first. With them went `whatsapp/legacy.ts` (customers/redact,
+shop/redact and the data request's count on those tables) and the page's note about a retired
+connection. WhatsApp Automation's own tables are `wapp_*`; the abandoned checkouts report is a
+dataset in `shopify_reports`, not the dropped table of that name.
 
 ## Testing
 
