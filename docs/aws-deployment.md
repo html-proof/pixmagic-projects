@@ -1344,7 +1344,8 @@ on the 1st and the month stood at US$64.20 with GST on the 11th.
 What is left after that, none of it done: a 1-year No Upfront reservation of the database takes
 its hour from US$0.025 to 0.020 (~3.65 a month; AWS could not charge the card for the two orders
 of 2026-10-18), the six secrets could move to free Parameter Store SecureStrings (~2.5), and the
-three manual snapshots of October count toward the backups charged above.
+three manual snapshots of October counted toward the backups charged above until the owner had
+them deleted on 2026-11-12 (MIGRATION_STATUS.md, change 18).
 
 **Budget** `insights-production-monthly-<digest>`: US$50 since 2026-11-12 (US$80 before), tax
 included, emails `budgetEmail` when the month passes 50/70/85/95% (US$25/35/42.50/47.50; they were
@@ -1382,8 +1383,9 @@ now: `aws lambda invoke --region ap-southeast-2 --function-name insights-product
 the log line `cost report sent` carry Resend's message id, never the address. Turn it off with
 `costReport: false` (or `-c costReport=off` for one deploy).
 
-Not costing anything yet, but watch: three manual RDS snapshots never expire, and backups may pass
-the 20 GB free allowance once the chain fills (7 days since 2026-11-12, 14 before); three CDK helper
+Watch: a manual RDS snapshot never expires (one is left, `insights-production-pre-table-drop-20261112`;
+the three of October were deleted on 2026-11-12), and backups pass the 20 GB free allowance
+(`ChargedBackupUsage`; kept 7 days since 2026-11-12, 14 before); three CDK helper
 log groups keep logs forever (under a cent a month; the RDS postgresql group expires like the
 functions' logs since 2026-11-12); storage autoscaling can grow the disk to 100 GB and it never shrinks back.
 

@@ -26,5 +26,6 @@ are the runbook's ([../aws-deployment.md](../aws-deployment.md), "Roll back"):
 - The daily cost email gives the before figure; note it in [MIGRATION_STATUS.md](MIGRATION_STATUS.md).
 - For changes 8 and 9: the Deploy replaces network routes and modifies the database. Merge them on
   their own, not with other changes, and not while another Deploy is running.
-- Never delete the database, its automated backups or the three manual snapshots as part of any of
-  these changes.
+- Never delete the database, its automated backups or a manual snapshot as part of any of these
+  changes. (The three manual snapshots of October 2026 were deleted on 2026-11-12 on the owner's
+  own yes, change 18 in [MIGRATION_STATUS.md](MIGRATION_STATUS.md); `pre-table-drop-20261112` stays.)
