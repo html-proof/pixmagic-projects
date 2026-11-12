@@ -10,13 +10,13 @@ change, or the day an owner-only step is done.
 | --- | --- | --- | --- | --- |
 | 1 | Support plan Business Support+ → Basic | 29.00 | Not started: AWS allows it from ~2026-11-14 04:43 UTC | Owner (console) |
 | 2 | 1-year reserved instance for the database | 7.96 | Not started: two orders failed payment on 2026-10-18 | Owner: a payment method AWS can charge |
-| 3 | X-Ray tracing off | 0.46 | Pull request open (2026-11-06), with change 5 | Its Deploy |
+| 3 | X-Ray tracing off | 0.46 | **Live** (#343; checked 2026-11-08: api, jobs and cron `live` on `PassThrough`) | — |
 | 4 | GuardDuty Advanced RDS off | 6.78 | Not started; trial ends ~2026-11-15 | Owner's decision |
-| 5 | WhatsApp service on Fargate Spot | up to ~12.10 | Owner said yes 2026-11-06; pull request open with change 3; switch tried on a throwaway stack first | Its Deploy, then a week of billing for the real rate |
+| 5 | WhatsApp service on Fargate Spot | up to ~12.10 | **Live** (#343; checked 2026-11-08: `insights-production-evolution-a` 1/1 on `FARGATE_SPOT`) | A week of billing for the real rate |
 | 6 | AWS WAF → Cloudflare's rules | 10.08 | Not started | Owner's decision |
 | 7 | Secrets Manager → SSM SecureString | up to 2.43 | Not started (optional) | — |
-| 8 | Database single-AZ | 21.74 | Owner said yes 2026-11-08 (the bill); pull request with change 9 | Its Deploy |
-| 9 | One NAT instance (nat-b, in the database's zone) | ~8.24 | Owner said yes 2026-11-08; pull request with change 8 | Its Deploy |
+| 8 | Database single-AZ | 21.74 | **Live** 2026-11-08, release 174 (#357): `MultiAZ` false, primary 2b, same instance | — |
+| 9 | One NAT instance (nat-b, in the database's zone) | ~8.24 | **Live** 2026-11-08, release 174 (#357): nat-a terminated, both app subnets route to nat-b | — |
 
 ## Services
 
@@ -63,3 +63,9 @@ change, or the day an owner-only step is done.
   (CloudFormation's conditional flag for `MultiAZ`; its own reference says some interruptions, and
   the same instance, created 2026-10-15, went Multi-AZ in place on 2026-10-17), appSubnet1's route
   moves to nat-b, nat-a and its three alarms and launch snapshot are deleted. Nothing else changes.
+- **2026-11-08**: #357 merged (e3f7811b), Deploy to AWS green, **release 174** live (`/api/version`,
+  `readyz` 200). Checked after it: the database `available`, single-AZ in 2b, created 2026-10-15 (not
+  replaced); nat-a terminated, appSubnet1 and appSubnet2 both `0.0.0.0/0` → nat-b, its three alarms
+  OK; no errors in api, jobs or cron, no alarm in ALARM, the dead-letter queue empty, the WhatsApp
+  task 1/1. Changes 3 and 5 (#343) checked live the same day. Left for the owner: change 1 from
+  2026-11-14 04:43 UTC, change 4 before GuardDuty's trial ends (~2026-11-15).
