@@ -26,6 +26,7 @@ const { CiStack } = await import("../lib/ci-stack.js");
 const { AuditStack, ACCOUNT_REGIONS, ANALYZER_NAME } = await import("../lib/audit-stack.js");
 const { viewerRequestCode, ORIGIN_LOCK_HEADER, ORIGIN_LOCK_PROBE } = await import("../lib/viewer-request.js");
 const { MIGRATE_BEFORE_LIVE_CODE, MIGRATE_BEFORE_LIVE_FAILED } = await import("../lib/migrate-before-live.js");
+const { SECRET_PARAMETERS_CODE } = await import("../lib/secret-parameters.js");
 const { API_PATH_PATTERNS } = await import("../../../apps/aws/src/paths.js");
 
 /** Production's Google sign-in client (config.ts). */
@@ -671,6 +672,90 @@ describe("the app stack", () => {
   });
 });
 
+describe("the secrets' copies in Parameter Store (secret-parameters.ts)", () => {
+  type Resource = { Type: string; Properties: Json; DependsOn?: string[]; DeletionPolicy?: string; UpdateReplacePolicy?: string };
+  type Statement = { Effect: string; Action: string | string[]; Resource: Json };
+  const resources = (tpl: Template) => tpl.toJSON().Resources as Record<string, Resource>;
+  const ofType = (tpl: Template, type: string) => Object.entries(resources(tpl)).filter(([, r]) => r.Type === type);
+  const parameterArn = (name: string) => `arn:aws:ssm:ap-southeast-2:605411278365:parameter/insights/production/${name}`;
+  const ALL = ["app", "db-owner", "db-system", "worker-cognito", "origin-lock", "evolution-api", "evolution-db"];
+  /** The statements of the policies attached to the role whose logical id matches. */
+  const statementsOf = (tpl: Template, role: RegExp) =>
+    Object.values(resources(tpl))
+      .filter((r) => r.Type === "AWS::IAM::Policy" && (r.Properties.Roles as Array<{ Ref: string }>).some((x) => role.test(x.Ref)))
+      .flatMap((r) => r.Properties.PolicyDocument.Statement as Statement[]);
+  /** The secrets' parameters a role's statements name with ssm:GetParameter, by effect. */
+  const copies = (statements: Statement[], effect: "Allow" | "Deny") =>
+    statements
+      .filter((s) => s.Effect === effect && [s.Action].flat().includes("ssm:GetParameter"))
+      .flatMap((s) => [s.Resource].flat() as string[])
+      .filter((arn) => typeof arn === "string" && !arn.endsWith("/runtime"))
+      .map((arn) => arn.split("/").pop()!)
+      .sort();
+
+  it("copies every secret of the environment on each release, before any live alias moves", () => {
+    const copiers = ofType(t.app, "Custom::SecretParameters");
+    expect(copiers).toHaveLength(1);
+    const [id, copier] = copiers[0]!;
+    expect(copier.Properties.Secrets).toEqual(ALL.map((n) => `insights/production/${n}`));
+    // The commit: a new release is a new value, so CloudFormation calls the copier again.
+    expect(copier.Properties.Release).toEqual(expect.any(String));
+    const aliases = ofType(t.app, "AWS::Lambda::Alias");
+    expect(aliases).toHaveLength(3);
+    for (const [, alias] of aliases) expect(alias.DependsOn).toContain(id);
+    // And before the migrate gate: its run on the new cron version is the first read of the copies.
+    expect(ofType(t.app, "Custom::MigrateBeforeLive")[0]![1].DependsOn).toContain(id);
+    t.app.hasOutput("SecretCopies", { Value: { "Fn::GetAtt": [id, "Copied"] } });
+  });
+
+  it("leaves the origin lock's out where there is none", () => {
+    const [, copier] = ofType(synth({ env: "staging" }).app, "Custom::SecretParameters")[0]!;
+    expect(copier.Properties.Secrets).toEqual(ALL.filter((n) => n !== "origin-lock").map((n) => `insights/staging/${n}`));
+  });
+
+  it("lets the copier read this environment's secrets and write their parameters, nothing else", () => {
+    const [, fn] = ofType(t.app, "AWS::Lambda::Function").find(([, r]) => r.Properties.FunctionName === "insights-production-secret-parameters")!;
+    expect(fn.Properties).toMatchObject({ Handler: "index.onEvent", Runtime: "nodejs24.x", Timeout: 120, Code: { ZipFile: SECRET_PARAMETERS_CODE } });
+    expect(fn.Properties.VpcConfig).toBeUndefined();
+    expect(fn.Properties.Environment).toBeUndefined();
+    expect(statementsOf(t.app, new RegExp(`^${fn.Properties.Role["Fn::GetAtt"][0]}$`))).toEqual([
+      { Effect: "Allow", Action: "secretsmanager:GetSecretValue", Resource: ALL.map((n) => `arn:aws:secretsmanager:ap-southeast-2:605411278365:secret:insights/production/${n}-*`) },
+      { Effect: "Allow", Action: ["ssm:GetParameter", "ssm:PutParameter"], Resource: ALL.map(parameterArn) },
+      { Effect: "Allow", Action: "cloudformation:DescribeStacks", Resource: { Ref: "AWS::StackId" } },
+    ]);
+    t.app.hasResource("AWS::Logs::LogGroup", { Properties: { LogGroupName: "/aws/lambda/insights-production-secret-parameters" }, DeletionPolicy: "Delete" });
+  });
+
+  it("lets each function read the copies of the secrets it may read, and no other", () => {
+    expect(copies(statementsOf(t.app, /^Fnapi/), "Allow")).toEqual(["app", "db-system", "evolution-api", "worker-cognito"]);
+    expect(copies(statementsOf(t.app, /^Fnjobs/), "Allow")).toEqual(["app", "db-system", "evolution-api"]);
+    expect(copies(statementsOf(t.app, /^Fncron/), "Allow")).toEqual(["app", "db-owner", "db-system", "evolution-api", "evolution-db"]);
+    expect(copies(statementsOf(t.auth, /CognitoEmail/), "Allow")).toEqual(["app"]);
+    // Exact names, never a path or a wildcard.
+    for (const s of [...statementsOf(t.app, /^Fn(api|jobs|cron)/), ...statementsOf(t.auth, /CognitoEmail/)]) {
+      if ([s.Action].flat().some((a) => a.startsWith("ssm:"))) expect(JSON.stringify(s.Resource)).not.toContain("*");
+    }
+  });
+
+  it("refuses the EC2 instances the copies their Systems Manager policy would open: all to the NAT instances, all but its three to the admin host", () => {
+    const denied = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory", "ssm:GetParametersByPath"];
+    const nat = statementsOf(t.data, /NatRole/);
+    expect(nat).toEqual([{ Effect: "Deny", Action: denied, Resource: ALL.map(parameterArn) }]);
+    const admin = statementsOf(t.data, /^AdminRole/).filter((s) => s.Effect === "Deny");
+    expect(admin).toEqual([{ Effect: "Deny", Action: denied, Resource: ["worker-cognito", "origin-lock", "evolution-api", "evolution-db"].map(parameterArn) }]);
+    // What made the refusal necessary: both roles carry the managed policy, which allows ssm:GetParameter on *.
+    for (const role of ofType(t.data, "AWS::IAM::Role").filter(([id]) => /NatRole|^AdminRole/.test(id))) {
+      expect(JSON.stringify(role[1].Properties.ManagedPolicyArns)).toContain("AmazonSSMManagedInstanceCore");
+    }
+  });
+
+  it("keeps every secret if its resource leaves the template, so none is deleted without a recovery window", () => {
+    const secrets = [...ofType(t.data, "AWS::SecretsManager::Secret"), ...ofType(t.auth, "AWS::SecretsManager::Secret")];
+    expect(secrets).toHaveLength(7);
+    for (const [id, s] of secrets) expect([id, s.DeletionPolicy, s.UpdateReplacePolicy]).toEqual([id, "Retain", "Retain"]);
+  });
+});
+
 describe("migrations before the switch (migrate-before-live.ts)", () => {
   type Resource = { Type: string; Properties: Json; DependsOn?: string[]; DeletionPolicy?: string };
   const resources = (tpl: Template) => tpl.toJSON().Resources as Record<string, Resource>;
@@ -1057,8 +1142,11 @@ describe("the origin lock", () => {
     expect(code).toContain("{{resolve:secretsmanager:insights/production/origin-lock:SecretString:::}}");
     // By name, not by an export of the Data stack's: nothing to untangle if the lock is ever removed.
     expect(code).not.toContain("Fn::ImportValue");
-    // None of the functions is given this one: only CloudFormation reads it.
-    expect(JSON.stringify(t.app.findResources("AWS::IAM::Policy"))).not.toContain("origin-lock");
+    // None of the app's functions is given this one, nor its copy in Parameter Store: only
+    // CloudFormation reads it, and the copier that makes that copy (secret-parameters.ts).
+    const policies = Object.entries(t.app.findResources("AWS::IAM::Policy"));
+    const naming = policies.filter(([, p]) => JSON.stringify(p).includes("origin-lock")).map(([id]) => id.replace(/[0-9A-F]{8}$/, ""));
+    expect(naming).toEqual(["SecretParametersHandlerServiceRoleDefaultPolicy"]);
   });
 
   it("reports in production (step one), and isn't made where the app lives on CloudFront's own name", () => {
@@ -1181,7 +1269,8 @@ describe("Cognito's emails", () => {
         expect.objectContaining({ Action: "secretsmanager:GetSecretValue", Resource: "arn:aws:secretsmanager:ap-southeast-2:605411278365:secret:insights/production/app-*" }),
       ]),
     );
-    expect(statements.flatMap((s) => [s.Action].flat()).sort()).toEqual(["kms:Decrypt", "secretsmanager:GetSecretValue"]);
+    // And the same secret's copy in Parameter Store, read first (secret-parameters.ts).
+    expect(statements.flatMap((s) => [s.Action].flat()).sort()).toEqual(["kms:Decrypt", "secretsmanager:GetSecretValue", "ssm:GetParameter"]);
   });
 
   it("runs the package's own entry outside the VPC, retried by Lambda, with an alarm on failures", () => {
@@ -1585,6 +1674,7 @@ describe("Lambda runtimes (Trusted Advisor AWS Lambda Functions Using Deprecated
       "insights-production-cron",
       "insights-production-jobs",
       "insights-production-migrate-before-live",
+      "insights-production-secret-parameters",
     ]);
   });
 

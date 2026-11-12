@@ -13,6 +13,7 @@ import * as sns from "aws-cdk-lib/aws-sns";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import type { Construct } from "constructs";
 import { appVars, COGNITO_TEMPLATE, FUNCTION_DIR, type EnvConfig } from "./config.js";
+import { readSecretParameters } from "./secret-parameters.js";
 
 export interface AuthStackProps extends StackProps {
   /** The app's origin: https://<domain>, or https://<distribution>.cloudfront.net without one. */
@@ -163,6 +164,8 @@ export class AuthStack extends Stack {
     });
     key.grantDecrypt(fn);
     fn.addToRolePolicy(new iam.PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [`arn:aws:secretsmanager:${cfg.region}:${cfg.account}:secret:insights/${cfg.name}/app-*`] }));
+    // The same secret's copy in Parameter Store, read first (secret-parameters.ts).
+    fn.addToRolePolicy(readSecretParameters(cfg, ["app"]));
 
     // The App stack's alarm topic, by name, so this stack adds no export to that one.
     const topic = sns.Topic.fromTopicArn(this, "AlarmTopic", `arn:aws:sns:${cfg.region}:${cfg.account}:${prefix}-alarms`);

@@ -23,6 +23,10 @@
 // Values already in the secret are kept unless a source provides a new one; SESSION_SECRET,
 // APP_RLS_PASSWORD are generated when missing; ORIGIN_VERIFY (CloudFront's) is never touched.
 // Only key names are printed. The value goes to AWS through a temporary file, deleted at once.
+//
+// The secret has a copy in Parameter Store, /insights/<env>/app, which is what the functions read
+// first (docs/aws-migration/SECRETS_TO_PARAMETER_STORE.md): a change is written to both, the secret
+// first. If the copy can't be written, the next Deploy to AWS copies it (the secret is the newer).
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -103,6 +107,13 @@ const COPY = [
 const COPY_PREFIX = /^SHOPIFY_APP_SECRET_[A-Z0-9_]+$/;
 /** Values anyone can read in this repository (packages/core/src/env.ts PUBLIC_SECRET_MARKERS). */
 const PUBLIC = ["change-me", "insights-local-client-secret", "replace_with", "test-session-secret", "e2e-session-secret", "test-pepper", "e2e-pepper", "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="];
+
+/** A standard (free) Parameter Store parameter holds at most this many characters; the secret's copy must fit. */
+export const PARAMETER_LIMIT = 4096;
+
+/** Why the secret's whole text can't be stored, or null: its copy in Parameter Store has to hold it too. */
+export const sizeProblem = (text) =>
+  text.length > PARAMETER_LIMIT ? `the secret would be ${text.length} characters, more than the ${PARAMETER_LIMIT} its copy in Parameter Store can hold: remove a key nothing reads first` : null;
 
 /** The shape a secret's value must have, and what it is called in a refusal. */
 export const secretShape = (name) => SHAPES[name] ?? (COPY_PREFIX.test(name) ? SHOPIFY_SECRET : [/./, "a value"]);
@@ -301,11 +312,22 @@ async function main() {
   const missing = ["TOKEN_ENCRYPTION_KEYS", "OTP_PEPPER", "SHOPIFY_API_SECRET"].filter((k) => !next[k]);
   if (dryRun) report.push("(dry run: nothing was written)");
   else if (JSON.stringify(next) !== JSON.stringify(current)) {
+    const tooLong = sizeProblem(JSON.stringify(next));
+    if (tooLong) throw new Error(`Nothing was saved: ${tooLong}`);
     const dir = mkdtempSync(join(tmpdir(), "insights-secret-"));
     const file = join(dir, "value.json");
     try {
       writeFileSync(file, JSON.stringify(next), { mode: 0o600 });
       aws(["secretsmanager", "put-secret-value", "--secret-id", secretId, "--secret-string", `file://${file}`]);
+      // Its copy, the same text. A failure here is reported by AWS's error code alone (its message
+      // can quote the value); the secret is saved either way and the next deploy copies it.
+      try {
+        aws(["ssm", "put-parameter", "--name", `/${secretId}`, "--type", "SecureString", "--tier", "Standard", "--overwrite", "--value", `file://${file}`]);
+        report.push(`copied to Parameter Store (/${secretId})`);
+      } catch (err) {
+        const code = /\((\w+)\)/.exec(String(err?.stderr ?? ""))?.[1] ?? "error";
+        report.push(`NOT copied to Parameter Store (${code}): the functions keep the old values until the next Deploy to AWS copies it`);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

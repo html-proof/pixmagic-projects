@@ -12,8 +12,10 @@ const script = (await import(new URL("../scripts/put-secrets.mjs", import.meta.u
   metaAppOf: (name: string, publics?: Publics) => { appId: string; version?: string } | null;
   KEEPS_PREVIOUS: Record<string, string>;
   UNSETTABLE: string[];
+  PARAMETER_LIMIT: number;
+  sizeProblem: (text: string) => string | null;
 };
-const { secretProblem, publicSettings, metaAppOf, KEEPS_PREVIOUS, UNSETTABLE } = script;
+const { secretProblem, publicSettings, metaAppOf, KEEPS_PREVIOUS, UNSETTABLE, PARAMETER_LIMIT, sizeProblem } = script;
 
 const META_SECRET = "0123456789abcdef0123456789abcdef";
 const ENTRA_SECRET = "Xyz8Q~abcdefghijklmnopqrstuvwxyz0123456_";
@@ -88,6 +90,14 @@ describe("a public setting pasted as a secret", () => {
     // WhatsApp runs on the Meta Ads app (WHATSAPP_APP_ID is empty): its app id is META_APP_ID.
     expect(secretProblem("WHATSAPP_WEBHOOK_VERIFY_TOKEN", APP_SETTINGS.META_APP_ID)).toMatch(/META_APP_ID/);
     expect(secretProblem("META_APP_SECRET", APP_SETTINGS.META_APP_ID)).toMatch(/META_APP_ID/);
+  });
+
+  it("refuses a secret too long for its copy in Parameter Store (a standard parameter's 4096 characters)", () => {
+    expect(PARAMETER_LIMIT).toBe(4096);
+    expect(sizeProblem("x".repeat(4096))).toBeNull();
+    const problem = sizeProblem("s3cret".repeat(700));
+    expect(problem).toMatch(/4200 characters, more than the 4096/);
+    expect(problem).not.toContain("s3cret");
   });
 
   it("is read from every setting the app ships", () => {

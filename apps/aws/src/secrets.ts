@@ -1,9 +1,31 @@
 import { AwsClient } from "aws4fetch";
 import type { FetchLike } from "@app/core";
 
+/** Where a secret's text came from at this cold start. */
+export type SecretSource = "parameter" | "secret";
+export interface SecretsReport {
+  /** Each secret read, by name (insights/<env>/app), and which store answered. */
+  sources: Record<string, SecretSource>;
+  /** The secrets whose parameter couldn't be used, and why (a status and AWS's error name; never a value). */
+  fallbacks: Record<string, string>;
+}
+
 /**
- * Secrets for AWS hosting come from Secrets Manager at cold start, never from the function's
- * environment (which anyone who can read the function's configuration can see):
+ * The Parameter Store parameter that holds a secret's copy: the secret's name after a slash
+ * (infra/cdk/lib/secret-parameters.ts). The functions are given a secret by name or by ARN, which
+ * ends in a hyphen and six characters Secrets Manager adds.
+ */
+export function secretParameterName(secretId: string): string {
+  const arn = /^arn:[^:]+:secretsmanager:[^:]*:[^:]*:secret:(.+)-[A-Za-z0-9]{6}$/.exec(secretId);
+  return `/${arn ? arn[1] : secretId}`;
+}
+
+/**
+ * Secrets for AWS hosting are read at cold start, never from the function's environment (which
+ * anyone who can read the function's configuration can see). Each is read from its copy in
+ * Parameter Store (a SecureString of the same name after a slash, the same JSON), and from Secrets
+ * Manager itself when that copy is missing or can't be read: the move of change 7,
+ * docs/aws-migration/SECRETS_TO_PARAMETER_STORE.md. The secrets:
  *
  *  - APP_SECRET_ARN (insights/<env>/app): every key it holds is copied, whatever its name. The
  *    app's own: SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER, APP_RLS_PASSWORD. The providers'
@@ -24,13 +46,52 @@ import type { FetchLike } from "@app/core";
  *  - RUNTIME_PARAM: an SSM parameter (JSON, not secret) with APP_URL and the Cognito ids
  *
  * Each JSON key becomes a process.env entry, then the database URLs are built from the pieces
- * (verify-full TLS against the RDS CA bundled as NODE_EXTRA_CA_CERTS). Nothing is logged.
+ * (verify-full TLS against the RDS CA bundled as NODE_EXTRA_CA_CERTS). Nothing is logged here; the
+ * answer says which store each secret came from, for the caller to log (names only).
  */
-export async function loadSecrets(env: NodeJS.ProcessEnv = process.env, fetchImpl: FetchLike = fetch) {
+export async function loadSecrets(env: NodeJS.ProcessEnv = process.env, fetchImpl: FetchLike = fetch): Promise<SecretsReport> {
   const region = env.AWS_REGION ?? "";
   const creds = { accessKeyId: env.AWS_ACCESS_KEY_ID ?? "", secretAccessKey: env.AWS_SECRET_ACCESS_KEY ?? "", sessionToken: env.AWS_SESSION_TOKEN };
+  const report: SecretsReport = { sources: {}, fallbacks: {} };
+  const ssm = new AwsClient({ ...creds, service: "ssm", region });
+  const parameter = async (name: string, decrypt: boolean) => {
+    const signed = await ssm.sign(`https://ssm.${region}.amazonaws.com/`, {
+      method: "POST",
+      headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AmazonSSM.GetParameter" },
+      body: JSON.stringify(decrypt ? { Name: name, WithDecryption: true } : { Name: name }),
+    });
+    const res = await fetchImpl(signed.url, { method: "POST", headers: signed.headers, body: await signed.text() });
+    const json = (await res.json().catch(() => ({}))) as { Parameter?: { Value?: string }; __type?: string };
+    return { value: res.ok ? json.Parameter?.Value : undefined, problem: `${res.status} ${json.__type ?? ""}`.trim() };
+  };
+  /** The secret's copy in Parameter Store, or why it can't be used. */
+  const fromParameter = async (name: string): Promise<Record<string, string> | string> => {
+    try {
+      const { value, problem } = await parameter(name, true);
+      if (!value) return problem;
+      // JSON.parse's own message quotes the text it refused: never passed on.
+      const parsed: unknown = (() => {
+        try {
+          return JSON.parse(value);
+        } catch {
+          return undefined;
+        }
+      })();
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, string>) : "not a JSON object";
+    } catch (err) {
+      return err instanceof Error ? err.name : "request failed";
+    }
+  };
   const signer = new AwsClient({ ...creds, service: "secretsmanager", region });
   const get = async (secretId: string): Promise<Record<string, string>> => {
+    const copyName = secretParameterName(secretId);
+    const copy = await fromParameter(copyName);
+    if (typeof copy !== "string") {
+      report.sources[copyName.slice(1)] = "parameter";
+      return copy;
+    }
+    report.fallbacks[copyName.slice(1)] = copy;
+    report.sources[copyName.slice(1)] = "secret";
     const signed = await signer.sign(`https://secretsmanager.${region}.amazonaws.com/`, {
       method: "POST",
       headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "secretsmanager.GetSecretValue" },
@@ -51,16 +112,9 @@ export async function loadSecrets(env: NodeJS.ProcessEnv = process.env, fetchImp
   // Settings that aren't secret but are only known after the stack that owns them is deployed
   // (APP_URL, the Cognito pool and client): an SSM parameter holding JSON, written by the CDK app.
   if (env.RUNTIME_PARAM) {
-    const ssm = new AwsClient({ ...creds, service: "ssm", region });
-    const signed = await ssm.sign(`https://ssm.${region}.amazonaws.com/`, {
-      method: "POST",
-      headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AmazonSSM.GetParameter" },
-      body: JSON.stringify({ Name: env.RUNTIME_PARAM }),
-    });
-    const res = await fetchImpl(signed.url, { method: "POST", headers: signed.headers, body: await signed.text() });
-    const json = (await res.json().catch(() => ({}))) as { Parameter?: { Value?: string }; __type?: string };
-    if (!res.ok || !json.Parameter?.Value) throw new Error(`Reading parameter ${env.RUNTIME_PARAM} failed (${res.status} ${json.__type ?? ""})`);
-    for (const [k, v] of Object.entries(JSON.parse(json.Parameter.Value) as Record<string, unknown>)) {
+    const { value, problem } = await parameter(env.RUNTIME_PARAM, false);
+    if (!value) throw new Error(`Reading parameter ${env.RUNTIME_PARAM} failed (${problem})`);
+    for (const [k, v] of Object.entries(JSON.parse(value) as Record<string, unknown>)) {
       if (typeof v === "string" && !env[k]) env[k] = v;
     }
   }
@@ -77,4 +131,5 @@ export async function loadSecrets(env: NodeJS.ProcessEnv = process.env, fetchImp
       env.OWNER_DATABASE_URL ??= url(master.username!, master.password!);
     }
   }
+  return report;
 }

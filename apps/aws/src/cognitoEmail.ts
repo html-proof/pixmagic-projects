@@ -105,7 +105,9 @@ let ready: Promise<CognitoEmailDeps> | undefined;
 /** Cold start: the app secret (RESEND_API_KEY) into process.env, the KMS keyring and the mailer, once per instance. */
 function deps(): Promise<CognitoEmailDeps> {
   ready ??= (async (): Promise<CognitoEmailDeps> => {
-    await loadSecrets();
+    const { sources, fallbacks } = await loadSecrets();
+    logger.info({ sources }, "secrets loaded");
+    for (const [name, why] of Object.entries(fallbacks)) logger.warn({ name, why }, "this secret's copy in Parameter Store couldn't be read: read from Secrets Manager instead");
     const keyArn = process.env.COGNITO_EMAIL_KEY_ARN;
     if (!keyArn) throw new Error("COGNITO_EMAIL_KEY_ARN is not set");
     // Decrypt only, and only with this key (strict mode: data keys under any other key are ignored).

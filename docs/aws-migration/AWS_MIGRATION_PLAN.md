@@ -99,10 +99,11 @@ counted over 60 seconds (Cloudflare Free counts over 10). What stays: the app's 
 (1,500 a minute, `apps/aws/src/app.ts`, counted in DynamoDB) and every per-route limit. Back:
 re-add the web ACL ([aws-deployment.md](../aws-deployment.md), "Domain").
 
-**7. Secrets Manager → SSM Parameter Store SecureString** (up to 2.43, optional). Six secrets at
-0.40 each; SecureString parameters in the standard tier are free. `loadSecrets`
-(`apps/aws/src/secrets.ts`) reads both kinds already. Careful work for the two database logins that
-CloudFormation generated and the ECS task reads, and the smallest saving here, so last.
+**7. Secrets Manager → SSM Parameter Store SecureString** (2.97 since the origin lock's secret made
+seven; 2.43 when this was written, with six). 0.40 a secret; SecureString parameters in the
+standard tier are free. `loadSecrets` (`apps/aws/src/secrets.ts`) reads both kinds. Careful work for
+the database logins that CloudFormation generated and the ECS task reads, so it goes in three
+releases, the first shipped 2026-11-12: [SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md).
 
 ## Step 3: give up high availability (saves ~29.98)
 

@@ -14,6 +14,7 @@ import * as cr from "aws-cdk-lib/custom-resources";
 import type { Construct } from "constructs";
 import { originLockSecretName, type EnvConfig } from "./config.js";
 import { NatInstancePerAz, SWAP_FILE_COMMANDS } from "./nat-instances.js";
+import { SECRET_NAMES, denySecretParameters } from "./secret-parameters.js";
 import { accessLogBucket, loggedBucket } from "./s3-access-logs.js";
 
 /** PostgreSQL 17, as on the PC (minor upgrades are automatic in the maintenance window). */
@@ -86,6 +87,9 @@ export class DataStack extends Stack {
       },
     });
     this.natInstances = nat.instances;
+    // The NAT instances read no secret. Systems Manager's managed policy would let them read every
+    // parameter, the secrets' copies included (secret-parameters.ts): refused outright.
+    nat.role?.addToPolicy(denySecretParameters(cfg, SECRET_NAMES));
 
     // Keep each NAT instance running: the host failing → recover it onto healthy hardware; the
     // instance itself failing (kernel, network) → reboot it. Either way the instance id and its
@@ -181,6 +185,11 @@ export class DataStack extends Stack {
       caCertificate: rds.CaCertificate.RDS_CA_RSA2048_G1,
     });
     this.dbSecret = this.db.secret!;
+    // Kept if it ever leaves the template, like the secrets below (CloudFormation would otherwise
+    // delete it at once, with no recovery window): the owner's password exists nowhere else.
+    // The secret itself (the instance's child) and its attachment, which is what `db.secret` is.
+    (this.db.node.findChild("Secret") as secretsmanager.Secret).applyRemovalPolicy(RemovalPolicy.RETAIN);
+    this.db.secret!.applyRemovalPolicy(RemovalPolicy.RETAIN);
     this.dbLogGroupName = `/aws/rds/instance/${prefix}/postgresql`;
     // The system paths' own database login, app_system (docs/system-database-role.md): not the
     // tables' owner, so row-level security applies to it. Generated here once and never seen by
@@ -303,6 +312,9 @@ export class DataStack extends Stack {
     this.dbSecret.grantRead(adminRole);
     this.systemDbSecret.grantRead(adminRole);
     this.appSecret.grantRead(adminRole);
+    // In Parameter Store too, it reads those three secrets' copies and no other (its managed policy
+    // allows ssm:GetParameter on every parameter; secret-parameters.ts).
+    adminRole.addToPolicy(denySecretParameters(cfg, SECRET_NAMES.filter((n) => !["app", "db-owner", "db-system"].includes(n))));
     this.adminHost = new ec2.Instance(this, "AdminHost", {
       instanceName: `${prefix}-admin`,
       vpc: this.vpc,

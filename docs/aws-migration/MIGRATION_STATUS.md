@@ -14,7 +14,7 @@ change, or the day an owner-only step is done.
 | 4 | GuardDuty RDS protection off, both features (`RDS_LOGIN_EVENTS` 2.26 and Advanced RDS, `RDS_DATA_RISK`, 6.78) | ~9.04 | Our own checks in its place: change 10. Both features still `ENABLED` on 2026-11-12, 3 trial days left | Owner: one command ([aws-deployment.md](../aws-deployment.md#security-events)), once the alarm email is confirmed |
 | 5 | WhatsApp service on Fargate Spot | up to ~12.10 | **Live** (#343; checked 2026-11-08: `insights-production-evolution-a` 1/1 on `FARGATE_SPOT`) | A week of billing for the real rate |
 | 6 | AWS WAF → Cloudflare's rules | 10.08 (less 0.40 for the lock's secret) | **In progress** (owner's "just do it", 2026-11-12). Step 1 of 3, the origin lock: `"report"` **live** 2026-11-12, release 180 (#375), nothing refused yet; `/edge-lock` answers 403 until Cloudflare sends the header. The WAF still on | Owner: add the header in Cloudflare ([aws-deployment.md](../aws-deployment.md#origin-lock-only-cloudflare-reaches-cloudfront)); then the lock enforces, then the rate rule, then the WAF goes |
-| 7 | Secrets Manager → SSM SecureString | up to 2.43 | Not started (optional) | — |
+| 7 | Secrets Manager → Parameter Store SecureString, all seven secrets, in three steps ([SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md)) | 2.97 (7 × 0.40 and their requests), once the secrets are deleted in step 3; nothing yet | **In progress.** Step 1 of 3 (2026-11-12): every release copies each secret, unchanged, into a parameter of the same name, and the functions read the parameter first, the secret as fallback. The secrets all still exist | A week of `secrets loaded` log lines on `parameter`, then step 2 (nothing reads Secrets Manager), then step 3 (the secrets deleted with a 30-day recovery window) |
 | 8 | Database single-AZ | 21.74 | **Live** 2026-11-08, release 174 (#357): `MultiAZ` false, primary 2b, same instance | — |
 | 9 | One NAT instance (nat-b, in the database's zone) | ~8.24 | **Live** 2026-11-08, release 174 (#357): nat-a terminated, both app subnets route to nat-b | — |
 | 10 | Our own security monitoring: `db-login-failures` alarm, five EventBridge rules to the alarm topic | −0.40 (it costs that) | **Live** 2026-11-12, release 178 (#371): the alarm in `OK`, five rules in Sydney and two in us-east-1 `ENABLED` | The alarm email confirmed (change 12) |
@@ -42,8 +42,8 @@ change, or the day an owner-only step is done.
 | ElastiCache | Not used | — |
 | Cognito | Kept | US$0 |
 | API Gateway | Not used | — |
-| Secrets Manager | Kept | Change 7 |
-| Systems Manager | Kept | US$0 |
+| Secrets Manager | Kept until change 7's step 3 | Change 7: each secret has a copy in Parameter Store since step 1 |
+| Systems Manager | Kept | US$0; Parameter Store holds the secrets' copies (standard tier, free) |
 | CloudFront | Kept | US$0 |
 | EC2 (NAT instance, admin host) | Kept | Change 9: one NAT instance from 2026-11-08 |
 | NAT Gateway | Replaced 2026-10-17 by NAT instances | — |
@@ -147,3 +147,14 @@ change, or the day an owner-only step is done.
   184** (`/api/version`, `readyz` 200). Checked after it: one budget,
   `insights-production-monthly-3b3edbc8`, US$50, alerts at 50/70/85/95% and on the forecast; no
   alarm in ALARM.
+- **2026-11-12**: change 7, step 1 of 3 ([SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md)).
+  Measured first (read-only): seven secrets, the largest (`app`) 1,201 characters with 18 keys, so
+  each fits a free standard parameter as it is; none has to stay in Secrets Manager (the three
+  values CloudFormation reads at deploy time go through a custom resource in step 2), so the saving
+  is the whole US$2.97 a month, ~3.27 with GST, once step 3 deletes the secrets. Step 1 changes no
+  value and removes nothing: a copier in the App stack writes each secret's text into
+  `/insights/production/<name>` on every release, the functions read that first and the secret
+  when they can't, and `put-secrets.mjs` writes both. Found on the way: the NAT instance's and the
+  admin host's Systems Manager policy allows reading every parameter, so both roles now carry a
+  Deny on the secrets' copies; and `db-owner` and `worker-cognito` would have been deleted with no
+  recovery window if their resources ever left a template, so both are now kept on removal.
