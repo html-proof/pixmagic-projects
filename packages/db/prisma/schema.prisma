@@ -819,8 +819,6 @@ model Order {
   /// fallback for orders without customerOrderIndex (settleReturningCustomers in core).
   customerOrderCount  Int?            @map("customer_order_count")
   lineItems           OrderLineItem[]
-  /// No longer written: returns are read from Shopify's sales (order_sales) instead.
-  refunds             Refund[]
   sales               OrderSale[]
 
   @@unique([storeId, shopifyId])
@@ -854,21 +852,9 @@ model OrderLineItem {
   @@map("order_line_items")
 }
 
-model Refund {
-  id               String   @id @default(cuid())
-  workspaceId      String   @map("workspace_id")
-  storeId          String   @map("store_id")
-  orderId          String   @map("order_id")
-  shopifyId        String   @map("shopify_id")
-  localDay         String   @map("local_day")
-  shopifyCreatedAt DateTime @map("shopify_created_at")
-  lineSubtotal     Decimal  @map("line_subtotal") @db.Decimal(18, 2)
-  order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  @@unique([storeId, shopifyId])
-  @@index([storeId, localDay])
-  @@map("refunds")
-}
+// The refunds table (one row per Shopify refund) was dropped on 2026-11-12 by migration
+// 20261112130000_drop_refunds: returns are read from Shopify's sales records (order_sales, below)
+// since 2026-10-16, and nothing wrote it after that.
 
 // A store's full order history (read_all_orders), imported one store-local calendar year at a time,
 // newest first (packages/core/src/orderHistory.ts): one row per year of the import's plan, so the

@@ -41,7 +41,7 @@ Each app's toml (`shopify-app/shopify.app*.toml`) subscribes its stores to its t
 
 - A processed event (`status=succeeded`) is skipped on re-run.
 - Order/product upserts are keyed by `(store_id, shopify_id)` and **ignore payloads older than the stored `updated_at`**, so out-of-order delivery can't regress data.
-- Line items are replaced wholesale per order; refunds upsert by id.
+- Line items are replaced wholesale per order, and so are its sales records (`order_sales`), which hold its refunds.
 - Aggregates are recomputed from source rows for each affected day (`recomputeDays`), never incremented, so replays converge to the same numbers.
 
 ### Retries & failure

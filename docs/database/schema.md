@@ -32,7 +32,7 @@ Workspace ──< Membership >── User           (role: owner | admin | analy
 | Identity and access | `users`, `workspaces`, `memberships`, `invitations`, `api_keys`, `notification_preferences` | API (auth, workspaces) |
 | Billing | `subscriptions` | API (subscribe), worker (`app_subscriptions/update`) |
 | Store connection | `stores` (encrypted tokens, granted scopes, pixel key), `sync_jobs`, `webhook_events` | API (OAuth), worker |
-| Commerce data | `orders`, `order_line_items`, `refunds`, `products`, `product_variants` | worker (imports, webhooks) through `core/persist.ts` |
+| Commerce data | `orders`, `order_line_items`, `order_sales` (Shopify's sales records: sales, returns, edits), `products`, `product_variants` | worker (imports, webhooks) through `core/persist.ts` |
 | Aggregates | `daily_store_metrics` (one row per store and store-local day) | worker (`recomputeDays`) |
 | Storefront funnel | `funnel_visits`, `funnel_product_visits`, `pixel_events_seen` | API (`/pixel`) |
 | Shopping Funnel checklist | `funnel_action_checks` | API (`PUT …/funnel/actions/:id`) |
