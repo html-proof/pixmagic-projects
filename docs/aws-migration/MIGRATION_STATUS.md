@@ -9,7 +9,7 @@ change, or the day an owner-only step is done.
 | # | Change | Saves / month (before GST) | Status | Waiting on |
 | --- | --- | --- | --- | --- |
 | 1 | Support plan Business Support+ → Basic | 29.00 | Not started: AWS allows it from ~2026-11-14 04:43 UTC | Owner (console) |
-| 2 | 1-year reserved instance for the database | 7.96 | Not started: two orders failed payment on 2026-10-18 | Owner: a payment method AWS can charge |
+| 2 | 1-year reserved instance for the database | 3.65 single-AZ (US$0.025 → 0.020 an hour; 7.96 was the Multi-AZ figure) | Not started: two orders failed payment on 2026-10-18 | Owner: a payment method AWS can charge |
 | 3 | X-Ray tracing off | 0.46 | **Live** (#343; checked 2026-11-08: api, jobs and cron `live` on `PassThrough`) | — |
 | 4 | GuardDuty RDS protection off, both features (`RDS_LOGIN_EVENTS` 2.26 and Advanced RDS, `RDS_DATA_RISK`, 6.78) | ~9.04 | Our own checks in its place: change 10. Both features still `ENABLED` on 2026-11-12, 3 trial days left | Owner: one command ([aws-deployment.md](../aws-deployment.md#security-events)), once the alarm email is confirmed |
 | 5 | WhatsApp service on Fargate Spot | up to ~12.10 | **Live** (#343; checked 2026-11-08: `insights-production-evolution-a` 1/1 on `FARGATE_SPOT`) | A week of billing for the real rate |
@@ -22,7 +22,8 @@ change, or the day an owner-only step is done.
 | 12 | The alarm email reaches someone | 0 | The topic had no subscriber on 2026-11-12; a confirmation email was sent that day and the deploy's subscription (#371) is the same one. Still `PendingConfirmation` at release 179 | Owner: click "Confirm subscription" in AWS's email (spam too) |
 | 13 | WhatsApp service switched off (`AWS_WHATSAPP=off`: no Fargate task; everything else kept) | ~5-7 on Spot (17.29 on demand) | **Live** 2026-11-12, release 179 (#372): the ECS service at 0 of 0 tasks, no `whatsapp-service-*` alarm, the app answers WhatsApp isn't set up | A week of billing for the figure |
 | 14 | 26 unused tables dropped (the two old WhatsApp designs, `email_otps`, `funnel_daily`), all empty | ~0 (tidiness) | **Live** 2026-11-12, release 181 (#374; the owner's yes that day, kept on 2026-10-29): 131 tables left, none of the 26 among them | — |
-| 15 | `refunds` dropped too (2 rows, written before returns were read from `order_sales` on 2026-10-16) | ~0 (tidiness) | Pull request 2026-11-12 (the owner's "drop refunds too" that day) | Its Deploy |
+| 15 | `refunds` dropped too (2 rows, written before returns were read from `order_sales` on 2026-10-16) | ~0 (tidiness) | **Live** 2026-11-12, release 182 (#378; the owner's "drop refunds too" that day): 130 tables left, `refunds` not among them | — |
+| 16 | Budget US$80 → US$50, tax included: the owner's ceiling since 2026-11-12 ([aws-deployment.md](../aws-deployment.md), "The US$50 ceiling") | 0 (it only emails) | #379, 2026-11-12. November is already above US$50 (64.20 with GST on the 11th), so its emails come at once | The ceiling itself needs changes 1, 4 and 6: ~46 a month with GST once all three are done, ~57 with the WAF left, ~89 with the support plan left too |
 
 ## Services
 
@@ -121,3 +122,12 @@ change, or the day an owner-only step is done.
   181**. Checked after it: 131 tables, the 12 `wapp_*` tables and `refunds` (2 rows) there, 67
   migrations applied, `readyz` 200, no alarm in ALARM, the dead-letter queue empty, no function
   errors in the half hour after.
+- **2026-11-12**: change 15. `refunds` at 2 rows before the merge (they are in the snapshot
+  `insights-production-pre-table-drop-20261112`). #378 merged (5456be17), Deploy to AWS green,
+  **release 182**. Checked after it: 130 tables, `refunds` gone, `order_sales` 699 and `orders` 291
+  as before, 68 migrations applied, `readyz` 200, no alarm in ALARM.
+- **2026-11-12**: the owner set the ceiling at **US$50 a month with GST** ("last time it was
+  $100"). Cost Explorer for 2026-11-10: US$1.88 a day, of which the WhatsApp service (0.18) is
+  off since release 179. The month so far, to the 11th: 64.20 with GST, of it 29 the support plan
+  and 5.83 GST. Budget lowered to 50 (change 16). What a day is made of and what the month comes
+  to: [aws-deployment.md](../aws-deployment.md), "The US$50 ceiling".
