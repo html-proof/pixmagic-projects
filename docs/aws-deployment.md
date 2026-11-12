@@ -1410,7 +1410,7 @@ its two RDS features, `RDS_LOGIN_EVENTS` and `RDS_DATA_RISK`, are the owner's to
 the alarm email is confirmed:
 
 ```
-aws guardduty update-detector --region ap-southeast-2 --detector-id 2cc280b1e6b94af686f44551c5029339 --features "[{\"Name\":\"RDS_LOGIN_EVENTS\",\"Status\":\"DISABLED\",\"AdditionalConfiguration\":[{\"Name\":\"RDS_DATA_RISK\",\"Status\":\"DISABLED\"}]}]"
+aws guardduty update-detector --region ap-southeast-2 --detector-id 2cc280b1e6b94af686f44551c5029339 --features 'Name=RDS_LOGIN_EVENTS,Status=DISABLED,AdditionalConfiguration=[{Name=RDS_DATA_RISK,Status=DISABLED}]'
 ```
 
 (`ENABLED` twice turns them back on; GuardDuty then re-learns the database's normal logins.)
