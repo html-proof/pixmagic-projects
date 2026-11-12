@@ -15,8 +15,12 @@ const VALUE = "s3cr3t-value-never-shown";
 const OLD = new Date("2026-11-01T00:00:00Z");
 const NEW = new Date("2026-11-12T00:00:00Z");
 
-function load(world: { secrets?: Record<string, Secret>; parameters?: Record<string, Parameter>; putError?: string; stack?: string | { error: string } }) {
+function load(world: { secrets?: Record<string, Secret>; parameters?: Record<string, Parameter>; putError?: string; stack?: string | { error: string }; refusedFirst?: number }) {
   const secrets = world.secrets ?? {};
+  let refusals = world.refusedFirst ?? 0;
+  const delays: number[] = [];
+  // The handler's clock: each wait it asks for passes at once.
+  let now = 1_000_000;
   const parameters = { ...(world.parameters ?? {}) };
   const puts: Array<Record<string, unknown>> = [];
   const logs: string[] = [];
@@ -36,6 +40,7 @@ function load(world: { secrets?: Record<string, Secret>; parameters?: Record<str
     "@aws-sdk/client-secrets-manager": {
       GetSecretValueCommand: command("GetSecretValue"),
       SecretsManagerClient: client(({ input }) => {
+        if (refusals-- > 0) throw named("AccessDeniedException");
         const s = secrets[input.SecretId!];
         if (!s) throw named("ResourceNotFoundException");
         if ("error" in s) throw named(s.error);
@@ -69,8 +74,19 @@ function load(world: { secrets?: Record<string, Secret>; parameters?: Record<str
     },
   };
   const module = { exports: {} as { onEvent: (event: unknown) => Promise<Answer> } };
-  new Function("require", "exports", "module", "console", SECRET_PARAMETERS_CODE)((name: string) => modules[name], module.exports, module, { log: (line: string) => logs.push(line) });
-  return { onEvent: module.exports.onEvent, puts, logs, parameters };
+  new Function("require", "exports", "module", "console", "setTimeout", "Date", SECRET_PARAMETERS_CODE)(
+    (name: string) => modules[name],
+    module.exports,
+    module,
+    { log: (line: string) => logs.push(line) },
+    (f: () => void, ms: number) => {
+      delays.push(ms);
+      now += ms;
+      f();
+    },
+    { now: () => now },
+  );
+  return { onEvent: module.exports.onEvent, puts, logs, parameters, delays };
 }
 
 const STACK = "arn:aws:cloudformation:ap-southeast-2:605411278365:stack/InsightsApp-production/0f1e2d3c";
@@ -131,6 +147,21 @@ describe("the secrets' copies in Parameter Store (secret-parameters.ts)", () => 
       `${SECRET_PARAMETERS_FAILED} (nothing moved to the new release): app (reading the secret: AccessDeniedException)`,
     );
     expect(puts.map((p) => p.Name)).toEqual(["/insights/production/db-owner"]);
+  });
+
+  it("waits for IAM to take its new role in: a call refused in the first 90 seconds is tried again, 5 s apart", async () => {
+    const { onEvent, puts, delays } = load({ secrets: { "insights/production/app": secret(VALUE) }, refusedFirst: 3 });
+    const answer = await onEvent(event("Create", ["insights/production/app"]));
+    expect(delays).toEqual([5000, 5000, 5000]);
+    expect(puts).toHaveLength(1);
+    expect(answer.Data).toEqual({ Copied: "app: created" });
+  });
+
+  it("stops waiting after 90 seconds: a role that really may not read fails the release", async () => {
+    const { onEvent, delays } = load({ secrets: { "insights/production/app": secret(VALUE), "insights/production/db-owner": secret(VALUE) }, refusedFirst: 1000 });
+    await expect(onEvent(event("Create", ["insights/production/app", "insights/production/db-owner"]))).rejects.toThrow("app (reading the secret: AccessDeniedException)");
+    // 18 waits of 5 s, all on the first secret; the second is refused once and not waited for.
+    expect(delays).toHaveLength(18);
   });
 
   it("refuses a secret longer than a standard parameter holds, rather than paying for an advanced one", async () => {

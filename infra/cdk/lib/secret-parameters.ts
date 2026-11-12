@@ -63,6 +63,10 @@ export const SECRET_PARAMETERS_FAILED = "secret-parameters failed";
  * value. No value is logged, and an AWS error is reported by its name alone: a validation message
  * can quote the text it refused.
  *
+ * For its first 90 seconds it tries again, 5 s apart, a call refused for lack of permission or
+ * throttled: on the release that creates it, IAM may still be taking its role in (as for
+ * migrate-before-live.ts). After that an error stands.
+ *
  * A failure fails the release (before any `live` alias moves) only while the stack is going
  * forward. On a CloudFormation rollback the old properties come back as another update: a failure
  * there would leave the stack unable to finish rolling back, so it is reported and passed over.
@@ -76,8 +80,15 @@ const C = require("@aws-sdk/client-cloudformation");
 const sm = new M.SecretsManagerClient({});
 const ssm = new S.SSMClient({});
 const cfn = new C.CloudFormationClient({});
+const WAIT = ["AccessDenied", "AccessDeniedException", "Throttling", "ThrottlingException"];
+let until = 0;
 const step = async (what, call) => {
-  try { return await call(); } catch (e) { throw Object.assign(new Error(what + ": " + (e.name || "Error")), { name: e.name }); }
+  for (;;) {
+    try { return await call(); } catch (e) {
+      if (WAIT.includes(e.name) && Date.now() < until) { await new Promise((r) => setTimeout(r, 5000)); continue; }
+      throw Object.assign(new Error(what + ": " + (e.name || "Error")), { name: e.name });
+    }
+  }
 };
 const copy = async (name) => {
   let secret, param;
@@ -102,6 +113,7 @@ const copy = async (name) => {
 };
 exports.onEvent = async (event) => {
   if (event.RequestType === "Delete") return { PhysicalResourceId: event.PhysicalResourceId };
+  until = Date.now() + 90000;
   const out = [];
   let failed = "";
   for (const name of event.ResourceProperties.Secrets) {
@@ -142,7 +154,8 @@ export function secretParameters(scope: Construct, cfg: EnvConfig, release: stri
     // Not index.handler: that names the app's own three functions.
     handler: "index.onEvent",
     code: lambda.Code.fromInline(SECRET_PARAMETERS_CODE),
-    timeout: Duration.minutes(2),
+    // Its own waiting (90 s at most) and seven secrets' three calls each.
+    timeout: Duration.minutes(5),
     // No VPC and no environment: it calls only the Secrets Manager, SSM and CloudFormation APIs.
     logGroup,
   });

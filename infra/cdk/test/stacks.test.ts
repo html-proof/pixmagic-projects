@@ -715,7 +715,7 @@ describe("the secrets' copies in Parameter Store (secret-parameters.ts)", () => 
 
   it("lets the copier read this environment's secrets and write their parameters, nothing else", () => {
     const [, fn] = ofType(t.app, "AWS::Lambda::Function").find(([, r]) => r.Properties.FunctionName === "insights-production-secret-parameters")!;
-    expect(fn.Properties).toMatchObject({ Handler: "index.onEvent", Runtime: "nodejs24.x", Timeout: 120, Code: { ZipFile: SECRET_PARAMETERS_CODE } });
+    expect(fn.Properties).toMatchObject({ Handler: "index.onEvent", Runtime: "nodejs24.x", Timeout: 300, Code: { ZipFile: SECRET_PARAMETERS_CODE } });
     expect(fn.Properties.VpcConfig).toBeUndefined();
     expect(fn.Properties.Environment).toBeUndefined();
     expect(statementsOf(t.app, new RegExp(`^${fn.Properties.Role["Fn::GetAtt"][0]}$`))).toEqual([
