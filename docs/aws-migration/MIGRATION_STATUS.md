@@ -14,7 +14,7 @@ change, or the day an owner-only step is done.
 | 4 | GuardDuty RDS protection off, both features (`RDS_LOGIN_EVENTS` 2.26 and Advanced RDS, `RDS_DATA_RISK`, 6.78) | ~9.04 | Our own checks in its place: change 10. Both features still `ENABLED` on 2026-11-12, 3 trial days left | Owner: one command ([aws-deployment.md](../aws-deployment.md#security-events)), once the alarm email is confirmed |
 | 5 | WhatsApp service on Fargate Spot | up to ~12.10 | **Live** (#343; checked 2026-11-08: `insights-production-evolution-a` 1/1 on `FARGATE_SPOT`) | A week of billing for the real rate |
 | 6 | AWS WAF → Cloudflare's rules | 10.08 (less 0.40 for the lock's secret) | **In progress** (owner's "just do it", 2026-11-12). Step 1 of 3, the origin lock: `"report"` **live** 2026-11-12, release 180 (#375), nothing refused yet; `/edge-lock` answers 403 until Cloudflare sends the header. The WAF still on | Owner: add the header in Cloudflare ([aws-deployment.md](../aws-deployment.md#origin-lock-only-cloudflare-reaches-cloudfront)); then the lock enforces, then the rate rule, then the WAF goes |
-| 7 | Secrets Manager → Parameter Store SecureString, all seven secrets, in three steps ([SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md)) | 2.97 (7 × 0.40 and their requests), once the secrets are deleted in step 3; nothing yet | **In progress.** Step 1 of 3 (2026-11-12): every release copies each secret, unchanged, into a parameter of the same name, and the functions read the parameter first, the secret as fallback. The secrets all still exist | A week of `secrets loaded` log lines on `parameter`, then step 2 (nothing reads Secrets Manager), then step 3 (the secrets deleted with a 30-day recovery window) |
+| 7 | Secrets Manager → Parameter Store SecureString, all seven secrets, in three steps ([SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md)) | 2.97 (7 × 0.40 and their requests), once the secrets are deleted in step 3; nothing yet | **In progress.** Step 1 of 3 **live** 2026-11-12, release 186 (#384): every release copies each secret, unchanged, into a parameter of the same name, and the functions read the parameter first, the secret as fallback. Checked after it: seven parameters, each equal to its secret; api and cron read all of theirs from the parameters, no fallback. The secrets all still exist | A week of `secrets loaded` log lines on `parameter` (to about 2026-11-19), then step 2 (nothing reads Secrets Manager), then step 3 (the secrets deleted with a 30-day recovery window) |
 | 8 | Database single-AZ | 21.74 | **Live** 2026-11-08, release 174 (#357): `MultiAZ` false, primary 2b, same instance | — |
 | 9 | One NAT instance (nat-b, in the database's zone) | ~8.24 | **Live** 2026-11-08, release 174 (#357): nat-a terminated, both app subnets route to nat-b | — |
 | 10 | Our own security monitoring: `db-login-failures` alarm, five EventBridge rules to the alarm topic | −0.40 (it costs that) | **Live** 2026-11-12, release 178 (#371): the alarm in `OK`, five rules in Sydney and two in us-east-1 `ENABLED` | The alarm email confirmed (change 12) |
@@ -166,3 +166,14 @@ change, or the day an owner-only step is done.
   admin host's Systems Manager policy allows reading every parameter, so both roles now carry a
   Deny on the secrets' copies; and `db-owner` and `worker-cognito` would have been deleted with no
   recovery window if their resources ever left a template, so both are now kept on removal.
+- **2026-11-12**: #384 merged (67203ba2) after a green run on top of `main`; Deploy to AWS green:
+  **release 186** (`/api/version`, `readyz` 200, api, jobs and cron `live` on version 186).
+  Checked after it, values never shown: the App stack's `SecretCopies` reads `created` for all
+  seven; seven `SecureString` parameters in the standard tier under `alias/aws/ssm`;
+  `compare-secret-copies.mjs` says `equal` for each; the api's and the cron's `secrets loaded`
+  lines name `parameter` for every secret they read (the cron's first read was the migrate gate's
+  run, before anything went live), no fallback warning; no function error, no alarm in ALARM. The
+  jobs and cognito-email functions had not started a new instance yet. IAM's policy simulator:
+  the NAT role is refused every secret's parameter, the admin host all but its three, and both
+  still read `/insights/production/runtime`. Secrets Manager still holds its seven secrets: the
+  bill doesn't change until step 3.
