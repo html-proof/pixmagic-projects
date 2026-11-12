@@ -59,7 +59,7 @@ would pass the limit, and the copier fails the release rather than write an adva
 
 ## The three steps
 
-### Step 1: copies, read first (this pull request)
+### Step 1: copies, read first (live 2026-11-12, release 186, #384)
 
 - **Copier.** `Custom::SecretParameters` in the App stack runs on every release, before the `live`
   aliases move. For each secret: no parameter → created; the same text → nothing written; different
@@ -80,6 +80,14 @@ would pass the limit, and the copier fails the release rather than write an adva
 
 Nothing is saved yet: all seven secrets still exist and are still billed.
 
+**As deployed** (checked 2026-11-12 after release 186): `SecretCopies` read `created` for all
+seven; each parameter is a `SecureString` in the standard tier under `alias/aws/ssm` and equal to
+its secret; the api and the cron read every one of theirs from the parameters (the cron first in
+the migrate gate's run, before the release went live), with no fallback warning and no error. The
+NAT role is refused all seven and the admin host all but its three (IAM's policy simulator). The
+jobs and cognito-email functions had not started a new instance by then: look for their
+`secrets loaded` line before step 2.
+
 **Check after the Deploy** (values are never printed):
 
 ```powershell
@@ -95,8 +103,9 @@ compares each secret with its parameter and prints `equal` or `NOT EQUAL` per na
 
 ### Step 2: nothing reads Secrets Manager (next pull request)
 
-Not before step 1 has run a week with every `secrets loaded` line on `parameter` and no fallback
-warning ([ROLLBACK_PLAN.md](ROLLBACK_PLAN.md), change 7).
+Not before step 1 has run a week (to about 2026-11-19) with every `secrets loaded` line on
+`parameter`, in all four functions, and no fallback warning ([ROLLBACK_PLAN.md](ROLLBACK_PLAN.md),
+change 7).
 
 1. `loadSecrets` reads the parameters only; the functions lose `secretsmanager:GetSecretValue`.
 2. A reader custom resource (answering with `NoEcho`, run on every release so a changed value

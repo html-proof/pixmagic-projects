@@ -167,7 +167,7 @@ ceiling safe rather than just met.
 | --- | --- | --- |
 | 1-year No Upfront reservation of the database (US$0.025 → 0.020 an hour) | ~4.0 | A card AWS can charge: both orders of 2026-10-18 failed payment. A one-year commitment, wrong if the app leaves AWS within the year |
 | The three October manual snapshots deleted | up to ~3 (the bill gives the figure) | **Done** 2026-11-12 on the owner's yes. The automated backups (7 days) and `pre-table-drop-20261112` stay. Read `ChargedBackupUsage` in Cost Explorer from 2026-11-14 for what it saved |
-| Secrets Manager → Parameter Store (change 7) | ~3.3 (2.97 before GST), all seven secrets; none has to stay behind | Three releases ([SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md)). **Step 1 shipped 2026-11-12**: a copier writes each secret, unchanged, into a parameter on every release, and the functions read it first. The saving comes only with step 3, when the secrets are deleted (30-day recovery window); until then the line above stays 2.97 |
+| Secrets Manager → Parameter Store (change 7) | ~3.3 (2.97 before GST), all seven secrets; none has to stay behind | Three releases ([SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md)). **Step 1 live 2026-11-12, release 186 (#384)**: a copier writes each secret, unchanged, into a parameter on every release, and the functions read it first (checked: seven copies equal, no fallback). The saving comes only with step 3, when the secrets are deleted (30-day recovery window); until then the line above stays 2.97 |
 
 With all three: about **US$37-40 a month with GST**.
 
