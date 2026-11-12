@@ -141,7 +141,7 @@ altogether stays the larger saving and stays blocked on the server.
 ## Billing protection
 
 - **Budget** US$50, tax included: emails at 50, 70, 85 and 95% (US$25, 35, 42.50, 47.50) and when
-  AWS forecasts the month above US$50. The brief's four thresholds, from this pull request (they
+  AWS forecasts the month above US$50. The brief's four thresholds, live since release 184 (they
   were 50/75/90/100).
 - **Cost Anomaly Detection**: an email for any anomaly of US$5 or more.
 - **Daily cost email**, 07:00 Melbourne: yesterday by service and the month so far.
