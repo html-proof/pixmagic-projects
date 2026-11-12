@@ -90,9 +90,14 @@ BEGIN
   -- Tables that belong to no workspace (people, sign-in, intake): the system paths read them in every
   -- scope, since sign-in needs them before any workspace is known. Named one by one, so a table only
   -- joins this list in review.
+  -- to_regclass in the lookup too, never a ::regclass cast: Postgres works the cast out while it
+  -- plans the IF, whatever the first half says, and on a fresh volume (no tables yet) the cast
+  -- failed with 'relation "public.users" does not exist'. That aborted the entrypoint on every first
+  -- start; Docker restarted the container, and CI's `docker compose up --wait` failed whenever it
+  -- looked in between (main's browser tests for #379 and #380, 2026-11-12).
   FOREACH t IN ARRAY ARRAY['users', 'auth_identities', 'auth_events', 'user_sessions', 'pixel_events_seen', 'auth_accounts', 'auth_refresh_tokens'] LOOP
     IF to_regclass(format('public.%I', t)) IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = format('public.%I', t)::regclass AND p.polname = 'system_any') THEN
+       AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = to_regclass(format('public.%I', t)) AND p.polname = 'system_any') THEN
       EXECUTE format('CREATE POLICY system_any ON public.%I TO app_system USING (true) WITH CHECK (true)', t);
     END IF;
   END LOOP;
