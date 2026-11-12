@@ -11,8 +11,9 @@ interface Answer {
   report: unknown;
 }
 type Get = (url: string, init?: RequestInit) => Promise<Response>;
-const { configCheck, requester } = (await import(new URL("../scripts/smoke.mjs", import.meta.url).href)) as {
+const { configCheck, requester, originLockCheck } = (await import(new URL("../scripts/smoke.mjs", import.meta.url).href)) as {
   configCheck: (invoke: () => Answer, envName: string) => { detail: string; warnings: string[] };
+  originLockCheck: (mode: string, seen: { viaDomain: number; direct: number; guessed: number }, host: string) => { detail: string; warnings: string[] };
   requester: (fetchImpl: Get, pauseMs?: number) => Get;
 };
 
@@ -158,6 +159,25 @@ function fetches(...outcomes: (Response | Error)[]) {
   return { impl, asked };
 }
 const dropped = () => new TypeError("fetch failed");
+
+describe("the origin lock check", () => {
+  it("only warns while the lock reports: Cloudflare not sending the secret yet is the owner's step, not a reason to roll back", () => {
+    const pending = originLockCheck("report", { viaDomain: 403, direct: 404, guessed: 404 }, "bizinsights.io");
+    expect(pending.detail).toBe("report: Cloudflare doesn't add the secret yet (/edge-lock 403); nothing refused");
+    expect(pending.warnings).toHaveLength(1);
+    expect(pending.warnings[0]).toMatch(/^::warning title=Cloudflare isn't sending the origin lock's header::/);
+    expect(pending.warnings[0]).toContain('must stay "report"');
+    const ready = originLockCheck("report", { viaDomain: 204, direct: 404, guessed: 404 }, "bizinsights.io");
+    expect(ready).toEqual({ detail: "report: Cloudflare adds the secret; nothing refused", warnings: [] });
+  });
+
+  it("fails once enforcing unless Cloudflare gets through and CloudFront's own name doesn't", () => {
+    expect(originLockCheck("enforce", { viaDomain: 204, direct: 403, guessed: 403 }, "bizinsights.io")).toEqual({ detail: "enforce: Cloudflare adds the secret; CloudFront's own name answers 403", warnings: [] });
+    expect(() => originLockCheck("enforce", { viaDomain: 403, direct: 403, guessed: 403 }, "bizinsights.io")).toThrow(/Cloudflare isn't adding the secret/);
+    expect(() => originLockCheck("enforce", { viaDomain: 204, direct: 404, guessed: 403 }, "bizinsights.io")).toThrow(/straight to CloudFront's name got 404/);
+    expect(() => originLockCheck("enforce", { viaDomain: 204, direct: 403, guessed: 401 }, "bizinsights.io")).toThrow(/guessed secret got 401/);
+  });
+});
 
 describe("the smoke tests' requests", () => {
   it("asks a page once more when the connection was dropped, and never follows a redirect", async () => {

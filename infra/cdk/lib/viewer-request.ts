@@ -18,10 +18,29 @@ import { CLOUDFLARE_CLIENT_IP_HEADER, CLOUDFLARE_IPV4, CLOUDFLARE_IPV6 } from ".
  * object, not as text. A Shopify launch's HMAC still verifies, since it is computed over the
  * parameters sorted by name (verifyShopifyQueryHmac). Other methods (webhooks,
  * pixel events, API-key clients) are served where they arrive: they don't follow redirects.
+ *
+ * With an origin lock (`lock`, config.ts `domain.originLock`), the function knows the secret
+ * Cloudflare's proxy adds to every request it passes on (ORIGIN_LOCK_HEADER, a Transform Rule in the
+ * zone). The header is taken off before the origin either way, so the app never sees or logs it.
+ * `GET /edge-lock` (ORIGIN_LOCK_PROBE) answers here, 204 with the secret and 403 without: asked
+ * through the domain it says whether Cloudflare sends the header, without a function invocation.
+ * While `enforce` is false that is all (every request is served as before); once true, a request
+ * without the secret gets 403, so nobody can skip Cloudflare by calling the cloudfront.net name, or
+ * CloudFront's addresses with the domain as Host. The redirect above still comes first: it gives
+ * nothing away and costs the origin nothing. Cloudflare's address ranges are not required as well:
+ * the list is kept by hand (cloudflare.ts), and a range Cloudflare added would turn into 403s for
+ * the clients behind it, where today it only blurs a rate limit.
  */
-export function viewerRequestCode(canonicalHost?: string): string {
+export function viewerRequestCode(canonicalHost?: string, lock?: OriginLock): string {
+  if (lock && !canonicalHost) throw new Error("An origin lock needs the app's own domain: without one, clients call CloudFront's name directly");
+  if (lock && !/^[\w.:-]+$/.test(lock.read)) throw new Error(`originLockRead "${lock.read}": letters, digits, . : - and _ only (it goes into the function's source)`);
   return [
+    // CloudFormation reads the secret again only when this source changes: this line is how (config.ts originLockRead).
+    ...(lock ? [`// The origin lock's secret as read on ${lock.read}`] : []),
     `var CANONICAL = ${JSON.stringify(canonicalHost ?? "")};`,
+    // "" without a lock. With one, CloudFormation puts the value here when it deploys (app-stack.ts).
+    `var LOCK = ${JSON.stringify(lock?.secret ?? "")};`,
+    `var ENFORCE = ${lock?.enforce === true};`,
     // [first 32 bits of the network, prefix length]: every Cloudflare range fits in 32 bits.
     `var CF4 = ${JSON.stringify(CLOUDFLARE_IPV4.map((cidr) => network(cidr, (a) => a.split(".").reduce((n, p) => n * 256 + Number(p), 0))))};`,
     `var CF6 = ${JSON.stringify(CLOUDFLARE_IPV6.map((cidr) => network(cidr, (a) => parseInt(a.split(":")[0]!, 16) * 65536 + parseInt(a.split(":")[1] || "0", 16))))};`,
@@ -56,6 +75,16 @@ export function viewerRequestCode(canonicalHost?: string): string {
     "  }",
     "  return out.length ? '?' + out.join('&') : '';",
     "}",
+    // Every character compared, whatever matched so far: the time taken says nothing about the secret.
+    "function same(a, b) {",
+    "  if (a.length !== b.length) return false;",
+    "  var d = 0;",
+    "  for (var i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);",
+    "  return d === 0;",
+    "}",
+    "function refused() {",
+    "  return { statusCode: 403, statusDescription: 'Forbidden', headers: { 'cache-control': { value: 'no-store' }, 'content-type': { value: 'text/plain' } }, body: 'Forbidden' };",
+    "}",
     "function handler(event) {",
     "  var r = event.request;",
     "  var host = r.headers.host ? r.headers.host.value.toLowerCase() : '';",
@@ -65,6 +94,13 @@ export function viewerRequestCode(canonicalHost?: string): string {
     "      statusDescription: 'Moved Permanently',",
     "      headers: { location: { value: 'https://' + CANONICAL + r.uri + query(r.querystring) }, 'cache-control': { value: 'max-age=3600' } },",
     "    };",
+    "  }",
+    "  if (LOCK) {",
+    `    var sent = r.headers['${ORIGIN_LOCK_HEADER}'];`,
+    "    var unlocked = !!sent && same(sent.value, LOCK);",
+    `    delete r.headers['${ORIGIN_LOCK_HEADER}'];`,
+    `    if (r.uri === '${ORIGIN_LOCK_PROBE}') return unlocked ? { statusCode: 204, statusDescription: 'No Content', headers: { 'cache-control': { value: 'no-store' } } } : refused();`,
+    "    if (ENFORCE && !unlocked) return refused();",
     "  }",
     "  var ip = event.viewer.ip;",
     "  var viaCf = fromCloudflare(ip);",
@@ -80,6 +116,22 @@ export function viewerRequestCode(canonicalHost?: string): string {
     "  return r;",
     "}",
   ].join("\n");
+}
+
+/** The request header Cloudflare's proxy carries the origin lock's secret in (a Transform Rule in the zone). */
+export const ORIGIN_LOCK_HEADER = "x-origin-lock";
+
+/** Answered by the function itself: 204 when the request carried the secret, 403 when it didn't. */
+export const ORIGIN_LOCK_PROBE = "/edge-lock";
+
+/**
+ * The secret Cloudflare adds, whether a request without it is refused (false: only the probe says
+ * so), and a mark for when the secret was read (config.ts `originLockRead`).
+ */
+export interface OriginLock {
+  secret: string;
+  enforce: boolean;
+  read: string;
 }
 
 /** A CIDR's first 32 bits as a number (`head` reads them from the address), with its prefix length. */
