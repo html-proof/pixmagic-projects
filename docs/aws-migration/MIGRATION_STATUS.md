@@ -25,6 +25,7 @@ change, or the day an owner-only step is done.
 | 15 | `refunds` dropped too (2 rows, written before returns were read from `order_sales` on 2026-10-16) | ~0 (tidiness) | **Live** 2026-11-12, release 182 (#378; the owner's "drop refunds too" that day): 130 tables left, `refunds` not among them | — |
 | 16 | Budget US$80 → US$50, tax included: the owner's ceiling since 2026-11-12 ([aws-deployment.md](../aws-deployment.md), "The US$50 ceiling") | 0 (it only emails) | #379, 2026-11-12. November is already above US$50 (64.20 with GST on the 11th), so its emails come at once | The ceiling itself needs changes 1, 4 and 6: ~47 a month with GST once all three are done (re-measured 2026-11-12, [COST_CEILING_50.md](COST_CEILING_50.md)), ~58 with the WAF left, ~90 with the support plan left too |
 | 17 | Budget emails at 50/70/85/95% (they were 50/75/90/100), and on a forecast above US$50: the thresholds of the owner's brief of 2026-11-12 | 0 (it only emails) | **Live** 2026-11-12, release 184 (#380): budget `insights-production-monthly-3b3edbc8`, the four alerts and the forecast one on it. November was already above US$47.50, so all four emails came at once | — |
+| 18 | The three manual database snapshots of October deleted (`pre-wipe-20261015-165804`, `pre-recovery-20261017`, `pre-deploy-20261018`) | up to ~2.9 (they counted toward the backups charged above the free 20 GB; the bill gives the figure) | **Done** 2026-11-12 (the owner's "Yes, delete them" that day; kept on 2026-10-29). Permanent | Cost Explorer's `ChargedBackupUsage` from 2026-11-14 |
 
 ## Services
 
@@ -147,6 +148,13 @@ change, or the day an owner-only step is done.
   184** (`/api/version`, `readyz` 200). Checked after it: one budget,
   `insights-production-monthly-3b3edbc8`, US$50, alerts at 50/70/85/95% and on the forecast; no
   alarm in ALARM.
+- **2026-11-12**: change 18, on the owner's "Yes, delete them". Checked first: all three
+  `available` and shared with no account, the database `available` with 7 days of automated
+  backups and a restore point minutes old, `pre-table-drop-20261112` there. Deleted with
+  `aws rds delete-db-snapshot`, one by one. After it: one manual snapshot left
+  (`insights-production-pre-table-drop-20261112`), the eight automated ones untouched. What
+  went with them: the database as it was before the wipe of 2026-10-15, before the recovery of
+  2026-10-17 and before the deploy of 2026-10-18.
 - **2026-11-12**: change 7, step 1 of 3 ([SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md)).
   Measured first (read-only): seven secrets, the largest (`app`) 1,201 characters with 18 keys, so
   each fits a free standard parameter as it is; none has to stay in Secrets Manager (the three

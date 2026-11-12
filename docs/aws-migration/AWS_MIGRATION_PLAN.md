@@ -21,7 +21,9 @@ How changes reach production: [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.m
   rolls itself back if its checks fail (CLAUDE.md). Nobody deploys by hand.
 - Each change is its own pull request or console action, so each can be undone on its own.
 - Changes that trade away a function or high availability are the owner's call, not this plan's.
-- No production data is deleted. The three manual database snapshots stay (owner, 2026-10-29).
+- No production data is deleted. The three manual database snapshots stayed (owner, 2026-10-29)
+  until the owner had them deleted on 2026-11-12 for the US$50 ceiling
+  ([MIGRATION_STATUS.md](MIGRATION_STATUS.md), change 18).
 
 ## The brief's stages, applied
 

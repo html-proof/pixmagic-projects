@@ -86,5 +86,6 @@ reserved-instance records for the database say `payment-failed` and cost nothing
 
 - RDS: automated backups for 14 days, and three manual snapshots (2026-10-15, -17, -18). The owner
   decided on 2026-10-29 to keep the three. Together they now pass the free backup allowance
-  (`ChargedBackupUsage`, ~2.05 a month).
+  (`ChargedBackupUsage`, ~2.05 a month). Since then: backups 7 days (2026-11-12), and the three
+  deleted on 2026-11-12 on the owner's yes ([MIGRATION_STATUS.md](MIGRATION_STATUS.md), change 18).
 - EBS: Data Lifecycle Manager takes a daily snapshot of each disk and keeps 7 days.

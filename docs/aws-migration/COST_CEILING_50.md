@@ -81,7 +81,7 @@ without it.
 | --- | --- | --- | --- | --- | --- |
 | RDS | `insights-production`, db.t4g.micro, 20 GB gp3, single-AZ 2b, backups 7 days | available | 20.76 | Yes: every store's data | Keep. Reservation: [More room](#more-room) |
 | RDS | Automated backups, 8 daily snapshots | — | part of 2.89 | Yes: recovery | Keep |
-| RDS | Manual snapshots `pre-wipe-20261015-165804`, `pre-recovery-20261017`, `pre-deploy-20261018` | available | part of 2.89 | No: all three predate the current data | Delete with the owner's yes ([More room](#more-room)) |
+| RDS | Manual snapshots `pre-wipe-20261015-165804`, `pre-recovery-20261017`, `pre-deploy-20261018` | **deleted** 2026-11-12, after this audit | were part of 2.89 | No: all three predated the current data | Done on the owner's yes ([More room](#more-room)) |
 | RDS | Manual snapshot `pre-table-drop-20261112` | available | part of 2.89 | For now: the only copy of the 27 dropped tables | Keep until the owner is sure nothing is missed |
 | EC2 | `i-0c772de36d1dd7a84` nat-b, t4g.nano, public address 13.211.94.248 | running | 8.20 with disk and address | Yes: the functions' only way out to Shopify, Meta, Google | Keep |
 | EC2 | `i-0ead8934b28556914` admin host, t4g.nano | stopped | 0.77 (its disk) | Yes: migrations by hand, the database copy | Keep stopped |
@@ -166,7 +166,7 @@ ceiling safe rather than just met.
 | Change | Saves with GST | What it takes |
 | --- | --- | --- |
 | 1-year No Upfront reservation of the database (US$0.025 → 0.020 an hour) | ~4.0 | A card AWS can charge: both orders of 2026-10-18 failed payment. A one-year commitment, wrong if the app leaves AWS within the year |
-| The three October manual snapshots deleted | up to ~3 (the bill gives the figure) | The owner's yes: permanent. All three predate the current data; the automated backups and `pre-table-drop-20261112` stay |
+| The three October manual snapshots deleted | up to ~3 (the bill gives the figure) | **Done** 2026-11-12 on the owner's yes. The automated backups (7 days) and `pre-table-drop-20261112` stay. Read `ChargedBackupUsage` in Cost Explorer from 2026-11-14 for what it saved |
 | Secrets Manager → Parameter Store (change 7) | ~3.3 (2.97 before GST), all seven secrets; none has to stay behind | Three releases ([SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md)). **Step 1 shipped 2026-11-12**: a copier writes each secret, unchanged, into a parameter on every release, and the functions read it first. The saving comes only with step 3, when the secrets are deleted (30-day recovery window); until then the line above stays 2.97 |
 
 With all three: about **US$37-40 a month with GST**.
