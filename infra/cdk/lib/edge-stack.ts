@@ -1,10 +1,13 @@
 import { RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventTargets from "aws-cdk-lib/aws-events-targets";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import type { Construct } from "constructs";
 import { CLOUDFLARE_CLIENT_IP_HEADER, CLOUDFLARE_IPV4, CLOUDFLARE_IPV6 } from "./cloudflare.js";
 import type { EnvConfig } from "./config.js";
 import { accessLogBucket, bootstrapAssetsBucket, logBucketAccess } from "./s3-access-logs.js";
+import { GLOBAL_SECURITY_EVENTS } from "./security-events.js";
 
 /**
  * API requests a minute from one client address before WAF answers 429. One address is often many
@@ -149,6 +152,18 @@ export class EdgeStack extends Stack {
         logGroup: new logs.LogGroup(this, "BootstrapBucketLoggingLogs", { retention: logs.RetentionDays.ONE_MONTH, removalPolicy: RemovalPolicy.DESTROY }),
       });
       setup.node.addDependency(accessLogs.policy!);
+
+      // IAM's changes and the root user's sign-ins reach EventBridge in this Region only: passed on
+      // to the app's Region as they are, where the App stack's rules email them (security-events.ts).
+      // The account's, so production's stack does it. Same account: the role's permission is enough.
+      const alarmRegionBus = events.EventBus.fromEventBusArn(this, "AlarmRegionBus", `arn:aws:events:${cfg.region}:${cfg.account}:event-bus/default`);
+      for (const [id, eventPattern] of Object.entries(GLOBAL_SECURITY_EVENTS)) {
+        new events.Rule(this, `Security${id}ToAlarmRegion`, {
+          description: `Passes ${id === "Iam" ? "IAM changes" : "root sign-ins"} on to ${cfg.region}, whose rules email the alarm topic`,
+          eventPattern,
+          targets: [new eventTargets.EventBus(alarmRegionBus)],
+        });
+      }
     }
   }
 }

@@ -19,7 +19,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email,whatsapp}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
 | Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (on since 2026-10-16: `schedulesEnabled` in `infra/cdk/lib/config.ts`) | `runScheduled()` in `apps/worker` |
 | Migrations before the switch | Lambda `insights-production-migrate-before-live` (App stack, runs only during deploys, through the custom resource `MigrateBeforeLive`) runs a release's migrations on its new cron version before the `live` aliases move ("Migrations before the switch" below) | `infra/cdk/lib/migrate-before-live.ts`, `apps/aws/src/migrate.ts` |
-| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, single-AZ in 2b since 2026-11-08 (Multi-AZ before), private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
+| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, single-AZ in 2b since 2026-11-08 (Multi-AZ before), private, encrypted, 7-day PITR since 2026-11-12 (14 before)) | `infra/cdk/lib/data-stack.ts` |
 | Way out to the internet | EC2 NAT instance `insights-production-nat-b` (t4g.nano, in the database's AZ, both AZs' functions through it since 2026-11-08; `nat-a` before that; Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
 | Coordinator | DynamoDB `insights-production-coord` | `apps/aws/src/dynamoCoord.ts` |
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
@@ -763,7 +763,7 @@ job signs in only with the OIDC deploy role and checks that it did.
   deployed. Again by hand (idempotent): the same command with `{"action":"evolution-db"}`.
 - psql: start the admin host, then `aws ssm start-session --target <instance id>` (needs the Session
   Manager plugin), credentials from the `insights/production/db-owner` secret. Stop it afterwards.
-- Restore: RDS point-in-time restore (any second in the last 14 days) to a new instance, or a dump
+- Restore: RDS point-in-time restore (any second in the last 7 days) to a new instance, or a dump
   from the artifacts bucket through the admin host.
 
 ## Test
@@ -1110,8 +1110,15 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   It needs the owner's own device, so no deploy can do it. `aws login` keeps working (the browser
   sign-in asks for the key).
 - **Alerts**: the alarms email `alertEmail` (config.ts: bizinsightsaus@yahoo.com), an SNS
-  subscription that works only once confirmed from AWS's first email to that address. The budget
-  already emails `budgetEmail` (config.ts) and needs no confirmation.
+  subscription that works only once confirmed from AWS's first email to that address ("AWS
+  Notification - Subscription Confirmation"; look in spam too). The first one was never confirmed:
+  SNS dropped it, CloudFormation still listed it, and on 2026-11-12 the topic had **no subscriber
+  at all**, so no alarm had ever reached anyone. A new confirmation email was sent that day, and the
+  subscription has a construct id of its own (`AlarmEmail2`, app-stack.ts) so the deploy made it
+  again. Check: `aws sns list-subscriptions-by-topic --region ap-southeast-2 --topic-arn
+  arn:aws:sns:ap-southeast-2:605411278365:insights-production-alarms` shows a real ARN, not
+  `PendingConfirmation`. The budget already emails `budgetEmail` (config.ts) and needs no
+  confirmation.
 - **WhatsApp's Cloud API option**: Meta's Tech Provider steps (business verification, App Review,
   the app's WhatsApp webhook), in Meta's consoles only: [whatsapp.md](whatsapp.md), "Owner's steps
   (Cloud API)". Linking a phone with a QR code needs nothing from the owner.
@@ -1169,7 +1176,7 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | Two NAT instances: t4g.nano $0.0053/hour + public IPv4 $0.005/hour + 8 GB gp3, each ~8.3 | 16.58 |
 | GuardDuty after its trial (ends ~2026-11-14): RDS protection 2.26 + **Advanced RDS (`RDS_DATA_RISK`) 6.78** + CloudTrail events ~1.5 + S3/Lambda/DNS/flow logs ~0.2 | ~10.7 |
 | WAF: web ACL $5 + 5 rules × $1 + requests | ~10.2 |
-| CloudWatch: 33 alarms (26 of the App stack's 27, its `whatsapp-service-unreachable` being in the WhatsApp row; 6 for the NAT instances; Cognito's email), 10 free, US$0.10 each (three added 2026-10-29: `sync-jobs-failed-for-good`, `ad-connections-need-merchants`, `ad-figures-differ`, +0.30; recounted the same day, the 25 before were 30); logs, dashboard and the 10 custom metrics the log filters count (10 free; an 11th would be US$0.30) in the free tier | ~2.3 |
+| CloudWatch: 34 alarms since 2026-11-12 (`db-login-failures`, +0.10, and its log filter's metric, the 11th custom one, +0.30: the figure here is from before them) (26 of the App stack's 27, its `whatsapp-service-unreachable` being in the WhatsApp row; 6 for the NAT instances; Cognito's email), 10 free, US$0.10 each (three added 2026-10-29: `sync-jobs-failed-for-good`, `ad-connections-need-merchants`, `ad-figures-differ`, +0.30; recounted the same day, the 25 before were 30); logs, dashboard and the 10 custom metrics the log filters count (10 free; an 11th would be US$0.30) in the free tier | ~2.3 |
 | Secrets Manager (3 × $0.40 + calls), KMS (Cognito email key + ~60-90k requests, 20k free) | ~2.5 |
 | Admin host's disk (stopped), EBS snapshots, SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES (X-Ray tracing is off since 2026-11-06: nothing read the traces) | ~2.4 |
 | Audit stack (since 2026-10-18): the trail's first copy of management events is free, and so are the 18 external-access analyzers; its bucket's log and digest files (S3 PUTs from 18 Regions every ~5 minutes, ~200-270 bytes per event compressed, ~1-3 GB a year kept for 395 days) | ~0.35 (≤1) |
@@ -1220,8 +1227,8 @@ on 2026-10-17: two of them cost a third of one gateway.
 month passes 50/75/90/100% (US$40/60/72/80) and when AWS forecasts it above US$80. Nothing is
 stopped at any threshold. Until Basic support, the reservation and the Advanced RDS decision are in
 place, the 100% email is expected every month: it is accurate, not noise. The name carries a digest
-of the alerts because CloudFormation replaces a budget whose alerts change. The alarm topic still
-has no subscriber.
+of the alerts because CloudFormation replaces a budget whose alerts change. The alarm topic is
+another thing: it emails only once its subscription is confirmed (Owner-only steps, Alerts).
 
 **Cost Anomaly Detection**: AWS's `Default-Services-Subscription` (on its `Default-Services-Monitor`)
 emails `budgetEmail` daily about any anomaly with a total impact of **US$5** or more (set by hand
@@ -1249,9 +1256,9 @@ the log line `cost report sent` carry Resend's message id, never the address. Tu
 `costReport: false` (or `-c costReport=off` for one deploy).
 
 Not costing anything yet, but watch: three manual RDS snapshots never expire, and backups may pass
-the 20 GB free allowance once the 14-day chain fills; four log groups keep logs forever (the RDS
-postgresql group and three CDK helper groups; 1.1 MB together on 2026-10-18, under a cent a month,
-not worth a deploy yet); storage autoscaling can grow the disk to 100 GB and it never shrinks back.
+the 20 GB free allowance once the chain fills (7 days since 2026-11-12, 14 before); three CDK helper
+log groups keep logs forever (under a cent a month; the RDS postgresql group expires like the
+functions' logs since 2026-11-12); storage autoscaling can grow the disk to 100 GB and it never shrinks back.
 
 Looked at on 2026-10-18 and not worth it: moving region (us-east-1 is ~US$18 cheaper, but every
 request crosses the Pacific, Cognito users can't move with their passwords, and the data would
@@ -1360,7 +1367,7 @@ few hours).
 What production does have, at no extra cost:
 - Functions in two AZs; queues with retries, backoff, a dead-letter queue (`insights-production-dlq`)
   and jobs that wait out a database outage instead of failing (apps/worker `deferForDb`).
-- Database: 14 days of point-in-time restore, kept even if the instance is deleted
+- Database: 7 days of point-in-time restore (14 until 2026-11-12), kept even if the instance is deleted
   (`DeleteAutomatedBackups: false`), deletion protection, a final snapshot on delete, storage
   autoscaling to 100 GB. DynamoDB with point-in-time recovery; versioned artifacts bucket.
 - Scheduled runs: Scheduler retries a hand-over Lambda refuses (10 minutes), Lambda retries a failed
@@ -1369,7 +1376,7 @@ What production does have, at no extra cost:
 - Alarms on the topic `insights-production-alarms`: function errors (Cognito's email function too), throttles and latency, queue age,
   the dead-letter queue, database CPU/memory/storage/connections, the NAT instances' status checks
   and CPU, the WhatsApp service (`whatsapp-service-down`, `-memory`, `-unreachable`), plus RDS's own events (availability, failure, failover, low storage, maintenance,
-  recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).
+  recovery, restoration). **Nobody receives them until the alert email's subscription is confirmed** (Owner-only steps, Alerts).
 - Alarms on what the logs say (log metric filters in `infra/cdk/lib/app-stack.ts`): bursts of error
   lines per function, texts on hold, automated messages refused, WhatsApp's service not answering;
   and, each counted over an hour (what to do: [RUNBOOK.md](RUNBOOK.md)):
@@ -1392,6 +1399,52 @@ What production does have, at no extra cost:
     check while the difference stays.
   - Cost: US$0.10 a month each (the cost table); the three metrics they count are within CloudWatch's
     ten free custom metrics.
+
+## Security events
+
+Since 2026-11-12 the account watches itself for the few things GuardDuty's RDS protection was kept
+for, at about US$0.40 a month instead of ~9 (cost recommendations of 2026-11-12, item 2). Base
+GuardDuty stays on (~2 a month: stolen credentials, crypto-mining, traffic to known bad hosts);
+its two RDS features, `RDS_LOGIN_EVENTS` and `RDS_DATA_RISK`, are the owner's to turn off once
+the alarm email is confirmed:
+
+```
+aws guardduty update-detector --region ap-southeast-2 --detector-id 2cc280b1e6b94af686f44551c5029339 --features "[{\"Name\":\"RDS_LOGIN_EVENTS\",\"Status\":\"DISABLED\",\"AdditionalConfiguration\":[{\"Name\":\"RDS_DATA_RISK\",\"Status\":\"DISABLED\"}]}]"
+```
+
+(`ENABLED` twice turns them back on; GuardDuty then re-learns the database's normal logins.)
+
+What is already there and isn't repeated: the database in subnets with no route out, a security
+group that admits the functions, the WhatsApp service and the admin host only, `rds.force_ssl`,
+encryption, deletion protection, backups, CloudTrail in every Region, Access Analyzer, root MFA.
+
+What was added, all to the alarm topic (`insights-production-alarms`):
+
+- **`db-login-failures`** (alarm): PostgreSQL refused five or more logins in five minutes, counted
+  from its own log (`password authentication failed`, `no pg_hba.conf entry`; log group
+  `/aws/rds/instance/insights-production/postgresql`, kept 90 days). In normal running there are
+  none. After a deploy or a secret change it means a password out of step: the log line names the
+  role (`app`, `app_rls`, `app_system`, `evolution`). Otherwise something inside the network is
+  guessing: see which role and from which address in the log, and what was deployed or started.
+- **Five EventBridge rules** on CloudTrail's events (free; `infra/cdk/lib/security-events.ts`), each
+  an email saying what was called, by whom, from which address, and whether AWS refused it:
+  - `security-database`: any RDS `Delete*` or `Modify*` call (an instance, snapshot, backup or
+    parameter group; a snapshot shared with another account is `ModifyDBSnapshotAttribute`).
+  - `security-database-network`: a rule added to the database's security group.
+  - `security-trail`: the audit trail stopped, deleted or pointed elsewhere.
+  - `security-iam`: a new IAM user or access key (the account has neither), or a managed policy
+    attached to a user, group or role.
+  - `security-root-sign-in`: the root user signing in to the console, successfully or not.
+
+  IAM's calls and root's sign-ins reach EventBridge in us-east-1 only, so the Edge stack has two
+  rules there that pass them on to Sydney's default bus.
+
+A deploy that changes one of these things sends the email too (a new role with a managed policy, a
+database setting): the "Who" line then names CloudFormation's role. An email nobody can account
+for: look the call up in CloudTrail (Event history, by event name and time), and if it wasn't
+ours, rotate what the caller used and undo the change. The root emails are a reminder as much as a
+warning: routine work, the CLI's `aws login` included, is better done as an IAM Identity Center
+user or a role than as root.
 
 ## Security checks (Trusted Advisor)
 
