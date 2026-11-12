@@ -549,9 +549,9 @@ describe("the app stack", () => {
     expect(emails(synth({ env: "staging" }).app)).toEqual([]);
   });
 
-  it("emails the owner as the month's spend passes 50/75/90/100% of US$80, and on a forecast above it", () => {
+  it("emails the owner as the month's spend passes 50/75/90/100% of US$50, and on a forecast above it", () => {
     const [budget] = Object.values(t.app.findResources("AWS::Budgets::Budget"));
-    expect(budget!.Properties.Budget).toMatchObject({ BudgetType: "COST", TimeUnit: "MONTHLY", BudgetLimit: { Amount: 80, Unit: "USD" } });
+    expect(budget!.Properties.Budget).toMatchObject({ BudgetType: "COST", TimeUnit: "MONTHLY", BudgetLimit: { Amount: 50, Unit: "USD" } });
     const alerts = budget!.Properties.NotificationsWithSubscribers as Array<{ Notification: Record<string, unknown>; Subscribers: unknown[] }>;
     expect(alerts.map((a) => [a.Notification.NotificationType, a.Notification.Threshold])).toEqual([["ACTUAL", 50], ["ACTUAL", 75], ["ACTUAL", 90], ["ACTUAL", 100], ["FORECASTED", 100]]);
     for (const a of alerts) expect(a.Subscribers).toEqual([{ SubscriptionType: "EMAIL", Address: "bizinsightsaus@yahoo.com" }]);
