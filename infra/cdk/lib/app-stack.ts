@@ -27,7 +27,7 @@ import * as subs from "aws-cdk-lib/aws-sns-subscriptions";
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import type { Construct } from "constructs";
 import { API_PATH_PATTERNS } from "../../../apps/aws/src/paths.js";
-import { FUNCTION_DIR, REPO_ROOT, type EnvConfig } from "./config.js";
+import { FUNCTION_DIR, REPO_ROOT, originLockSecretName, type EnvConfig } from "./config.js";
 import { migrateBeforeLive } from "./migrate-before-live.js";
 
 /** Per RDS class: its connection limit (approximate) and the free memory that means "too small". */
@@ -56,7 +56,9 @@ type QueueName = "sync" | "webhooks" | "aggregate" | "email" | "smsEvents" | "wh
  * CloudFront adds a secret header the function checks, so the function URL can't be used to go
  * around WAF, and a viewer-request function passes on the viewer's real address and host. With a
  * domain of its own (config.ts `domain`), CloudFront answers on it with the ACM certificate and the
- * viewer-request function sends page requests on its other names there.
+ * viewer-request function sends page requests on its other names there. With an origin lock
+ * (`domain.originLock`), that function also knows the secret Cloudflare's proxy adds to each request
+ * and, once enforcing, answers 403 without it: CloudFront then serves only what came through Cloudflare.
  */
 export class AppStack extends Stack {
   readonly distribution: cloudfront.Distribution;
@@ -331,13 +333,23 @@ export class AppStack extends Stack {
     // LIST as well as READ: a missing file is then a 404, not S3's 403.
     const siteOrigin = origins.S3BucketOrigin.withOriginAccessControl(site, { originAccessLevels: [cloudfront.AccessLevel.READ, cloudfront.AccessLevel.LIST] });
 
+    // The origin lock's secret reaches the function's source the way ORIGIN_VERIFY reaches the
+    // origin's header above: a dynamic reference CloudFormation resolves as it deploys, so the value
+    // is in neither this (public) repository nor the template. By name: the Data stack made it, and
+    // an export would only tie the two stacks together. CloudFormation reads it again only when the
+    // function changes, so a new value needs a deploy that changes this source: config.ts
+    // `originLockRead` (docs/aws-deployment.md, "Origin lock"). Not CloudFront KeyValueStore: something would still have to copy the value
+    // there (a custom resource, or the owner), and every request would pay for a lookup.
+    const originLock = cfg.domain?.originLock;
     const viewer = new cloudfront.Function(this, "ViewerRequest", {
       functionName: `${prefix}-viewer-request`,
       comment: cfg.domain
-        ? `Pass the viewer's address and host to the origin; page requests on other names go to ${cfg.domain.name}`
+        ? `Pass the viewer's address and host to the origin; page requests on other names go to ${cfg.domain.name}${originLock === "enforce" ? "; only Cloudflare's requests are served" : ""}`
         : "Pass the viewer's address and host to the origin (overwriting anything the client sent)",
       runtime: cloudfront.FunctionRuntime.JS_2_0,
-      code: cloudfront.FunctionCode.fromInline(viewerRequestCode(cfg.domain?.name)),
+      code: cloudfront.FunctionCode.fromInline(
+        viewerRequestCode(cfg.domain?.name, originLock ? { secret: SecretValue.secretsManager(originLockSecretName(cfg)).unsafeUnwrap(), enforce: originLock === "enforce", read: cfg.domain?.originLockRead ?? "first" } : undefined),
+      ),
     });
     const securityHeaders = new cloudfront.ResponseHeadersPolicy(this, "SecurityHeaders", {
       responseHeadersPolicyName: `${prefix}-security`,
@@ -718,6 +730,7 @@ export class AppStack extends Stack {
 
     new CfnOutput(this, "AppUrl", { value: this.appUrl, description: "The app" });
     new CfnOutput(this, "CloudFrontDomain", { value: this.distribution.distributionDomainName, description: "CloudFront's own name: the DNS target of the app's domain" });
+    if (originLock) new CfnOutput(this, "OriginLock", { value: originLock, description: "Whether CloudFront refuses requests that didn't come through Cloudflare (enforce) or only reports them at /edge-lock (report)" });
     new CfnOutput(this, "FallbackDomain", { value: fallback.distributionDomainName, description: "Where CloudFront gets the page it shows while the app can't answer (any path; a 503)" });
     new CfnOutput(this, "ApiFunctionUrl", { value: url.url, description: "Direct function URL (answers 403 to anything not from CloudFront)" });
     new CfnOutput(this, "CronFunction", { value: cron.alias.functionArn, description: "Invoke with {\"action\":\"migrate\"} or {\"action\":\"counts\"}" });

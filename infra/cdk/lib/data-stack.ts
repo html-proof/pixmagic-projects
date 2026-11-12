@@ -12,7 +12,7 @@ import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as cr from "aws-cdk-lib/custom-resources";
 import type { Construct } from "constructs";
-import type { EnvConfig } from "./config.js";
+import { originLockSecretName, type EnvConfig } from "./config.js";
 import { NatInstancePerAz, SWAP_FILE_COMMANDS } from "./nat-instances.js";
 import { accessLogBucket, loggedBucket } from "./s3-access-logs.js";
 
@@ -203,6 +203,23 @@ export class DataStack extends Stack {
       generateSecretString: { secretStringTemplate: "{}", generateStringKey: "ORIGIN_VERIFY", passwordLength: 48, excludePunctuation: true },
       removalPolicy: RemovalPolicy.RETAIN,
     });
+
+    // The origin lock's secret (config.ts `domain.originLock`, viewer-request.ts): what Cloudflare's
+    // proxy adds to every request so CloudFront serves nobody else. A secret of its own, not a key
+    // of the app's: the functions have no use for it and can't read it, and the app's secret can't
+    // take a generated key after it was made (see above). The plain value, no JSON, so the owner can
+    // copy it to Cloudflare in one command without it being shown (docs/aws-deployment.md, "Origin
+    // lock"). The App stack reads it by this name when it deploys. Letters and digits only: it goes
+    // into a header and into the function's source as it is. Never edit generateSecretString
+    // (CloudFormation would generate a new value, and Cloudflare would still send the old one).
+    if (cfg.domain?.originLock) {
+      new secretsmanager.Secret(this, "OriginLockSecret", {
+        secretName: originLockSecretName(cfg),
+        description: "Insights: the secret Cloudflare adds to requests as x-origin-lock, checked by CloudFront's viewer-request function",
+        generateSecretString: { passwordLength: 48, excludePunctuation: true },
+        removalPolicy: RemovalPolicy.RETAIN,
+      });
+    }
 
     // WhatsApp Automation's Evolution API service (whatsapp-stack.ts, docs/whatsapp.md): its global API
     // key and its own database role's password, both generated here once and never seen by anyone.
