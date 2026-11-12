@@ -14,7 +14,7 @@ export interface EnvConfig {
   /**
    * RDS instance class, e.g. "t4g.micro" (1 GB memory, ~80 connections) or "t4g.small" (2 GB,
    * ~200; with Multi-AZ ~US$37/month more). Production is on t4g.micro to keep the bill within
-   * US$50-80 (2026-10-18); its alarms (db-free-memory, db-connections, db-cpu) say when it's
+   * the owner's ceiling (US$50 with tax since 2026-11-12); its alarms (db-free-memory, db-connections, db-cpu) say when it's
    * time for t4g.small. With Multi-AZ, a change costs one failover (about a minute); single-AZ, a
    * reboot of a few minutes. On demand: the two reserved-instance orders of 2026-10-18 ended
    * payment-failed, so none is active (docs/aws-deployment.md, Cost).
@@ -218,8 +218,9 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "migrateBeforeLive
     alertEmail: "bizinsightsaus@yahoo.com",
     // The owner's address for AWS costs: the budget, the daily cost email and Cost Anomaly Detection's daily alerts.
     budgetEmail: "bizinsightsaus@yahoo.com",
-    // The owner's ceiling, US$50-80 a month (2026-10-18; docs/aws-deployment.md, Cost).
-    monthlyBudgetUsd: 80,
+    // The owner's ceiling: US$50 a month, tax included (2026-11-12; it was US$50-80 from 2026-10-18.
+    // docs/aws-deployment.md, Cost, says what the bill is made of and what has to stay off for it).
+    monthlyBudgetUsd: 50,
     costReport: true,
     githubRepo: "html-proof/pixmagic-projects",
     githubOidcSubject: "repo:html-proof@68529971/pixmagic-projects@1413246051",

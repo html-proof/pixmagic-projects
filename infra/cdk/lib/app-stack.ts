@@ -710,7 +710,7 @@ export class AppStack extends Stack {
       ],
     });
 
-    // --- Budget: the owner's ceiling (US$50-80/month, 2026-10-18), tax included. Emails when the
+    // --- Budget: the owner's ceiling (US$50/month since 2026-11-12), tax included. Emails when the
     // month's spend passes 50, 75, 90 and 100% of it, and when AWS forecasts the month above it
     // (five: the most a budget takes). Nothing is stopped at any threshold.
     const budgetEmail = cfg.budgetEmail || cfg.alertEmail;

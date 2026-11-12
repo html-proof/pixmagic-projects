@@ -28,7 +28,7 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
 | Secrets | Secrets Manager `insights/production/{app,db-owner,db-system,worker-cognito,evolution-api,evolution-db,origin-lock}` (`db-owner`: the cron and the admin host only; `db-system`: every function's database login, [system-database-role.md](system-database-role.md); `origin-lock`: what Cloudflare adds to each request, read by no function, [Origin lock](#origin-lock-only-cloudflare-reaches-cloudfront)); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | WhatsApp service | Evolution API 2.3.7 on ECS Fargate: service `insights-production-evolution-a` in cluster `insights-production-whatsapp` (one task, private subnets, no public address), reached by the functions only at `http://evolution-a.whatsapp.production.insights.internal:8080` (Cloud Map); its own database `evolution` on the same RDS instance; logs `/ecs/insights-production-evolution-a` ([whatsapp.md](whatsapp.md)) | `infra/cdk/lib/whatsapp-stack.ts` (stack `InsightsWhatsapp-production`), `apps/aws/src/evolutionDb.ts` |
-| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$80/month (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
+| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$50/month, tax included (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
 | Audit (whole account) | CloudTrail `insights-account` (every Region) → S3 `insights-account-trail-605411278365` (1 year); IAM Access Analyzer `insights-account` in all 18 enabled Regions (StackSet `insights-account-access-analyzer`); GuardDuty (turned on by hand) | `infra/cdk/lib/audit-stack.ts` |
 
@@ -1243,8 +1243,9 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 
 ## Cost (US$/month, on-demand, approximate)
 
-The owner's ceiling is **US$50-80 a month** (2026-10-18), keeping everything above, Multi-AZ
-included. Since 2026-11-08 the database is single-AZ and there is one NAT instance (Fault
+The owner's ceiling is **US$50 a month, GST included**, since 2026-11-12 (the next heading). The
+rest of this section is the history behind it: the ceiling was **US$50-80 a month** from 2026-10-18,
+keeping everything above, Multi-AZ included. Since 2026-11-08 the database is single-AZ and there is one NAT instance (Fault
 tolerance): the two RDS rows below halve and the NAT row is ~8.3, ~30 a month less. Measured, priced and independently re-checked on 2026-10-18 (AWS Price List API, Sydney,
 before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's traffic):
 
@@ -1302,10 +1303,55 @@ most ~52 MiB of 4 GiB). Connections are the nearer limit: the API has no concurr
 RDS Proxy. NAT instances replaced the NAT gateway ($0.059/hour + $0.059/GB, ~47 with its address)
 on 2026-10-17: two of them cost a third of one gateway.
 
-**Budget** `insights-production-monthly-<digest>`: US$80, tax included, emails `budgetEmail` when the
-month passes 50/75/90/100% (US$40/60/72/80) and when AWS forecasts it above US$80. Nothing is
-stopped at any threshold. Until Basic support, the reservation and the Advanced RDS decision are in
-place, the 100% email is expected every month: it is accurate, not noise. The name carries a digest
+### The US$50 ceiling (2026-11-12)
+
+The owner's ceiling is **US$50 a month, GST included** (2026-11-12), which is US$45.45 of charges
+before AWS Australia's 10% GST. What a day costs, from Cost Explorer for 2026-11-10 (the last full
+day it had), by usage type, with the month each line makes at 30 days:
+
+| Line | US$/day | US$/month | Standing on 2026-11-12 |
+| --- | --- | --- | --- |
+| Database instance, db.t4g.micro single-AZ | 0.600 | 18.00 | Stays |
+| WAF: web ACL 5 + five rules | 0.334 | 10.02 | Stays until Cloudflare's rules replace it (MIGRATION_STATUS.md, change 6) |
+| WhatsApp service, Fargate Spot | 0.181 | 5.43 | **Off** since release 179 (`AWS_WHATSAPP=off`) |
+| NAT instance, t4g.nano | 0.127 | 3.81 | Stays |
+| Its public IPv4 address | 0.120 | 3.60 | Stays |
+| CloudWatch alarms above the 10 free (31 on 2026-11-12: US$2.10) | 0.110 | 3.30 | Stays |
+| Database backups above the free 20 GB | 0.102 | 3.06 | Falls: backups kept 7 days, not 14, since release 178 |
+| Database storage, 20 GB gp3 | 0.092 | 2.76 | Stays |
+| Secrets Manager, 6 secrets | 0.085 | 2.55 | Stays |
+| NAT instance's disk and its snapshots | 0.070 | 2.10 | Stays |
+| KMS key | 0.033 | 1.00 | Stays |
+| Cost Explorer (the daily cost email), S3, the rest | 0.03 | ~0.9 | Stays |
+| Route 53 hosted zone (charged on the 1st) | | 0.50 | Stays |
+| **A day, as measured** | **1.88** | **~57** | |
+
+On top of that, on the 1st: **Business Support+, US$29**. GST is 10% of everything.
+
+| The month, from December 2026 | Before GST | With GST |
+| --- | --- | --- |
+| As it stood on 2026-11-10, with the support plan | ~86 | ~95 |
+| WhatsApp off and backups 7 days (both live 2026-11-12; the backups' saving, taken as half, isn't measured yet), GuardDuty out of its trial with RDS protection off (+~1.7) | ~81 | ~89 |
+| and the support plan on Basic (owner, root console, from 2026-11-14) | ~52 | ~57 |
+| and the WAF replaced by Cloudflare's rules (change 6) | ~42 | **~46** |
+
+So the ceiling holds only with **all three**: the support plan on Basic, the WAF gone, and
+GuardDuty's RDS protection off before its trial ends (~2026-11-15; left on it adds ~9, Security
+events). Any one of them left in place puts the month above US$50, and with all three there is
+about US$4 to spare. November 2026 can't come in under US$50: the support plan's 29 was charged
+on the 1st and the month stood at US$64.20 with GST on the 11th.
+
+What is left after that, none of it done: a 1-year No Upfront reservation of the database takes
+its hour from US$0.025 to 0.020 (~3.65 a month; AWS could not charge the card for the two orders
+of 2026-10-18), the six secrets could move to free Parameter Store SecureStrings (~2.5), and the
+three manual snapshots of October count toward the backups charged above.
+
+**Budget** `insights-production-monthly-<digest>`: US$50 since 2026-11-12 (US$80 before), tax
+included, emails `budgetEmail` when the month passes 50/75/90/100% (US$25/37.50/45/50) and when AWS
+forecasts it above US$50. Nothing is stopped at any threshold. Until the three things under
+the US$50 ceiling above are in place, the 100% email is expected every month: it is accurate,
+not noise. November 2026 was already above US$50 when the budget was lowered, so its
+emails came at once. The name carries a digest
 of the alerts because CloudFormation replaces a budget whose alerts change. The alarm topic is
 another thing: it emails only once its subscription is confirmed (Owner-only steps, Alerts).
 
@@ -1618,7 +1664,7 @@ Instances `b8fd5938-4576-428f-8f65-cccf23441f4b`, Amazon S3 Server Access Logs E
 ## Capacity: what binds first (checked 2026-10-20)
 
 The design (Cognito, Lambda, Postgres, DynamoDB, CloudFront) holds a million accounts; the
-configuration is sized for a small merchant base and the US$80 budget. In the order they bind:
+configuration is sized for a small merchant base and the US$50 budget. In the order they bind:
 
 | Limit | Today | Lifts with |
 | --- | --- | --- |
