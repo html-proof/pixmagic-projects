@@ -1792,6 +1792,22 @@ fs.writeSync(1, '{"level":50,"msg":"KEPT-pino"}\\n');
     w.hasResourceProperties("AWS::ECS::Service", { ServiceName: "insights-production-evolution-a", DesiredCount: 1 });
   });
 
+  it("with -c whatsapp=off the functions get no service address and nothing alarms about a service that isn't asked", () => {
+    const offApp = synth({ whatsapp: "off" }).app;
+    const fns = Object.values(offApp.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
+    expect(fns.length).toBeGreaterThanOrEqual(3);
+    // No address: the app says WhatsApp isn't set up (core's evolutionConfigured) and the sweep skips it.
+    for (const f of fns) expect(f.Properties.Environment.Variables.EVOLUTION_API_URL).toBeUndefined();
+    expect(Object.keys(offApp.findResources("AWS::CloudWatch::Alarm", { Properties: { AlarmName: "insights-production-whatsapp-service-unreachable" } }))).toHaveLength(0);
+    expect(Object.values(offApp.findResources("AWS::Logs::MetricFilter")).map((r) => r.Properties.FilterPattern)).not.toContain('"evolution unreachable"');
+    // Everything else about WhatsApp stays, so turning it back on is the one switch.
+    for (const f of fns) expect(f.Properties.Environment.Variables.EVOLUTION_SECRET_ARN).toBe("insights/production/evolution-api");
+    expect(Object.keys(offApp.findResources("AWS::SQS::Queue", { Properties: { QueueName: "insights-production-whatsapp" } }))).toHaveLength(1);
+    // Running (production's own setting): the address and the alarm are there.
+    t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-whatsapp-service-unreachable" });
+    expect(Object.values(t.app.findResources("AWS::Logs::MetricFilter")).map((r) => r.Properties.FilterPattern)).toContain('"evolution unreachable"');
+  });
+
   it("tells every function the service's private address and the key's secret, and only the cron its database's", () => {
     const fns = Object.values(a.findResources("AWS::Lambda::Function")).filter((f) => f.Properties.Handler === "index.handler" && String(f.Properties.Runtime).startsWith("nodejs"));
     for (const f of fns) {

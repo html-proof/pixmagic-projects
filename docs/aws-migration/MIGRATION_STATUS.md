@@ -20,6 +20,7 @@ change, or the day an owner-only step is done.
 | 10 | Our own security monitoring: `db-login-failures` alarm, five EventBridge rules to the alarm topic | −0.40 (it costs that) | Pull request 2026-11-12 | Its Deploy |
 | 11 | Database: Enhanced Monitoring off, backups 14 → 7 days, the postgresql log expires after 90 days | ~1-3 (the bill gives the figure) | Pull request 2026-11-12, with change 10 | Its Deploy |
 | 12 | The alarm email reaches someone | 0 | The topic had no subscriber on 2026-11-12; a confirmation email was sent that day | Owner: click "Confirm subscription" |
+| 13 | WhatsApp service switched off (`AWS_WHATSAPP=off`: no Fargate task; everything else kept) | ~5-7 on Spot (17.29 on demand) | Pull request 2026-11-12; no message through it since 2026-10-30 | Its Deploy |
 
 ## Services
 
@@ -43,7 +44,7 @@ change, or the day an owner-only step is done.
 | EC2 (NAT instance, admin host) | Kept | Change 9: one NAT instance from 2026-11-08 |
 | NAT Gateway | Replaced 2026-10-17 by NAT instances | — |
 | Load balancer | Not used | — |
-| ECS Fargate (WhatsApp) | Kept | Change 5 |
+| ECS Fargate (WhatsApp) | Off since 2026-11-12 (no task; the service, its database and secrets kept) | Changes 5 and 13 |
 | WAF | Kept | Change 6 |
 | GuardDuty | Kept | Change 4 |
 | Support plan | Business Support+ | Change 1 |
@@ -82,3 +83,9 @@ change, or the day an owner-only step is done.
   2026-11-14 04:43 UTC, root console); GuardDuty's two RDS features (the owner's command, after
   the alarm email is confirmed); the WAF, the WhatsApp service, the old tables and the old
   Cloudflare deployment (each waits for the owner's answer).
+- **2026-11-12**: change 13. Before it: the `whatsapp` queue's `NumberOfMessagesSent` per day, 14
+  days: 10 and 17 on 29 and 30 October, 0 on every day since; no line from the service's own log
+  in the last day; WhatsApp is not offered to App Store workspaces. `AWS_WHATSAPP=off` set as a
+  repository variable, and the pull request makes "off" clean: the functions get no
+  `EVOLUTION_API_URL` (the page says WhatsApp isn't set up) and `whatsapp-service-unreachable`
+  isn't made. Back on: delete the variable, run Deploy to AWS ([../whatsapp.md](../whatsapp.md), "Cost").
