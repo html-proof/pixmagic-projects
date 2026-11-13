@@ -31,8 +31,9 @@ The owner wants every finished change live there. The road:
   variables `AWS_SCHEDULES=off` and `AWS_WHATSAPP=off`. Its database holds the data as of the
   switch. Don't undo any of it and don't write to RDS: two live copies would refresh the same
   Shopify tokens and fight over the WhatsApp sessions.
-- The server is shared and small (about 2.5 GB was free for bizinsights), with no off-server
-  backups and no monitoring stack yet: say so before a change that leans on either.
+- The server is shared and small (about 2.5 GB was free for bizinsights), with no monitoring
+  stack and no uptime check yet: say so before a change that leans on either. Its database is
+  backed up to an S3 bucket (nightly, the log continuously; the guide says where the passphrase is).
 - Work left on a local branch or uncommitted in a worktree never reaches the server.
 - A change of only Markdown files or `docs/` has nothing to ship: its merge is done once it is on
   `main`. Its pull request still runs CI for about a minute (the first job finds nothing to test
