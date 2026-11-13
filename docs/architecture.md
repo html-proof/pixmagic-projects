@@ -209,15 +209,17 @@ page by page:
 
 A new page uses these pieces rather than its own borders and radii.
 
-**Light or dark mode (2026-11-13).** The app has two palettes in `globals.css`, and which one shows
-is the person's choice, kept on the device (localStorage `theme`): Light, Dark, or Same as device
-(nothing saved, the default: the device's own setting, as before there was a choice). The rules
-and the script are in `lib/theme.ts` (tested); the controls in `components/Theme.tsx`: the
-sun-or-moon button in the top bar, the Appearance card on Settings → Profile, and "Switch to dark
-mode" in search.
-- The palette showing is `data-theme="light|dark"` on `<html>`. An inline script in `app/layout.tsx`
-  sets it before the page paints, so no page flashes the other palette; `ThemeSync` keeps it right
-  afterwards (the device's setting changing, a choice made in another tab).
+**Light or dark mode (2026-11-13).** The app has two palettes in `globals.css`. **Dark is the app's
+own look** (the owner's choice, the same day): what every visitor sees, signed in or not, until
+they choose otherwise, whatever their device is set to (`DEFAULT_THEME` in `lib/theme.ts`). The
+choice is the person's, kept on the device (localStorage `theme`): Dark, Light, or Same as device
+(the device's own setting). The rules and the script are in `lib/theme.ts` (tested); the controls
+in `components/Theme.tsx`: the sun-or-moon button in the top bar, the Appearance card on Settings →
+Profile, and "Switch to light mode" in search.
+- The palette showing is `data-theme="light|dark"` on `<html>`. The pages are built with the
+  default, and an inline script in `app/layout.tsx` sets the chosen one before the page paints, so
+  no page flashes the other palette; `ThemeSync` keeps it right afterwards (the device's setting
+  changing while the choice is Same as device, a choice made in another tab).
 - CSS never reads `prefers-color-scheme` (a test holds this): the dark tokens are
   `:root[data-theme="dark"]`, and Tailwind's `dark:` variant is redefined to follow the attribute.
   Both apply on screen only, so a page printed from dark mode prints in the light palette.
