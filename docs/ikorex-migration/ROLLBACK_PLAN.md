@@ -6,6 +6,13 @@ for: the database, the functions and CloudFront are gone ([LEAVING_AWS.md](LEAVI
 protects the data now is the server's own backups and the previous release `deploy.sh` keeps. The
 rest of this page is the plan as it stood, kept as the record.
 
+Going back a release has two limits of its own: since release `8fd49e1a5dc9` (the SMS and email
+module's 33 tables dropped) no release from before #390 can run, and the server keeps only the
+newest three releases anyway. Those tables as they were on 2026-11-13 06:48 UTC are in the first
+full backup, for a point-in-time restore to before 07:32 UTC
+([PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE.md), "Restoring the database"). The
+database as it was at the move is also on the server, in `~/bizinsights-archive/rds-final-20261113/`.
+
 The rule that makes rollback possible: **AWS keeps running, untouched, until stage F**, and stage F
 waits for the owner's separate approval after a 14-day rollback period. Stage F ends with the AWS
 account closed (decision 4b, owner 2026-11-07), so it is the one stage with no way back: everything

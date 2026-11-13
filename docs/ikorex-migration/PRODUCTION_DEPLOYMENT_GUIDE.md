@@ -44,6 +44,16 @@ password manager before the AWS account closes**, and move the backups to R2 (a 
 at stage F, since the bucket goes with the account. No backup ping is set (`BACKUP_PING_URL`): a
 night's failure shows only in `docker compose logs backup` until a check exists.
 
+**The uptime check as it runs since 2026-11-13:** the workflow Uptime check
+(`.github/workflows/uptime.yml`) runs `infra/uptime/check.mjs` every 10 minutes on GitHub's own
+machines, outside the server and outside AWS. It asks `https://bizinsights.io/api/readyz` and
+`/login`, looks again after 30 seconds when either is wrong, and fails the run if it still is.
+GitHub emails a failed scheduled run to whoever last changed the workflow's schedule (the owner's
+account; GitHub → Settings → Notifications → Actions decides whether by email). No account, key or
+address is stored anywhere for it. It is free while the repository is public. By hand, also to see
+a failure: Actions → Uptime check → Run workflow, with an address that doesn't answer 200. It
+stands in for the table's UptimeRobot row; the backup ping is still missing.
+
 On the server, as `deployer`, the project folder (nothing outside it is touched):
 
 ```bash
