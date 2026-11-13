@@ -1,29 +1,32 @@
 # Architecture and conventions
 
 How the code is organised, where new code goes, and the conventions it follows. For running it see
-[local-dev.md](local-dev.md); for production see [aws-deployment.md](aws-deployment.md) (AWS, where
-every merge to `main` deploys) and [RUNBOOK.md](RUNBOOK.md).
+[local-dev.md](local-dev.md); for production see
+[ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md](ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md)
+(the iKorex server, since 2026-11-13) and [RUNBOOK.md](RUNBOOK.md). Production ran on AWS until
+then ([aws-deployment.md](aws-deployment.md) is the record); its infrastructure code (`infra/cdk`),
+its deploy workflow and the Lambda entry point were removed from the repository the same day and
+are in Git's history.
 
 ## The shape of the system
 
-The application code runs on AWS (`apps/aws`, `infra/cdk`) and, for development, the demos and
-e2e, as one local Node process (`apps/aws/src/local.ts`). A third entry, `apps/aws/src/selfhost.ts`,
-runs it on a server of its own (web and worker processes, PostgreSQL for the queue, schedules and
-coordinator; `infra/ikorex`, docs/ikorex-migration), built for the move off AWS and not yet live.
-Only the thin entry that wires it to its surroundings differs.
+The application code runs on a server of its own (`apps/aws/src/selfhost.ts`: web and worker
+processes, PostgreSQL for the queue, schedules and coordinator; `infra/ikorex`,
+docs/ikorex-migration) and, for development, the demos and e2e, as one local Node process
+(`apps/aws/src/local.ts`). Only the thin entry that wires it to its surroundings differs. (The
+package is still named `apps/aws`: it held the Lambda entry point too, until AWS was left.)
 
 ```
-                        AWS                                   local server
-browser ──► CloudFront + WAF ──► Lambda "api"           or  Node HTTP server
+                        the server                            local server
+browser ──► Cloudflare ──► its tunnel ──► "web" container  or  Node HTTP server
               /api/*, /webhooks/*, /pixel/*, /shopify/*  ──► Hono app (apps/api)
               everything else                            ──► static UI (apps/web, Next.js static export)
-                                                             (if the function can't answer: apps/web's /unavailable page, from S3)
 
-jobs   SQS (sync, webhooks, aggregate, email, whatsapp) ──► Lambda "jobs"   or  in-process queues ──► consume()       (apps/worker)
-cron   EventBridge Scheduler (*/15, 03:15)    ──► Lambda "cron"   or  POST /__scheduled ──► runScheduled()  (apps/worker)
+jobs   PostgreSQL queue (sync, webhooks, aggregate, email, whatsapp) ──► "worker" container  or  in-process queues ──► consume()  (apps/worker)
+cron   schedules in the worker (*/15, 03:15)  or  POST /__scheduled ──► runScheduled()  (apps/worker)
 
 apps/api and apps/worker ──► packages/core (Shopify, Meta, Google, WhatsApp, email, staff, persistence)
-                         ──► packages/db   (Prisma; RDS PostgreSQL on AWS, a local Postgres in development)
+                         ──► packages/db   (Prisma; PostgreSQL in a container on the server, a local Postgres in development)
 everything               ──► packages/shared (pure logic, no I/O)
 ```
 
@@ -49,8 +52,7 @@ Each package may import only the ones above it in this table, never one below.
 | `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync (the GraphQL documents in `shopifyQueries.ts`), token encryption and key rotation (`keyRotation.ts`), normalizers, persistence and aggregates, alerts and audit, ad platforms (`ads/`: one client per platform, and `googleAdsSource.ts`, the source a Google Ads connection reads from: Google's API, or the generator behind the Google Ads demo, [ads-demo.md](ads-demo.md); `adConnections/`: connected accounts, their tokens, sync and reports, `demo.ts` the demo connection), WhatsApp, the Inventory module (`inventory/`: stock levels and locations, alerts, stock changes, its reports; docs/inventory.md), Zapier (`zapier/`, imported as `@app/core/zapier`: bizinsights as the OAuth provider of its Zapier app, the event outbox and its deliveries; [zapier.md](zapier.md)), the store's own costs (`expenses.ts`: Profit & Loss, Settings → Costs and the dashboard's `expenses` module, the recurring costs' payments recorded by the cron sweep; the rules, net profit included, in `@app/shared/expenses`; [kpis.md](kpis.md) "Costs and net profit"). Every Meta Graph API call, ads and WhatsApp alike, goes through `metaGraph.ts` (token in the Authorization header, paging links only to graph.facebook.com). The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
 | `apps/api` | HTTP: routing, auth, permission checks, input validation, response shapes. | Hold business logic that a job or another route could need: put it in core. |
 | `apps/worker` | Queue consumers and cron sweeps (`src/handlers/`: one module per job, re-exported by `handlers.ts`): retries, backoff, failure bookkeeping, then a call into core. `ops/` holds one-off maintenance tasks (RUNBOOK.md). | |
-| `apps/aws` | The Lambda entry (one build, three functions: api, jobs, cron; plus `cognitoEmail.ts`, its own small entry in the same package for the Cognito pool's email trigger): loads secrets at cold start, wires DynamoDB, SQS, S3 and SES into `Deps`, serves the UI and the API on one origin, gives every outbound call its timeout (`withTimeout`), runs migrations on request. The app's shared settings (`settings.ts`) and the local server (`local.ts`, `dev.ts`, `localQueues.ts`), which wires the same app to in-process stand-ins. | Contain logic beyond that wiring. |
-| `infra/cdk` | The AWS infrastructure as code (edge, data, app, auth, WhatsApp and CI stacks) and the deploy, data-copy, smoke-test and rollback scripts. | Hold application code. |
+| `apps/aws` | The server's entry (`selfhost.ts`, `server.ts`: one bundle run as `web` and as `worker`; `admin.ts`, its maintenance command): wires the PostgreSQL queue, schedules and coordinator, the blob folder and the mailer into `Deps`, serves the UI and the API on one origin, gives every outbound call its timeout (`withTimeout`), runs migrations on request. The app's shared settings (`settings.ts`) and the local server (`local.ts`, `dev.ts`, `localQueues.ts`), which wires the same app to in-process stand-ins. | Contain logic beyond that wiring. |
 | `infra/ikorex` | The self-hosted deployment (docs/ikorex-migration): Compose files, the app and PostgreSQL images, backups, monitoring, `ship.sh` / `deploy.sh`, env templates (never real values). | Hold application code or secrets. |
 | `apps/web` | The UI (see [Frontend](#frontend-appsweb)). Depends on `@app/shared` only; talks to the API over HTTP. | Import core/db, or compute KPIs the API already returns. |
 
@@ -342,11 +344,10 @@ leaves 7–8 ms per frame:
 
 | Setting | Lives in | Read by |
 | --- | --- | --- |
-| App settings (public: app ids, API versions, scopes, flags) | `apps/aws/src/settings.ts` (shipped in the functions' package, put in `process.env` at cold start by `apps/aws/src/index.ts`; not in the 4 KB environment); locally overridden by `apps/aws/.env` | `env()` in `packages/core/src/env.ts` |
-| Secrets (session, encryption keys, client secrets) | Secrets Manager `insights/production/*`, set with `infra/cdk/scripts/put-secrets.mjs` ([aws-deployment.md](aws-deployment.md)); locally `apps/aws/.env` (from `.env.example`) | `apps/aws/src/secrets.ts` at cold start, into `process.env`, then `env()` |
-| Services (queues, coordinator, payload store, mail) | infra/cdk (queue URLs, table, bucket, SES region in the functions' environment) | `apps/aws/src/index.ts` (AWS) or `local.ts` (local), passed as `Deps` |
-| Sign-in (Amazon Cognito: pool, client, domain; the client secret) | the Auth stack (`infra/aws/cognito.yaml` via infra/cdk), into the runtime parameter and a secret ([cognito-setup.md](cognito-setup.md)) | `cognitoConfig()` in `apps/api/src/cognito.ts` |
-| AWS settings (URLs, ids, flags) and infrastructure choices | SSM parameter `/insights/production/runtime`; CDK context (`infra/cdk/lib/config.ts`, `cdk.json`, the deploy workflow's `-c` flags) | `apps/aws` at cold start; `infra/cdk` at deploy |
+| App settings (public: app ids, API versions, scopes, flags) | `apps/aws/src/settings.ts` (shipped in the server's bundle, put in `process.env` at start by `selfHostSettings`); locally overridden by `apps/aws/.env` | `env()` in `packages/core/src/env.ts` |
+| Secrets (session, encryption keys, client secrets) | the server's `env/*.env` files, mode 600, one per container ([ikorex-migration/ENVIRONMENT_VARIABLES_MIGRATION.md](ikorex-migration/ENVIRONMENT_VARIABLES_MIGRATION.md)); locally `apps/aws/.env` (from `.env.example`) | the container's environment, then `env()` |
+| Services (queues, coordinator, payload store, mail) | `infra/ikorex/docker-compose.yml` and the env files (the database, the blob folder, the mail provider's key) | `apps/aws/src/selfhost.ts` (the server) or `local.ts` (local), passed as `Deps` |
+| Sign-in (`AUTH_MODE`: the app's own, with Amazon Cognito behind it until its users have moved over; pool, client, domain, the client secret) | the server's `env/app.env`; the pool itself is the Auth stack, the one stack left in AWS (`infra/aws/cognito.yaml`) ([cognito-setup.md](cognito-setup.md)) | `cognitoConfig()` in `apps/api/src/cognito.ts` |
 | Feature flags for unfinished work | `apps/web/src/lib/features.ts` | the UI |
 | Local tooling (docker compose, Prisma CLI, `ops:*` tasks) | repo-root `.env` (from `.env.example`) | those tools only |
 
@@ -360,8 +361,8 @@ so the deploy's config check warns when the id is set and the secret isn't (and 
 secret to `put-secrets.mjs`, if it has a recognisable one). Code reads settings through
 `env()`, not `process.env`. The exceptions are deliberate: the logger (`LOG_LEVEL`), the database
 connections (`DATABASE_URL` / `APP_DATABASE_URL`), per-app Shopify secrets whose names are dynamic
-(`SHOPIFY_APP_SECRET_<KEY>`), and `apps/aws`, which puts the secrets into `process.env` at cold start
-and reads the Lambda's own settings (queue URLs, bucket, table, region) before `env()` can run.
+(`SHOPIFY_APP_SECRET_<KEY>`), and `apps/aws`, which puts the shipped settings into `process.env` at start
+and reads the server's own settings (the database, the blob folder, the role it runs as) before `env()` can run.
 
 Local tools and the local server use the `app_dev` database; production's `app` is only ever reached
 by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture-decisions.md#adr-008-defaults-that-can-only-reach-production-on-purpose)).
@@ -387,14 +388,13 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
 
 | Kind | Where | Runs with |
 | --- | --- | --- |
-| Unit (pure logic, config files, AWS adapters, the local server) | `packages/shared/test`, `packages/core/test`, `apps/aws/test`, `apps/web/test` (`node --test`) | `pnpm test` |
-| Infrastructure (synthesized stacks) | `infra/cdk/test` | `pnpm --filter @infra/cdk test` |
+| Unit (pure logic, config files, the server's adapters, the local server) | `packages/shared/test`, `packages/core/test`, `apps/aws/test`, `apps/web/test` (`node --test`) | `pnpm test` |
 | Integration (real Postgres, faked Cognito/Shopify/Meta) | `apps/api/test`, `apps/worker/test` | `pnpm test:integration` (database `*_test`; `TEST_PG_PORT` points it at a throwaway server) |
 | End to end (Playwright against the local server) | `apps/web/e2e` | `pnpm e2e` |
 | Lint (TypeScript, React hooks) and import cycles | everywhere | `pnpm lint` (CI fails on any finding; `scripts/check-import-cycles.mjs` fails on any module that imports itself through others, `import()` included) |
 
 A bug fix comes with the test that would have caught it. CI also checks the dependency audit, that
-the migrations produce exactly `schema.prisma`, and that the Lambda package builds.
+the migrations produce exactly `schema.prisma`, and that the server bundle builds.
 
 A release's migrations are applied before its code goes live ([aws-deployment.md](aws-deployment.md),
 "Migrations before the switch"), so the release before keeps running on them for up to a minute of

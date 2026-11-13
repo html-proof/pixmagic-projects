@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { halfConfigured, logger, resetConfigWarning, resetEnvCache } from "@app/core";
-import { handler } from "../src/index.js";
+import { halfConfigured, logger, resetConfigWarning, resetEnvCache, warnHalfConfigured } from "@app/core";
+import { runAction } from "../src/actions.js";
 import { APP_SETTINGS } from "../src/settings.js";
 
 /**
- * The cron action the deploy's smoke test invokes ({"action":"config"}): what this deployment has
+ * The admin command's `config` (docker compose run --rm admin config): what this deployment has
  * set up, with each provider whose public id is in the shipped settings but whose secret is missing.
  */
 
@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("the shipped settings", () => {
-  it("name, with no secrets at all, every provider whose secret Secrets Manager must hold", () => {
+  it("name, with no secrets at all, every provider whose secret the server's env file must hold", () => {
     expect(halfConfigured({ ...APP_SETTINGS }).map((c) => `${c.provider}: ${c.secretSetting}`)).toEqual([
       "Shopify: SHOPIFY_API_SECRET",
       "Shopify app pixmagic: SHOPIFY_APP_SECRET_PIXMAGIC",
@@ -52,21 +52,24 @@ describe("the shipped settings", () => {
   });
 });
 
-describe('the cron action {"action":"config"}', () => {
+describe("the admin command's config action", () => {
   it("answers what is set up, by setting name, without a value", async () => {
-    // The secrets only: the shipped settings come from the package (index.ts), as on AWS, where the
-    // functions' environment doesn't carry them.
+    // The secrets only: the shipped settings come from the package, as the server's start applies
+    // them (selfHostSettings), and the start says once which providers are half set up.
     for (const k of Object.keys(APP_SETTINGS)) delete process.env[k];
     Object.assign(process.env, SECRETS);
+    for (const [k, v] of Object.entries(APP_SETTINGS)) process.env[k] ??= v;
     resetEnvCache();
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    warnHalfConfigured();
 
-    const report = (await handler({ action: "config" }, {})) as { ads: unknown; whatsapp: unknown; halfConfigured: string[] };
+    const ctx = { jobs: async () => Promise.reject(new Error("config needs no jobs")), ready: async () => {}, dir: "" };
+    const report = (await runAction({ action: "config" }, ctx)) as { ads: unknown; whatsapp: unknown; halfConfigured: string[] };
 
     expect(report.ads).toEqual({ configured: { meta: true, google: false, adsense: false }, restricted: { meta: true, google: false, adsense: false } });
     expect(report.halfConfigured).toEqual(["Shopify", "Shopify app pixmagic", "Shopify app public", "Shopify app appstore", "Google Ads and Google AdSense", "Zapier"]);
     // WhatsApp is on the Meta Ads app, so META_APP_SECRET serves it: no WHATSAPP_APP_SECRET needed. Evolution API's address
-    // and key come from the CDK app and Secrets Manager (not set in this test).
+    // and key come from the server's env file (not set in this test).
     expect(report.whatsapp).toEqual({
       evolution: false,
       evolutionNeeds: ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"],
@@ -76,7 +79,7 @@ describe('the cron action {"action":"config"}', () => {
     });
     const text = JSON.stringify(report);
     for (const value of [...Object.values(SECRETS), APP_SETTINGS.META_APP_ID, APP_SETTINGS.GOOGLE_ADS_CLIENT_ID, APP_SETTINGS.SHOPIFY_API_KEY]) expect(text).not.toContain(value);
-    // The cold start already said it in the logs, once per provider.
+    // The start already said it in the logs, once per provider.
     expect(warn.mock.calls.filter(([, msg]) => msg === "public id set but secret missing").map(([obj]) => (obj as { provider: string }).provider)).toEqual(report.halfConfigured);
   });
 });
