@@ -879,6 +879,26 @@ to every request it passes on, the header `x-origin-lock`, and CloudFront's view
 (`infra/cdk/lib/viewer-request.ts`) answers **403** to a request without it. Page requests (GET,
 HEAD) on the other names still get their 301 to `https://bizinsights.io` first.
 
+**Where it stands (2026-11-13): reporting, not enforcing.** `"enforce"` was merged that day once
+`/edge-lock` answered 204, and never deployed: its one Deploy (05:31 UTC) stopped at the function
+itself, because CloudFront takes a comment of at most 128 characters and the enforcing one had
+138, and the stack rolled back (the comment is shorter now and a test counts it). Half an hour
+later `bizinsights.io` moved to the iKorex server and AWS was frozen as the way back. `config.ts`
+is back on `"report"`, which is what is deployed, because the order below can't be kept while
+the name points at the server:
+
+- `https://bizinsights.io/edge-lock` is the server's to answer now (404). It says nothing about
+  CloudFront until Cloudflare sends this name's traffic there again.
+- Cloudflare's rule still adds the header on both names, and it now arrives at the server through
+  the tunnel, which doesn't read it. **Keep the rule**: it is what lets the lock be enforced if
+  AWS serves again, and making it again takes the owner at the PC.
+- The cloudfront.net name is open to a request that skips Cloudflare, as it was before the lock:
+  the WAF is in front of it and, since the freeze, nothing behind it answers (429 from the
+  functions).
+
+If AWS serves again, enforcing is one pull request after the DNS is back: check that `/edge-lock`
+answers 204, set `"enforce"`, merge, Deploy.
+
 - **The secret** is `insights/production/origin-lock` in Secrets Manager (US$0.40 a month): 48
   letters and digits the Data stack generated; nobody has seen it and it is in no file. CloudFormation
   copies it into the function's source when the App stack deploys (a dynamic reference, as for
