@@ -113,7 +113,6 @@ export async function asNewVisitor(page: Page) {
   await page.setExtraHTTPHeaders({ "x-insights-client-ip": `10.${n()}.${n()}.${n()}` });
 }
 
-/** Fill in the create-account form (without sending it). */
 /**
  * The short menu (lib/menu.ts) lists the everyday pages and folds the rest into groups: open one
  * of them in the sidebar ("reports", "store", "marketing" or "settings"), as its heading does.
@@ -132,6 +131,18 @@ export async function showEveryPage(page: Page) {
   await expect(nav).toHaveAttribute("data-menu", "full");
 }
 
+/**
+ * Open a page's "More detail" fold (components/MoreDetail.tsx, lib/features.ts FOLD_DETAIL) when it is
+ * closed: for a test of a panel that sits inside it. The device then keeps it open.
+ */
+export async function openMoreDetail(page: Page, id = "sales") {
+  const fold = page.getByTestId(`more-detail-${id}`);
+  await expect(fold).toBeVisible();
+  if ((await fold.getAttribute("open")) === null) await fold.locator("summary").click();
+  await expect(fold).toHaveAttribute("open", "");
+}
+
+/** Fill in the create-account form (without sending it). */
 export async function fillSignUp(page: Page, email: string, password = PASSWORD, name = "E2E User") {
   await asNewVisitor(page);
   await page.getByLabel("Full name").fill(name);

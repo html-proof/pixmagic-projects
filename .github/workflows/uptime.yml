@@ -4,6 +4,11 @@ name: Uptime check
 # iKorex server it runs on, and outside AWS. infra/uptime/check.mjs asks /api/readyz and /login, looks
 # again after 30 seconds if either is wrong, and fails the run if it still is.
 #
+# The second of two checks. GitHub never started this schedule on 2026-11-13 (no scheduled run in the
+# 3 hours after it reached main), so the one that is relied on is the Cloudflare Worker
+# bizinsights-uptime (infra/uptime/worker.mjs): the same check, on Cloudflare's cron, emailing the
+# owner. This stays for when GitHub does start it, and for a check by hand (Run workflow).
+#
 # The alarm is GitHub's own: a failed scheduled run is emailed to whoever last changed this file's
 # schedule (their GitHub notification settings, Actions: "failed workflows"). While the site stays
 # down every run fails, so an email follows about every 10 minutes; a green run after them means it

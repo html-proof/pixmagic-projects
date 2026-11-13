@@ -52,8 +52,10 @@ The owner wants every finished change live there. The road:
   Don't offer a copy off the server again unless the owner raises it; if they do, the guide's
   "Backups" says how a second repository is added.
 - The server is shared and small (about 2.5 GB was free for bizinsights), with no monitoring
-  stack: say so before a change that leans on one. What watches it: the Uptime check workflow
-  (`.github/workflows/uptime.yml`, every 10 minutes from GitHub; a failed run emails the owner),
+  stack: say so before a change that leans on one. What watches it: the Cloudflare Worker `bizinsights-uptime`
+  (`infra/uptime/worker.mjs`, every 10 minutes on Cloudflare's cron; emails the owner through Email
+  Routing; published by hand with wrangler, the file's header says how), and the Uptime check workflow
+  (`.github/workflows/uptime.yml`, whose schedule GitHub didn't start on 2026-11-13; a failed run emails the owner),
   so a ship that keeps the site down for more than about 30 seconds turns a run red. Nothing
   watches the nightly backup: a failure shows only in `docker compose logs backup`.
 - Work left on a local branch or uncommitted in a worktree never reaches the server.

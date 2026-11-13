@@ -2,6 +2,7 @@
 import type { ReactNode } from "react";
 import { seesModule } from "@app/shared/access";
 import { useApp } from "@/components/AppContext";
+import { MoreDetail } from "@/components/MoreDetail";
 import { seesTopic } from "@/lib/access";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow } from "./Charts";
@@ -52,10 +53,20 @@ function SalesMore({ ov, currency }: { ov: Overview; currency: string }) {
   // The store's own calculation (Custom sales), when it shows it on the dashboard: beside Shopify's figures, named.
   const custom = appliedCustom(s);
 
-  return (
-    <>
-      <h2 className="pt-2 text-xl leading-7 font-semibold tracking-[-0.01em]">More detail</h2>
+  const daily = ov.hasData && s.series.length > 1;
+  const monthly = !!s.year && s.year.orders > 0;
+  // What the fold says is inside: only the panels this store has, in the order they are drawn.
+  const holds = [
+    ...(salesLinesOf(c) ? ["Total sales line by line"] : []),
+    ...(ov.modules.shopify_check ? ["the check against Shopify"] : []),
+    ...(ov.modules.profit ? ["gross profit"] : []),
+    ...(r ? ["returns"] : []),
+    ...(daily ? ["sales day by day"] : []),
+    ...(monthly ? ["sales month by month"] : []),
+  ];
 
+  return (
+    <MoreDetail id="sales" holds={holds} heading={<h2 className="pt-2 text-xl leading-7 font-semibold tracking-[-0.01em]">More detail</h2>}>
       {/* Net sales to total sales, line by line, and the store's own calculation from those lines. */}
       {salesLinesOf(c) && <TotalSalesBreakdown ov={ov} currency={currency} />}
 
@@ -72,11 +83,9 @@ function SalesMore({ ov, currency }: { ov: Overview; currency: string }) {
         </Panel>
       )}
 
-      {ov.hasData && s.series.length > 1 && (
-        <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.historyFrom ?? null} currency={currency} custom={custom} />
-      )}
-      {s.year && s.year.orders > 0 && <MonthlySalesCard year={s.year} historyFrom={ov.data?.historyFrom ?? null} currency={currency} custom={custom} />}
-    </>
+      {daily && <DailySalesCard series={s.series} range={ov.range} today={ov.today} historyFrom={ov.data?.historyFrom ?? null} currency={currency} custom={custom} />}
+      {monthly && s.year && <MonthlySalesCard year={s.year} historyFrom={ov.data?.historyFrom ?? null} currency={currency} custom={custom} />}
+    </MoreDetail>
   );
 }
 
