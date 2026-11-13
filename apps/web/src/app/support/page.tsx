@@ -41,9 +41,10 @@ export default function SupportPage() {
           </Faq>
 
           <Faq q="Why does my dashboard only go back 60 days?">
-            The <code>read_orders</code> permission Shopify grants is limited to the last 60 days of orders. Longer history needs an
-            additional permission (<code>read_all_orders</code>) that Shopify grants on request. Let us know if you need it and we will
-            apply.
+            Shopify shares only the last 60 days of orders with an app until the store also grants it full order history, a
+            permission Shopify approves for each app first. The line under the dates on your dashboard says where your store stands.
+            When it shows <em>Reconnect to import full history</em>, use it: Shopify asks you to approve the new permission, and your
+            orders are then imported back to your first one, newest year first.
           </Faq>
 
           <Faq q="My figures don't match another analytics app. Which one is wrong?">

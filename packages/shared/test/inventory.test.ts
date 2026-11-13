@@ -15,6 +15,7 @@ import {
   INVENTORY_KPIS,
   quantitiesFrom,
   restockQuantity,
+  oversoldOwed,
   sellThrough,
   stockQuerySchema,
   stockStatus,
@@ -72,6 +73,26 @@ describe("forecasts only from enough sales history", () => {
     expect(restockQuantity({ available: 10, incoming: 5, rate: 2, leadTimeDays: 14, coverDays: 30 })).toBe(73);
     expect(restockQuantity({ available: 500, incoming: 0, rate: 2, leadTimeDays: 14, coverDays: 30 })).toBe(0);
     expect(restockQuantity({ available: 10, incoming: 0, rate: null, leadTimeDays: 14, coverDays: 30 })).toBeNull();
+  });
+
+  it("oversold units still in unfulfilled orders are added back; shipped ones aren't", () => {
+    // −9 available, 9 orders waiting, nothing sold lately: order the 9 owed.
+    expect(restockQuantity({ available: -9, committed: 9, incoming: 0, rate: 0, leadTimeDays: 14, coverDays: 30 })).toBe(9);
+    // Made to order: the 9 shipped long ago (nothing committed), so nothing is owed.
+    expect(restockQuantity({ available: -9, committed: 0, incoming: 0, rate: 0, leadTimeDays: 14, coverDays: 30 })).toBe(0);
+    // Only the oversold units still waiting count, never more than were oversold.
+    expect(restockQuantity({ available: -9, committed: 4, incoming: 0, rate: 0, leadTimeDays: 14, coverDays: 30 })).toBe(4);
+    expect(restockQuantity({ available: -3, committed: 20, incoming: 0, rate: 0, leadTimeDays: 14, coverDays: 30 })).toBe(3);
+    // On top of the expected sales, less what's incoming.
+    expect(restockQuantity({ available: -3, committed: 3, incoming: 0, rate: 2, leadTimeDays: 14, coverDays: 30 })).toBe(91);
+    expect(restockQuantity({ available: -9, committed: 9, incoming: 5, rate: 0, leadTimeDays: 14, coverDays: 30 })).toBe(4);
+    // Without Shopify's committed figure (variant totals only) every oversold unit counts.
+    expect(restockQuantity({ available: -9, committed: null, incoming: 0, rate: 0, leadTimeDays: 14, coverDays: 30 })).toBe(9);
+    expect(restockQuantity({ available: -9, incoming: 0, rate: 0, leadTimeDays: 14, coverDays: 30 })).toBe(9);
+    // Still no suggestion at all without a sales rate.
+    expect(restockQuantity({ available: -9, committed: 9, incoming: 0, rate: null, leadTimeDays: 14, coverDays: 30 })).toBeNull();
+    expect(oversoldOwed(5, 3)).toBe(0);
+    expect(oversoldOwed(0, null)).toBe(0);
   });
 
   it("turnover and sell-through, null where they can't be said", () => {

@@ -3,7 +3,7 @@ import { systemDb, withTenant, type Store } from "@app/db";
 import {
   audit,
   customersFromChange,
-  declaredScopes,
+  requiredScopesFor,
   fetchGrantedScopes,
   getAccessToken,
   logger,
@@ -184,7 +184,7 @@ export function scopeRoutes(app: App, deps: Deps) {
       capabilities: resolveCapabilities(result.scopes, {
         pixelInstalled: fresh.pixelInstalled,
         optionalScopes: optionalScopesFor(store),
-        declaredScopes: declaredScopes(),
+        declaredScopes: requiredScopesFor(store),
       }),
     });
   });
@@ -284,7 +284,7 @@ export function scopeRoutes(app: App, deps: Deps) {
       capabilities: resolveCapabilities(scopes, {
         pixelInstalled: fresh.pixelInstalled,
         optionalScopes: optionalScopesFor(store),
-        declaredScopes: declaredScopes(),
+        declaredScopes: requiredScopesFor(store),
       }),
     });
   });

@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
+import { ThemeSync } from "@/components/Theme";
+import { THEME_SCRIPT } from "@/lib/theme";
 
 export const metadata: Metadata = {
   title: "bizinsights for Shopify",
@@ -14,8 +16,18 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen antialiased"><ConnectionStatus />{children}</body>
+    // The script below puts the chosen palette on <html> (data-theme) before React starts, so the
+    // tag differs from what was built: expected, and only this tag is excused.
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Light or dark (lib/theme.ts), before anything is drawn: no flash of the other palette. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
+      <body className="min-h-screen antialiased">
+        <ThemeSync />
+        <ConnectionStatus />
+        {children}
+      </body>
     </html>
   );
 }
