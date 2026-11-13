@@ -192,11 +192,14 @@ What a store sees (`data.history.access` in the overview):
 
 - A **new** store grants the scope at install: `granted`, and its first import is the whole history.
 - A store **connected before** keeps working on its 60 days and reads `reconnect`: its dashboard
-  says so under the dates, with **Reconnect to import full history** for owners and admins. Shopify
-  also asks for the new permission by itself when the merchant next opens the app from their Shopify
-  admin (managed installation). Either way `app/scopes_update` queues a full orders import
-  (`scopeFollowUpKinds`), which records the history as complete, so no dates show as "Not imported"
-  any more.
+  says so under the dates, with **Reconnect to import full history** for owners and admins
+  (`/onboarding?ws=…&shop=…`, which sends them through Shopify's approval of the new permission).
+  That link is the only way: opening the app from the Shopify admin does **not** ask (seen on
+  PixMagic's store, 2026-11-13, after `pixmagic-11` was released). The app isn't embedded, so
+  Shopify shows no permissions page of its own, and `/shopify/launch` opens a store that works
+  without authorizing it again. The reconnect imports the store afresh, now over its whole
+  history (`attachStore`), and `app/scopes_update` queues the same full orders import
+  (`scopeFollowUpKinds`), so no dates show as "Not imported" any more.
 - `requestable` (the scope declared in `optional_scopes` instead: an **Import full history** button,
   `POST .../scopes/request`) and `awaiting_shopify` (declared nowhere) are what the code shows for
   a deployment that doesn't declare it required; production's does.
