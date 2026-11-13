@@ -3,11 +3,13 @@ import {
   appOptionalScopes,
   customersFromChange,
   declaredOptionalScopes,
+  declaredScopes,
   fetchGrantedScopes,
   logger,
   optionalScopeGrantUrl,
   optionalScopesFor,
   requestableScopes,
+  requiredScopesFor,
   resetEnvCache,
   revocableOptionalScopesFor,
   revocableScopes,
@@ -46,6 +48,35 @@ afterEach(() => {
 /** What production declares for every app (apps/aws/src/settings.ts), and read_reports for two of them. */
 const COMMON = "read_customers,write_pixels,read_customer_events";
 const PER_APP = { SHOPIFY_OPTIONAL_SCOPES: COMMON, SHOPIFY_APP_OPTIONAL_SCOPES: "default:read_reports;pixmagic:read_reports" };
+
+describe("required scopes per app", () => {
+  const env = { SHOPIFY_SCOPES: "read_orders,read_products", SHOPIFY_APP_SCOPES: "pixmagic:read_all_orders", SHOPIFY_APP_STORE_PREVIEW_SHOPS: "review-store.myshopify.com" };
+
+  it("adds an app's own required scopes to the common list", () => {
+    withEnv(env, () => {
+      expect(declaredScopes("pixmagic")).toEqual(["read_orders", "read_products", "read_all_orders"]);
+      // No app named, or one whose toml adds nothing: the common list only.
+      expect(declaredScopes()).toEqual(["read_orders", "read_products"]);
+      expect(declaredScopes("appstore")).toEqual(["read_orders", "read_products"]);
+    });
+  });
+
+  it("reads a store by the app it is connected through, and the preview store as the App Store app", () => {
+    withEnv(env, () => {
+      expect(requiredScopesFor({ shopDomain: "pixmagic.myshopify.com", shopifyAppKey: "pixmagic" })).toContain("read_all_orders");
+      expect(requiredScopesFor({ shopDomain: "other.myshopify.com", shopifyAppKey: "appstore" })).not.toContain("read_all_orders");
+      expect(requiredScopesFor({ shopDomain: "review-store.myshopify.com", shopifyAppKey: "pixmagic" })).not.toContain("read_all_orders");
+    });
+  });
+
+  it("leaves out an entry it can't read, and keeps the optional setting's entries apart", () => {
+    withEnv({ ...env, SHOPIFY_APP_SCOPES: "pixmagic=read_all_orders", SHOPIFY_APP_OPTIONAL_SCOPES: "pixmagic:read_reports" }, () => {
+      vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
+      expect(declaredScopes("pixmagic")).toEqual(["read_orders", "read_products"]);
+      expect(declaredOptionalScopes("pixmagic")).toContain("read_reports");
+    });
+  });
+});
 
 describe("optional scopes per app", () => {
   it("adds an app's own extras to the common list", () => {

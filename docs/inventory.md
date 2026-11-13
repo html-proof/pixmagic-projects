@@ -109,8 +109,21 @@ never claims "live": Shopify gives no freshness guarantee for webhooks.
   business number in the last 24 hours (docs/whatsapp.md).
 
 Forecasts (days of stock, run-out date, reorder, fast/slow-moving) need at least 14 days of imported
-orders (`MIN_HISTORY_DAYS`); slow-moving needs 30. Reorder = rate × (lead time + days to cover) −
-available − incoming.
+orders (`MIN_HISTORY_DAYS`); slow-moving needs 30. Reorder (the suggested order, `restockQuantity`
+in `@app/shared/inventory`) = rate × (lead time + days to cover) + oversold units still owed −
+available (0 when below 0) − incoming, never below 0.
+
+- **Oversold units still owed** (`oversoldOwed`): below 0 available, the oversold units, but no more
+  than Shopify's `committed` (units in orders not yet fulfilled). An oversold order that has shipped
+  is owed nothing, so a made-to-order item that went negative long ago adds nothing, while −9 with 9
+  orders waiting suggests at least 9. Without stock-level access there is no committed figure, and
+  every oversold unit counts. The owner's call on 2026-11-06; until then any negative stock counted
+  as 0, so an oversold item with no recent sales always suggested 0.
+- **Keeps selling**: an out-of-stock item Shopify goes on selling (`inventory_policy` `continue`,
+  "Continue selling when out of stock", as made-to-order and print-on-demand items often are) shows
+  a neutral "Keeps selling" tag in the Days left column instead of the red "Out now" (`DaysLeftTag`,
+  `components/inventory/StockKit.tsx`). It is still listed and counted as out of stock, and alerts
+  are unchanged (owner's call, 2026-11-06).
 
 ## Changing stock
 

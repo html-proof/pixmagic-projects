@@ -49,8 +49,9 @@ export function niceTicksAround(min: number, max: number, count: number): number
   return ticks;
 }
 
-export function useWidth() {
-  const ref = useRef<HTMLDivElement>(null);
+/** The width of the element given `ref`, kept up as it resizes (0 until it is measured). */
+export function useWidth<E extends HTMLElement = HTMLDivElement>() {
+  const ref = useRef<E>(null);
   const [width, setWidth] = useState(0);
   useEffect(() => {
     const el = ref.current;

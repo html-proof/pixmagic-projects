@@ -143,13 +143,25 @@ export function depletionDay(today: string, available: number, rate: number | nu
 }
 
 /**
- * Units to order now so the stock covers the lead time and then `coverDays` of sales: the sales
- * expected over both, less what is available and already incoming. 0 when nothing is needed, null
- * without a sales rate.
+ * Units sold below 0 available that customers are still waiting for: the oversold units, but no
+ * more than are in orders not yet fulfilled (`committed`), since an oversold order that has shipped
+ * (as made-to-order items do) is owed nothing. Without Shopify's committed figure (only the
+ * variant's own total is read) every oversold unit counts. 0 at 0 or more available.
  */
-export function restockQuantity(input: { available: number; incoming: number; rate: number | null; leadTimeDays: number; coverDays: number }): number | null {
+export function oversoldOwed(available: number, committed: number | null | undefined): number {
+  if (available >= 0) return 0;
+  return committed == null ? -available : Math.min(-available, Math.max(0, committed));
+}
+
+/**
+ * Units to order now so the stock covers the lead time and then `coverDays` of sales: the sales
+ * expected over both and the oversold units still owed (`oversoldOwed`), less what is available
+ * and already incoming. 0 when nothing is needed, null without a sales rate (docs/inventory.md).
+ */
+export function restockQuantity(input: { available: number; committed?: number | null; incoming: number; rate: number | null; leadTimeDays: number; coverDays: number }): number | null {
   if (input.rate === null) return null;
-  const need = input.rate * (input.leadTimeDays + input.coverDays) - Math.max(0, input.available) - Math.max(0, input.incoming);
+  const need =
+    input.rate * (input.leadTimeDays + input.coverDays) + oversoldOwed(input.available, input.committed) - Math.max(0, input.available) - Math.max(0, input.incoming);
   return Math.max(0, Math.ceil(need));
 }
 
