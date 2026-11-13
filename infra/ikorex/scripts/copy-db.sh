@@ -125,7 +125,8 @@ preflight() {
     size="$(var BYTES "$key" 0)"; dumps=$((dumps + size)); need=$((need + size * 4))
   done
   # The dumps are downloaded here first (on the admin host, /var/tmp: its /tmp is held in memory).
-  if free="$(df -Pk "$tmpdir" 2>/dev/null | awk 'NR == 2 { print $4 * 1024 }')" && [ -n "$free" ]; then
+  # (printf, not print: Debian's awk prints a large product as 4.4389e+10, which `[` can't compare.)
+  if free="$(df -Pk "$tmpdir" 2>/dev/null | awk 'NR == 2 { printf "%.0f\n", $4 * 1024 }')" && [ -n "$free" ]; then
     [ "$free" -ge "$dumps" ] || die "$free bytes free in $tmpdir; the dumps are $dumps"
   fi
   dir="$(q -d postgres -c 'SHOW data_directory' 2>/dev/null || true)"
@@ -133,7 +134,7 @@ preflight() {
     [[ "$FREE_BYTES" =~ ^[0-9]+$ ]] || die "FREE_BYTES is not a number of bytes"
     [ "$FREE_BYTES" -ge "$need" ] || die "$FREE_BYTES bytes free where the database lives; the restore wants about $need (4 times the dumps)"
     log "disk: $FREE_BYTES bytes free (given), about $need needed"
-  elif [ -n "$dir" ] && free="$(df -Pk "$dir" 2>/dev/null | awk 'NR == 2 { print $4 * 1024 }')" && [ -n "$free" ]; then
+  elif [ -n "$dir" ] && free="$(df -Pk "$dir" 2>/dev/null | awk 'NR == 2 { printf "%.0f\n", $4 * 1024 }')" && [ -n "$free" ]; then
     [ "$free" -ge "$need" ] || die "$free bytes free where the database lives; the restore wants about $need (4 times the dumps)"
     log "disk: $free bytes free, about $need needed"
   else

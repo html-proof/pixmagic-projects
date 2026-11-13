@@ -179,6 +179,30 @@ night. The shortfall is its total memory. Without monitoring, bizinsights' conta
 `worker`, `postgres`, `evolution`, `cloudflared` and the backup) still need about 2.1–3.4 GB, which
 is all of the 2.5 GB available or more, beside seven containers that have no memory limit.
 
+## The owner's decision, 2026-11-13: run it on the server as it is
+
+Told the verdict above, the owner decided the same day that bizinsights runs on this server
+whatever its size ("whatever happens I need to run this complete application in this server"). The
+verdict is unchanged: the server is too small to run bizinsights at the limits it was designed
+with. What changed is how it runs there:
+
+- **Smaller limits** (`infra/ikorex/docker-compose.lean.yml`): 2,432 MB for everything that stays
+  running, instead of about 6 GB. That is under the 2.5 GB the server had available, so bizinsights
+  at its worst takes what was free. A container that outgrows its limit swaps or is restarted
+  itself; the websites, n8n and the CCTV services keep their memory.
+- **No monitoring stack** on the server (another 1.5 GB of limits): external checks instead.
+- **One copy at a time**: staging stops before production starts.
+
+What it costs: bizinsights' own speed when it is busy. PostgreSQL gets 768 MB (RDS has 1 GB today
+and is short of it), the worker 576 MB (a large Shopify backfill may be slower, or restart and
+resume), and the server will use its swap more. The first staging copy ran at 565 MB idle and left
+the server's other containers untouched ([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md#2026-11-13-the-first-deploy-to-the-server-staging-from-the-owners-pc)).
+
+Still open with the administrator: their agreement (the guide's "check with me before changing
+anything on the server"), which is the owner's to settle; and the resize, which stays the real fix.
+bizinsights is confined to its own folders (`~/bizinsights-staging`, later `~/bizinsights`), its own
+Docker network and volumes, and publishes no port.
+
 ## When one server stops being enough
 
 Measured signs, each with an alert: database memory pressure (cache hit ratio < 99 %), worker queue
