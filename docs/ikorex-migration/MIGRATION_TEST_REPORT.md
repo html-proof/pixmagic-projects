@@ -3,6 +3,43 @@
 What has been tested, how, and with what result. Only runs that happened are recorded here; a
 criterion with no run says so. Newest first.
 
+## 2026-11-13: the first deploy to the server (staging), from the owner's PC
+
+The owner decided to run bizinsights on the iKorex server as it is, without waiting for more memory
+([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#the-owners-decision-2026-11-13-run-it-on-the-server-as-it-is)).
+A staging copy went first: `~/bizinsights-staging`, project `bizinsights-staging`, an empty database,
+`SCHEDULES=off`, the limits of `docker-compose.lean.yml`. Commit `ba8673fa05d4` of branch
+`claude/ssh-deploy-aws-1acde4`, sent with `ship.sh` at 16:26 Melbourne time (05:26 UTC).
+
+| Check | Result |
+| --- | --- |
+| `ship.sh send`: files received, image built on the server, `deploy.sh` | **"live"** 83 seconds after the release was built on the PC, the images' downloads included |
+| Migrations (`admin migrate`), the WhatsApp service's database (`admin evolution-db`) | **68 applied, 130 tables**; databases `app` and `evolution` |
+| `web`, `worker`, `postgres`, `evolution` | **Healthy** |
+| Inside `web`: `/api/readyz`, `/api/version`, `/__health`, `/`, `/login` | **200** each; readyz `db`, `coord`, `tenantDb` true; version names the commit |
+| Worker | "worker ready", schedules off |
+| PostgreSQL's low-memory settings | `shared_buffers` 192 MB, `archive_mode` off |
+| Memory used by bizinsights, idle | **565 MB** (web 200, evolution 197, postgres 88, worker 75, backup 3) of 2,432 MB of limits |
+| The server after it | 2,167 MB available (2,568 before), swap 145 MB (92 before), load back under 1.3 within a minute |
+| The server's twelve other containers | **All up, 0 restarts, none stopped for memory**; the gateway kept answering (its log shows 200s through the deploy) |
+
+The first real deploy found three faults, fixed in the same change:
+
+- `ship.sh` sent Windows line endings from the PC's checkout into the env examples,
+  `postgresql.conf`, `pgbackrest.conf` and the Dockerfiles. `infra/ikorex/**` is now LF everywhere
+  (`.gitattributes`).
+- `deploy.sh` stopped on a folder's very first deploy: `.env`'s `APP_TAG` is empty then, and the
+  Compose file refuses an empty tag even for `compose up postgres`. The new release's tag now stands
+  in until the switch.
+- With no backup bucket, `archive_mode = on` would have kept every write-ahead log file on the disk.
+  `ARCHIVE_MODE=off` in `.env` until the bucket is set.
+
+Not done, and why: nothing reaches the copy from outside (`cloudflared` is stopped: no tunnel token
+yet); no backups (no bucket yet: the `backup` container logs that and waits); no sign-in test (it
+needs the tunnel, and Cognito's calls need the IAM user's keys); no data (the copy from RDS is the
+next step). `apps/aws/test/ikorexCompose.test.ts` (9, 1 new) and `ikorexShip.test.ts` (17) passed
+on the PC.
+
 ## 2026-11-08: the copy back for a rollback, on the owner's PC
 
 Branch `claude/ikorex-copy-back`. The last piece the rollback plan needed before the cutover:
@@ -134,7 +171,7 @@ capacity claim); everything that touches production (stages D-F).
 | # | Criterion | Status |
 | --- | --- | --- |
 | 1 | Every AWS dependency migrated or justified | Justified in [AWS_INVENTORY.md](AWS_INVENTORY.md); migration not done |
-| 2 | bizinsights runs on iKorex | Not yet (stage B). First login and inspection 2026-11-08: **no go on memory** (2.5 GB free; bizinsights needs 3.2–4.6 GB) until the server is enlarged to at least 8 GB and 4 cores, as requested of the administrator ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08)). Inspected again 2026-11-12: the same size, still no go; outbound HTTPS open ([second inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-12)). And on 2026-11-13, in business hours, when the owner asked for the push: the same size, still no go, nothing sent ([third inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-13)) |
+| 2 | bizinsights runs on iKorex | **A staging copy runs there since 2026-11-13** (empty database, low-memory limits, not reachable from outside yet: [above](#2026-11-13-the-first-deploy-to-the-server-staging-from-the-owners-pc)); production not yet. Before it: first login and inspection 2026-11-08: **no go on memory** (2.5 GB free; bizinsights needs 3.2–4.6 GB) until the server is enlarged to at least 8 GB and 4 cores, as requested of the administrator ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08)). Inspected again 2026-11-12: the same size, still no go; outbound HTTPS open ([second inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-12)). And on 2026-11-13, in business hours, when the owner asked for the push: the same size, still no go, nothing sent ([third inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-13)) |
 | 3 | Customer accounts accessible | Not yet (stage D) |
 | 4 | Shopify OAuth works | Not yet (stage B/D) |
 | 5 | Shopify sync works | Code path: the queue runs the same handlers (tested above); on the server: not yet |

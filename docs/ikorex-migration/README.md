@@ -28,8 +28,10 @@ Melbourne time, no logs profile. Since then, each live on AWS through Deploy to 
 **The server (2026-11-13): inspected three times, read-only, and no go on memory each time.** It has
 3.9 GB in all with about 2.5 GB free beside what already runs there, and bizinsights needs 3.2 to
 4.6 GB ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md)). The administrator has been asked
-for at least 8 GB and 4 cores. Nothing has been installed or changed on the server, and AWS keeps
-running everything.
+for at least 8 GB and 4 cores. **The owner decided on 2026-11-13 to run it there as it is:** a
+staging copy has run on the server since that day, with the low-memory limits of
+`infra/ikorex/docker-compose.lean.yml` (565 MB used when idle; the server's other containers
+untouched). It has no data and nothing reaches it from outside yet. AWS keeps running production.
 
 ## The pages
 
