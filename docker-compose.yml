@@ -1,4 +1,4 @@
-# Local dev stack: Postgres, Mailpit (SMTP catcher), a Cognito emulator.
+# Local dev stack: Postgres and Mailpit (SMTP catcher).
 #
 # Every port is published on the loopback addresses only (IPv4 and IPv6, so `localhost` works
 # either way). A bare "5434:5432" listens on all interfaces, and Docker Desktop's firewall rule
@@ -45,17 +45,6 @@ services:
   mailpit:
     image: axllent/mailpit:latest
     ports: ["127.0.0.1:1025:1025", "[::1]:1025:1025", "127.0.0.1:8025:8025", "[::1]:8025:8025"]
-  # Amazon Cognito emulator with the app's user pool in it (infra/cognito-local/README.md).
-  cognito:
-    image: node:24-alpine
-    working_dir: /data
-    # Its tokens name http://127.0.0.1:9229 as their issuer, which is where the local server reaches it.
-    command: >-
-      sh -c "[ -f .cognito/db/local_insights.json ] || cp -r /seed/.cognito .;
-      printf '{\"TokenConfig\":{\"IssuerDomain\":\"http://127.0.0.1:9229\"}}' > .cognito/config.json;
-      HOST=0.0.0.0 PORT=9229 exec npx -y cognito-local@5.3.0"
-    volumes: ["./infra/cognito-local/seed:/seed:ro", "cognito-data:/data"]
-    ports: ["127.0.0.1:9229:9229", "[::1]:9229:9229"]
   # WhatsApp Automation's Evolution API (docs/whatsapp.md, "Running it locally"), only with
   # `docker compose --profile whatsapp up -d evolution`. The same release production runs
   # (infra/cdk/lib/whatsapp-stack.ts), with a database of its own: never the postgres service above.
@@ -108,5 +97,4 @@ services:
     volumes: ["evolution-pgdata:/var/lib/postgresql/data"]
 volumes:
   pgdata: {}
-  cognito-data: {}
   evolution-pgdata: {}

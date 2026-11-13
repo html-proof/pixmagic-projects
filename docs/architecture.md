@@ -347,7 +347,7 @@ leaves 7–8 ms per frame:
 | App settings (public: app ids, API versions, scopes, flags) | `apps/aws/src/settings.ts` (shipped in the server's bundle, put in `process.env` at start by `selfHostSettings`); locally overridden by `apps/aws/.env` | `env()` in `packages/core/src/env.ts` |
 | Secrets (session, encryption keys, client secrets) | the server's `env/*.env` files, mode 600, one per container ([ikorex-migration/ENVIRONMENT_VARIABLES_MIGRATION.md](ikorex-migration/ENVIRONMENT_VARIABLES_MIGRATION.md)); locally `apps/aws/.env` (from `.env.example`) | the container's environment, then `env()` |
 | Services (queues, coordinator, payload store, mail) | `infra/ikorex/docker-compose.yml` and the env files (the database, the blob folder, the mail provider's key) | `apps/aws/src/selfhost.ts` (the server) or `local.ts` (local), passed as `Deps` |
-| Sign-in (`AUTH_MODE`: the app's own, with Amazon Cognito behind it until its users have moved over; pool, client, domain, the client secret) | the server's `env/app.env`; the pool itself is the Auth stack, the one stack left in AWS (`infra/aws/cognito.yaml`) ([cognito-setup.md](cognito-setup.md)) | `cognitoConfig()` in `apps/api/src/cognito.ts` |
+| Sign-in (the app's own, `apps/api/src/localAuth.ts`: accounts in `auth_accounts`; Google on the app's own OAuth client) | the server's `env/app.env` (`GOOGLE_SIGNIN_CLIENT_ID`, its secret); nothing else to set ([cognito-setup.md](cognito-setup.md) is the record of Cognito, the provider until 2026-11-13) | `googleSignInConfig()` in `apps/api/src/localAuth.ts` |
 | Feature flags for unfinished work | `apps/web/src/lib/features.ts` | the UI |
 | Local tooling (docker compose, Prisma CLI, `ops:*` tasks) | repo-root `.env` (from `.env.example`) | those tools only |
 
@@ -389,7 +389,7 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
 | Kind | Where | Runs with |
 | --- | --- | --- |
 | Unit (pure logic, config files, the server's adapters, the local server) | `packages/shared/test`, `packages/core/test`, `apps/aws/test`, `apps/web/test` (`node --test`) | `pnpm test` |
-| Integration (real Postgres, faked Cognito/Shopify/Meta) | `apps/api/test`, `apps/worker/test` | `pnpm test:integration` (database `*_test`; `TEST_PG_PORT` points it at a throwaway server) |
+| Integration (real Postgres, faked sign-in provider/Shopify/Meta) | `apps/api/test`, `apps/worker/test` | `pnpm test:integration` (database `*_test`; `TEST_PG_PORT` points it at a throwaway server) |
 | End to end (Playwright against the local server) | `apps/web/e2e` | `pnpm e2e` |
 | Lint (TypeScript, React hooks) and import cycles | everywhere | `pnpm lint` (CI fails on any finding; `scripts/check-import-cycles.mjs` fails on any module that imports itself through others, `import()` included) |
 

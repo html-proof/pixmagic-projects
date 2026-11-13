@@ -3,7 +3,7 @@ import { createRemoteJWKSet, customFetch, decodeJwt, jwtVerify, SignJWT, type JW
 import { authEmail, env, keyring, logger, type AuthEmailTrigger, type Coord, type FetchLike, type Mailer } from "@app/core";
 import { decrypt, encrypt, safeEqual } from "@app/shared";
 import { AccountExistsError, type AccountMethod, type AuthAccountRow, type AuthStore } from "./authStore.js";
-import { CognitoError, CognitoUnavailableError, pictureUrl, type CognitoAuth, type CognitoTokens, type CognitoUser, type IdentityClaims, type SignInResult } from "./cognito.js";
+import { CognitoError, CognitoUnavailableError, pictureUrl, type CognitoAuth, type CognitoTokens, type CognitoUser, type IdentityClaims, type SignInResult } from "./authContract.js";
 import { burnPasswordCheck, hashPassword, needsRehash, verifyPassword } from "./passwords.js";
 import { newTotpSecret, totpStep } from "./totp.js";
 
@@ -11,9 +11,8 @@ import { newTotpSecret, totpStep } from "./totp.js";
  * The app's own sign-in, in place of Amazon Cognito's user pool (docs/ikorex-migration: the AWS
  * account closes). It is a CognitoAuth: the same operations, the same answers and the same error
  * names (NotAuthorizedException, CodeMismatchException, ...) that routes/auth.ts, account.ts,
- * staffPortal.ts and context.ts already handle, so none of them changes. AUTH_MODE picks it
- * (apps/aws/src/app.ts): "local" on its own, "migrating" behind migratingAuth.ts, which moves
- * Cognito's users over one sign-in at a time.
+ * staffPortal.ts and context.ts already handle, so none of them changes. It is the only provider
+ * since Cognito was deleted (2026-11-13, docs/ikorex-migration/LEAVING_AWS.md).
  *
  * - Accounts in auth_accounts (authStore.ts), under the sub Cognito gave them when they came from
  *   there, so auth_identities and every session keep matching. Passwords as argon2id
@@ -48,6 +47,18 @@ type CodePurpose = keyof typeof CODE_TTL_S;
 export interface GoogleSignIn {
   clientId: string;
   clientSecret: string;
+  /**
+   * Development and tests only (GOOGLE_SIGNIN_ENDPOINT): a stand-in for Google at this address,
+   * serving /o/oauth2/v2/auth, /token and /oauth2/v3/certs. Production refuses to start with it.
+   */
+  endpoint?: string;
+}
+
+const GOOGLE = { authorize: "https://accounts.google.com/o/oauth2/v2/auth", token: "https://oauth2.googleapis.com/token", certs: "https://www.googleapis.com/oauth2/v3/certs" };
+/** Google's three addresses, or the stand-in's. */
+function googleEndpoints(g: GoogleSignIn | null) {
+  const at = g?.endpoint?.replace(/\/+$/, "");
+  return at ? { authorize: `${at}/o/oauth2/v2/auth`, token: `${at}/token`, certs: `${at}/oauth2/v3/certs` } : GOOGLE;
 }
 
 export interface LocalAuthDeps {
@@ -58,9 +69,8 @@ export interface LocalAuthDeps {
   /** Google sign-in on the app's own OAuth client; null: no Google. */
   google?: GoogleSignIn | null;
   /**
-   * true ("local"): someone Cognito knew who has no account here yet (auth_identities only) is
+   * true (the default): someone Cognito knew who has no account here yet (auth_identities only) is
    * found anyway, as an account with no password, so "Forgot password?" and Google bring them in.
-   * false ("migrating"): migratingAuth.ts asks Cognito about them instead.
    */
   findCognitoUsers?: boolean;
 }
@@ -86,7 +96,8 @@ function policy(password: string) {
 
 export function googleSignInConfig(): GoogleSignIn | null {
   const e = env();
-  return e.GOOGLE_SIGNIN_CLIENT_ID && e.GOOGLE_SIGNIN_CLIENT_SECRET ? { clientId: e.GOOGLE_SIGNIN_CLIENT_ID, clientSecret: e.GOOGLE_SIGNIN_CLIENT_SECRET } : null;
+  if (!e.GOOGLE_SIGNIN_CLIENT_ID || !e.GOOGLE_SIGNIN_CLIENT_SECRET) return null;
+  return { clientId: e.GOOGLE_SIGNIN_CLIENT_ID, clientSecret: e.GOOGLE_SIGNIN_CLIENT_SECRET, ...(e.GOOGLE_SIGNIN_ENDPOINT && { endpoint: e.GOOGLE_SIGNIN_ENDPOINT }) };
 }
 
 export function localAuth(deps: LocalAuthDeps): LocalAuth {
@@ -97,7 +108,8 @@ export function localAuth(deps: LocalAuthDeps): LocalAuth {
   const signingKey = () => createHmac("sha256", env().SESSION_SECRET).update("local-auth-token-v1").digest();
   const codeHash = (purpose: string, sub: string, code: string) => createHmac("sha256", env().OTP_PEPPER || env().SESSION_SECRET).update(`local-auth:${purpose}:${sub}:${code}`).digest("hex");
   const totpAad = (sub: string) => `totp-secret-v1:${sub}`;
-  const googleJwks = createRemoteJWKSet(new URL("https://www.googleapis.com/oauth2/v3/certs"), { [customFetch]: fetchImpl });
+  const googleAt = googleEndpoints(google);
+  const googleJwks = createRemoteJWKSet(new URL(googleAt.certs), { [customFetch]: fetchImpl });
 
   /** Every store and coordinator call: an outage is "try again", not a verdict. */
   async function guard<T>(fn: () => Promise<T>): Promise<T> {
@@ -271,7 +283,7 @@ export function localAuth(deps: LocalAuthDeps): LocalAuth {
     if (!google) throw err("NotConfigured", "Google sign-in is not configured");
     let res: Response;
     try {
-      res = await fetchImpl("https://oauth2.googleapis.com/token", {
+      res = await fetchImpl(googleAt.token, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri, code_verifier: codeVerifier, client_id: google.clientId, client_secret: google.clientSecret }),
@@ -575,7 +587,7 @@ export function localAuth(deps: LocalAuthDeps): LocalAuth {
         nonce,
         ...(selectAccount && { prompt: "select_account" }),
       });
-      return `https://accounts.google.com/o/oauth2/v2/auth?${q}`;
+      return `${googleAt.authorize}?${q}`;
     },
     exchangeCode: ({ code, redirectUri, codeVerifier }) =>
       guard(async () => {

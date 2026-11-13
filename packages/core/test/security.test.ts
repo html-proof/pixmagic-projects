@@ -114,9 +114,9 @@ describe("production secrets", () => {
   const PROD_URLS = { APP_URL: "https://insights.example.com", API_URL: "https://insights.example.com/api" };
 
   it("refuses development settings in production, and only there", () => {
-    const dev = { COGNITO_ENDPOINT: "http://127.0.0.1:9229", MAILPIT_URL: "http://localhost:8025", APP_URL: "http://localhost:8787", API_URL: "http://127.0.0.1:8787/api" };
-    expect(developmentSettings({ ...PROD_URLS, COGNITO_ENDPOINT: "", MAILPIT_URL: "" })).toEqual([]);
-    expect(developmentSettings(dev).map((s) => s.split(" ")[0])).toEqual(["COGNITO_ENDPOINT", "MAILPIT_URL", "APP_URL", "API_URL"]);
+    const dev = { GOOGLE_SIGNIN_ENDPOINT: "http://127.0.0.1:9259", MAILPIT_URL: "http://localhost:8025", APP_URL: "http://localhost:8787", API_URL: "http://127.0.0.1:8787/api" };
+    expect(developmentSettings({ ...PROD_URLS, GOOGLE_SIGNIN_ENDPOINT: "", MAILPIT_URL: "" })).toEqual([]);
+    expect(developmentSettings(dev).map((s) => s.split(" ")[0])).toEqual(["GOOGLE_SIGNIN_ENDPOINT", "MAILPIT_URL", "APP_URL", "API_URL"]);
 
     for (const [name, value] of Object.entries(dev)) {
       process.env = { ...saved, ...strong, ...PROD_URLS, NODE_ENV: "production", [name]: value };

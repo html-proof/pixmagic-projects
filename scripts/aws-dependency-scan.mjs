@@ -1,15 +1,15 @@
 /**
- * Which files still run, call or configure AWS, and when each one goes (the move to the iKorex
- * server, docs/ikorex-migration). Markdown and docs/ only describe AWS, so they are counted, not
- * listed. A line that is only a comment doesn't count either.
+ * Does any file run, call or configure AWS? bizinsights left AWS on 2026-11-13 (the iKorex server,
+ * docs/ikorex-migration/LEAVING_AWS.md) and the last AWS code left the repository after it, so the
+ * answer is no, and `pnpm lint` keeps it so. Markdown and docs/ only describe AWS, so they are
+ * counted, not listed. A line that is only a comment doesn't count either.
  *
- *   node scripts/aws-dependency-scan.mjs              the report (Markdown), grouped by when each file goes
- *   node scripts/aws-dependency-scan.mjs --check      exits 1 if a file not listed below touches AWS (pnpm lint)
- *   node scripts/aws-dependency-scan.mjs --none-left  exits 1 if any file still does (stage F's acceptance)
+ *   node scripts/aws-dependency-scan.mjs              the report (Markdown)
+ *   node scripts/aws-dependency-scan.mjs --none-left  exits 1 if any file touches AWS (pnpm lint)
+ *   node scripts/aws-dependency-scan.mjs --check      the same, for a file not listed in GROUPS
  *
- * --check keeps new AWS code out while the move is under way: a file that needs AWS is added to
- * GROUPS with the step that removes it, or doesn't use AWS. After stage F the groups are emptied and
- * --none-left takes --check's place in `pnpm lint`.
+ * GROUPS is empty. A file that must name AWS again (a new integration that happens to live there)
+ * is listed in it with why, and `pnpm lint` goes back to --check.
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -41,40 +41,11 @@ const SELF = "scripts/aws-dependency-scan.mjs";
 const isDocs = (path) => path.endsWith(".md") || path.startsWith("docs/");
 
 /**
- * Every file allowed to touch AWS until the move is done, by when it goes. A path ending in "/"
- * covers the folder. The order is the order of the report; the first group that names a file wins.
+ * Files allowed to touch AWS, by why. A path ending in "/" covers the folder. Empty since the last
+ * AWS code was removed.
+ * @type {Array<{ title: string, goes: string, paths: string[] }>}
  */
-export const GROUPS = [
-  {
-    title: "The server package's settings for Cognito, its examples and tests",
-    goes: "With Cognito's code (next group). The SES mailer, the AWS client, the pool's template and the copy tools went on 2026-11-13",
-    paths: ["apps/aws/.env.example", "apps/aws/test/selfhost.test.ts", "apps/aws/src/selfhost.ts", "apps/aws/src/app.ts", "apps/aws/src/actions.ts", "infra/ikorex/env/"],
-  },
-  {
-    title: "Cognito in the app, its settings and its test stand-in",
-    goes: "After `AUTH_MODE=local` on the server (ROLLBACK_PLAN.md, \"Before stage F starts\", step 3)",
-    paths: [
-      "apps/api/src/cognito.ts",
-      "apps/api/src/migratingAuth.ts",
-      "apps/api/src/routes/auth.ts",
-      "apps/api/package.json",
-      "packages/core/src/env.ts",
-      "packages/core/src/configReport.ts",
-      "apps/api/test/account.test.ts",
-      "apps/api/test/auth.test.ts",
-      "apps/api/test/cognito.test.ts",
-      "apps/api/test/cognito.live.test.ts",
-      "apps/api/test/mfa.test.ts",
-      "packages/core/test/configReport.test.ts",
-      "packages/core/test/security.test.ts",
-      "apps/web/e2e/",
-      "apps/web/playwright.config.ts",
-      ".github/workflows/ci.yml",
-      "infra/cognito-local/",
-      ".claude/",
-    ],
-  },
-];
+export const GROUPS = [];
 
 /** The group a path belongs to, or null. */
 export function groupOf(path) {

@@ -3,7 +3,7 @@ import { exportJWK, SignJWT } from "jose";
 import { beforeEach, describe, expect, it } from "vitest";
 import { memoryCoord, type Mailer } from "@app/core";
 import { memoryAuthStore } from "../src/authStore.js";
-import { CognitoError, CognitoUnavailableError, type CognitoTokens } from "../src/cognito.js";
+import { CognitoError, CognitoUnavailableError, type CognitoTokens } from "../src/authContract.js";
 import { localAuth, type LocalAuth } from "../src/localAuth.js";
 import { hashPassword, needsRehash, verifyPassword } from "../src/passwords.js";
 import { totpCode } from "../src/totp.js";

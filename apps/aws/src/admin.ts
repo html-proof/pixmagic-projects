@@ -24,8 +24,8 @@ import { runtimePool, selfHostDeps, selfHostSettings } from "./selfhost.js";
  *   redrive <queue>      every dead job of that queue back into it; or --id <job id> for one
  *   import-coord <file>  DynamoDB `coord` items (aws dynamodb scan output) into the coordinator (cutover)
  *   sign-in-move         how many of Cognito's users the app's own sign-in has, and how many it still waits for
- *     --notify             emails those whose password is still only at Cognito how to set it again
- *                          (before AUTH_MODE=local); with --dry-run, only counts them
+ *     --notify             emails those who had a password only at Cognito (deleted 2026-11-13) and
+ *                          haven't set one in the app how to; with --dry-run, only counts them
  *
  * migrate, counts and evolution-db need the owner's login (OWNER_DATABASE_URL), which only this
  * command is given (infra/ikorex/docker-compose.yml). Prints JSON; exits 1 on failure.

@@ -4,7 +4,7 @@ import { accountDeletionEmail, assertDeletable, detachUserAdGrants, env, logger,
 import { revokeZapierGrants } from "@app/core/zapier";
 import { accountPasswordProblem, EMAIL_CODE_RE, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, sessionProvesAddress, type Ctx, type Deps } from "../context.js";
-import { CognitoError, type CognitoUser, type SignInMethod } from "../cognito.js";
+import { CognitoError, type CognitoUser, type SignInMethod } from "../authContract.js";
 import { cognitoUsernameKey, notifyEmailChanged, notifyMethodAdded, notifyMethodRemoved, notifyPasswordChanged, notifyTwoStepChanged, recordAuthEvent } from "../identity.js";
 import { endSessions, recordSession } from "../devices.js";
 import {

@@ -217,7 +217,7 @@ test("forgot password: a code by email, a new password, then signing in with it"
   await expect(page).toHaveURL(/onboarding/);
 });
 
-test.describe("Continue with Google (through the user pool's managed login)", () => {
+test.describe("Continue with Google (the app's own client, against the stand-in for Google)", () => {
   const methodsOf = async (email: string) =>
     (await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1 ORDER BY i.created_at", [email.toLowerCase()])).rows.map((r) => r.method as string);
   const userCount = async (email: string) => Number((await db.query("SELECT count(*) FROM users WHERE email = $1", [email.toLowerCase()])).rows[0].count);

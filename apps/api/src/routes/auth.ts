@@ -5,7 +5,7 @@ import { systemDb } from "@app/db";
 import { appStoreWorkspace, authEmail, employmentsForUser, env, keyring, logger, sessionAccess } from "@app/core";
 import { ACCESS_KEYS, accountPasswordProblem, decrypt, DISPLAY_NAME_MAX, EMAIL_CODE_RE, encrypt, hasFullAccess, pkcePair, randomToken, safeEqual, sha256Hex } from "@app/shared";
 import { body, clientIp, HttpError, isLinkSession, loadUser, pickSession, requireAppOrigin, requireUser, sessionOf, SESSION_COOKIE, sharedWorkspace, type Ctx, type Deps } from "../context.js";
-import { CognitoError, CognitoUnavailableError, unguessablePassword, type CognitoTokens, type CognitoUser, type FederatedProvider, type SignInMethod, type SignInResult } from "../cognito.js";
+import { CognitoError, CognitoUnavailableError, unguessablePassword, type CognitoTokens, type CognitoUser, type FederatedProvider, type SignInMethod, type SignInResult } from "../authContract.js";
 import type { User } from "@app/db";
 import {
   challengeTiming,
@@ -182,20 +182,12 @@ const UNAVAILABLE = "We can't reach the sign-in service right now. Please try ag
 const CODE_SENT = "If that address can receive email, a code is on its way. It expires in a few minutes.";
 
 /**
- * Federated providers switched on for this deployment: Google on the app's own client once the
- * app's own sign-in runs and the client is configured (AUTH_MODE, localAuth.ts); otherwise
- * COGNITO_IDENTITY_PROVIDERS, plus a domain.
+ * Federated providers switched on for this deployment: Google, once the app's own OAuth client is
+ * configured (GOOGLE_SIGNIN_CLIENT_ID and its secret, localAuth.ts).
  */
 export function enabledProviders(): Set<FederatedProvider> {
   const e = env();
-  if (e.AUTH_MODE !== "cognito" && e.GOOGLE_SIGNIN_CLIENT_ID && e.GOOGLE_SIGNIN_CLIENT_SECRET) return new Set(["Google"]);
-  if (e.AUTH_MODE === "local") return new Set();
-  if (!e.COGNITO_DOMAIN) return new Set();
-  return new Set(
-    e.COGNITO_IDENTITY_PROVIDERS.split(",")
-      .map((p) => p.trim())
-      .filter((p): p is FederatedProvider => p === "Google"),
-  );
+  return new Set(e.GOOGLE_SIGNIN_CLIENT_ID && e.GOOGLE_SIGNIN_CLIENT_SECRET ? (["Google"] as const) : []);
 }
 
 /** Whether a password sign-in also asks for the emailed code (AUTH_LOGIN_EMAIL_CODE; apps/aws/src/settings.ts). */
@@ -452,7 +444,7 @@ export function authRoutes(app: App, deps: Deps) {
     const providers = enabledProviders();
     return c.json({
       providers: { google: providers.has("Google") },
-      emailOtp: env().COGNITO_EMAIL_OTP === "1",
+      emailOtp: env().AUTH_EMAIL_OTP === "1",
       // A password sign-in also asks for a code emailed by the app (askForEmailedCode).
       loginCode: loginCodeOn(),
     });
@@ -1105,7 +1097,7 @@ export function authRoutes(app: App, deps: Deps) {
   // ---------------- Passwordless: a code Cognito emails (when switched on) ----------------
 
   const otpEnabled = () => {
-    if (env().COGNITO_EMAIL_OTP !== "1") throw new HttpError(404, "Signing in with an emailed code isn't available.", "not_enabled");
+    if (env().AUTH_EMAIL_OTP !== "1") throw new HttpError(404, "Signing in with an emailed code isn't available.", "not_enabled");
   };
 
   app.post("/auth/otp/start", async (c) => {

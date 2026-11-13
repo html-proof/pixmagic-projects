@@ -102,7 +102,7 @@ describe("setting it up (Settings → Security)", () => {
   });
 
   it("is for password sign-ins only: a Google session is pointed to Google's own", async () => {
-    const restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "Google" });
+    const restore = withEnv({ GOOGLE_SIGNIN_CLIENT_ID: "test-google-client", GOOGLE_SIGNIN_CLIENT_SECRET: "test-google-secret" });
     try {
       const browser = testBrowser(ctx);
       const start = await browser.get("/auth/oauth/google/start");

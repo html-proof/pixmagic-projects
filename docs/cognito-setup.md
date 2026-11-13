@@ -1,5 +1,15 @@
 # Sign-in: Amazon Cognito
 
+**This page is a record.** Sign-in is the app's own since 2026-11-13 (`apps/api/src/localAuth.ts`:
+passwords as argon2id, emailed codes, authenticator-app codes, Google on the app's own OAuth
+client), and the Cognito user pool was deleted that day with the rest of AWS
+([ikorex-migration/LEAVING_AWS.md](ikorex-migration/LEAVING_AWS.md)). The code this page names
+(`apps/api/src/cognito.ts`'s calls to Cognito, `migratingAuth.ts`, `infra/aws/cognito.yaml`,
+`infra/cognito-local`, the `COGNITO_*` settings and `AUTH_MODE`) left the repository after it; the
+last commit that holds it is `d54f6d95`. What remains of Cognito in the code is names: the sign-in
+contract `CognitoAuth` and its error names (`apps/api/src/authContract.ts`), and the rows of
+`auth_identities` with provider `cognito`, by which people who had an account there are still found.
+
 bizinsights signs people in with an Amazon Cognito user pool: email and password (with emailed codes
 for sign-up and password resets, a 6-digit code emailed after the password at every sign-in, and
 opt-in two-step verification with an authenticator app), Continue with Google, and optionally a

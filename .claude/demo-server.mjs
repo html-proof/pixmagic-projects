@@ -1,5 +1,5 @@
-// Local demo: the real app (UI + API + jobs, on the local server) on http://localhost:8789, using the
-// Cognito emulator (docker compose up -d cognito, or node infra/cognito-local/start.mjs), Mailpit and a
+// Local demo: the real app (UI + API + jobs, on the local server) on http://localhost:8789, using
+// the app's own sign-in, Mailpit and a
 // separate `app_demo` database (never the production `app` DB).
 // Build its UI first:
 //   NEXT_EXPORT_DIR=out-demo pnpm --filter @app/web build   (the UI needs no sign-in settings)
@@ -14,7 +14,6 @@ startLocalServer({
   assets: "apps/web/out-demo",
   db: "localhost:5434/app_demo",
   env: {
-    COGNITO_ENDPOINT: "http://127.0.0.1:9229",
     // --no-mail: make email sending fail like production without a sending domain.
     ...(process.argv.includes("--no-mail") ? { MAILPIT_URL: "http://127.0.0.1:9" } : {}),
   },

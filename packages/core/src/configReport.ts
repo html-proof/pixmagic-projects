@@ -46,8 +46,8 @@ export interface ConfigReport {
   };
   /** Resend, for the app's own email. */
   email: { resend: boolean };
-  /** Sign-in: the Cognito pool and app client, "Continue with Google", Cognito's passwordless codes, and the app's emailed code after the password. */
-  auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean; loginCodeExempt: number };
+  /** Sign-in: "Continue with Google" (the app's own client), passwordless emailed codes, and the emailed code after the password. */
+  auth: { google: boolean; emailOtp: boolean; loginCode: boolean; loginCodeExempt: number };
   /** Zapier (docs/zapier.md): its OAuth client fully set up (id, secret, redirect URI), and whether Connect has an invite link to open. */
   zapier: { configured: boolean; inviteUrl: boolean };
   credentials: ProviderCredentials[];
@@ -172,10 +172,9 @@ export function configReport(): ConfigReport {
     },
     email: { resend: !!e.RESEND_API_KEY },
     auth: {
-      cognito: !!e.COGNITO_USER_POOL_ID && !!e.COGNITO_CLIENT_ID,
-      // As the sign-in pages are told (apps/api routes/auth.ts enabledProviders): needs the pool's domain too.
-      google: !!e.COGNITO_DOMAIN && e.COGNITO_IDENTITY_PROVIDERS.split(",").some((p) => p.trim() === "Google"),
-      emailOtp: e.COGNITO_EMAIL_OTP === "1",
+      // As the sign-in pages are told (apps/api routes/auth.ts enabledProviders).
+      google: !!e.GOOGLE_SIGNIN_CLIENT_ID && !!e.GOOGLE_SIGNIN_CLIENT_SECRET,
+      emailOtp: e.AUTH_EMAIL_OTP === "1",
       loginCode: e.AUTH_LOGIN_EMAIL_CODE === "1",
       // How many addresses skip that code (never which).
       loginCodeExempt: e.AUTH_LOGIN_CODE_EXEMPT.split(",").filter((a) => a.trim()).length,
