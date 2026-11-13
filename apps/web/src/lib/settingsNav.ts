@@ -7,7 +7,7 @@ import { API_KEYS_ENABLED, BILLING_PAGE } from "@/lib/features";
  * shows only the pages the member may open (lib/access.ts, canOpenPage).
  */
 export const SETTINGS_PAGES: ReadonlyArray<{ slug: string; label: string; icon: LucideIcon; keywords?: string; href?: string }> = [
-  { slug: "profile", label: "Profile", icon: UserRound, keywords: "name time zone account" },
+  { slug: "profile", label: "Profile", icon: UserRound, keywords: "name time zone account appearance light dark mode theme" },
   { slug: "security", label: "Security", icon: ShieldCheck, keywords: "password sign out devices" },
   { slug: "workspace", label: "Workspace", icon: Building2, keywords: "rename" },
   { slug: "integrations", label: "Integrations", icon: Plug, keywords: "connect your business shopify whatsapp google meta adsense" },

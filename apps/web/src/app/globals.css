@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Light or dark is the person's choice (lib/theme.ts), not only the device's: <html data-theme>
+   says which palette is showing, and `dark:` utilities and the dark tokens below follow it. On
+   screen only, so a page printed from dark mode comes out in the light palette. */
+@custom-variant dark {
+  @media screen {
+    &:where([data-theme="dark"], [data-theme="dark"] *) {
+      @slot;
+    }
+  }
+}
+
 :root {
   /* The Stitch design's palette (prototype v2, 2026-11-05; docs/kpis.md): a cool off-white page,
      navy ink, slate secondary text and cool hairlines, on every signed-in page. */
@@ -63,8 +74,8 @@
   --home-line: #e5eeff;
   --home-tag: #dce9ff;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+@media screen {
+  :root[data-theme="dark"] {
     /* Native controls too: without this the date fields' calendar button was drawn black on the
        dark box and opened a light calendar. Only here, so light mode keeps whatever a page's own
        color-scheme meta asks for. */
@@ -382,8 +393,8 @@ body::before {
   --auth-cta-to: #1b5a3c;
   --auth-cta-ink: #ffffff;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+@media screen {
+  :root[data-theme="dark"] {
     --auth-cta-from: #7fd0a3;
     --auth-cta-to: #4fa97b;
     --auth-cta-ink: #0d1f15;
@@ -439,7 +450,7 @@ body::before {
   background: var(--surface);
   box-shadow: 0 1px 2px rgb(20 28 22 / 0.04), 0 30px 70px -32px rgb(20 28 22 / 0.22);
   animation: rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-  @media (prefers-color-scheme: dark) {
+  @variant dark {
     box-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 30px 70px -30px rgb(0 0 0 / 0.8);
   }
 }
