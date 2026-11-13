@@ -86,8 +86,8 @@ describe("a store's data when its row stays", () => {
     // The alert asking to answer the request goes with it; the old workspace's other alerts about the store go.
     const alerts = await systemDb.alert.findMany({ orderBy: { code: "asc" }, select: { workspaceId: true, storeId: true, code: true } });
     expect(alerts).toEqual([
-      { workspaceId: old, storeId: null, code: "zapier_delivery_failed" },
       { workspaceId: ws, storeId: store.id, code: "privacy_request" },
+      { workspaceId: old, storeId: null, code: "zapier_delivery_failed" },
     ]);
   });
 });
