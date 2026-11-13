@@ -76,6 +76,8 @@ export interface AuthStore {
   cognitoIdentityByUsername(username: string): Promise<CognitoIdentity | null>;
   /** The Cognito password identity with this address, the oldest if there were several. */
   cognitoPasswordIdentityByEmail(email: string): Promise<CognitoIdentity | null>;
+  /** Everyone Cognito knew, oldest first (signInMove.ts: who still has to come over before Cognito goes). */
+  cognitoIdentities(): Promise<CognitoIdentity[]>;
 }
 
 const method = (m: string): AccountMethod => (m === "google" ? "google" : "password");
@@ -167,6 +169,10 @@ export function prismaAuthStore(): AuthStore {
         }),
       );
     },
+    async cognitoIdentities() {
+      const rows = await systemDb.authIdentity.findMany({ where: { provider: "cognito" }, orderBy: { createdAt: "asc" }, select: { subject: true, username: true, email: true, method: true } });
+      return rows.map((r) => identity(r)!);
+    },
   };
 }
 
@@ -224,6 +230,7 @@ export function memoryAuthStore(identities: CognitoIdentity[] = []) {
     },
     cognitoIdentityByUsername: async (username) => identities.find((i) => i.username === username) ?? null,
     cognitoPasswordIdentityByEmail: async (email) => identities.find((i) => i.method === "password" && i.email === email.toLowerCase()) ?? null,
+    cognitoIdentities: async () => identities.map((i) => ({ ...i })),
   };
   return { ...store, accounts, tokens, identities };
 }

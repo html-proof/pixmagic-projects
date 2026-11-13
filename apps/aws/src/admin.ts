@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { logger } from "@app/core";
+import { prismaAuthStore, sendSignInNotices, signInMoveReport } from "@app/api";
+import { env, logger } from "@app/core";
 import { disconnectDb } from "@app/db";
 import { runAction } from "./actions.js";
 import { parseArgs, toAction } from "./adminArgs.js";
@@ -22,6 +23,9 @@ import { runtimePool, selfHostDeps, selfHostSettings } from "./selfhost.js";
  *   dlq [queue]          the dead-letter queue's newest jobs (no bodies)
  *   redrive <queue>      every dead job of that queue back into it; or --id <job id> for one
  *   import-coord <file>  DynamoDB `coord` items (aws dynamodb scan output) into the coordinator (cutover)
+ *   sign-in-move         how many of Cognito's users the app's own sign-in has, and how many it still waits for
+ *     --notify             emails those whose password is still only at Cognito how to set it again
+ *                          (before AUTH_MODE=local); with --dry-run, only counts them
  *
  * migrate, counts and evolution-db need the owner's login (OWNER_DATABASE_URL), which only this
  * command is given (infra/ikorex/docker-compose.yml). Prints JSON; exits 1 on failure.
@@ -54,6 +58,11 @@ async function run(argv: string[]): Promise<unknown> {
         if (!file) throw new Error("import-coord needs the scan output file");
         const scan = JSON.parse(readFileSync(file, "utf8")) as { Items?: Array<Record<string, { S?: string; N?: string }>> };
         return { imported: await importDynamoItems(pool, scan.Items ?? []) };
+      }
+      case "sign-in-move": {
+        const store = prismaAuthStore();
+        if (flags.notify !== true) return await signInMoveReport(store);
+        return await sendSignInNotices({ store, mailer: selfHostDeps(pool).mailer, appUrl: env().APP_URL, dryRun: flags["dry-run"] === true });
       }
       default:
         throw new Error(`Unknown command "${command}". See the comment at the top of apps/aws/src/admin.ts.`);
