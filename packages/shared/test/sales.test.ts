@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addDays,
   customSalesMonths,
   dailyBreakdown,
   dayTiers,
@@ -12,6 +13,8 @@ import {
   splitTotal,
   tierOf,
   TOTAL_SALES_MONTHS,
+  trendGranularity,
+  trendPeriods,
   weekdayOf,
   yearBreakdown,
   yearFigures,
@@ -130,6 +133,51 @@ describe("daily breakdown", () => {
     // A whole finished month is complete and not clipped.
     const sept = eachDay("2026-09-01", "2026-09-30").map((d) => day(d, 1));
     expect(periodBreakdown(dailyBreakdown(sept, "2026-10-15", null), { from: "2026-09-01", to: "2026-09-30" }, "month")).toMatchObject([{ status: "complete", clipped: false, value: 30, orders: 30 }]);
+  });
+
+  it("draws a headline tile's small chart a bar a day, then a week, then a month, as the dates get longer", () => {
+    const from = "2026-01-01";
+    const upTo = (n: number) => ({ from, to: addDays(from, n - 1) });
+    expect(trendGranularity(upTo(1))).toBe("day");
+    expect(trendGranularity(upTo(31))).toBe("day");
+    expect(trendGranularity(upTo(32))).toBe("week");
+    expect(trendGranularity(upTo(183))).toBe("week");
+    expect(trendGranularity(upTo(184))).toBe("month");
+    // Never more bars than can be told apart: a month of days, six months of weeks, a year of months.
+    for (const n of [31, 183, 366]) expect(trendPeriods([], upTo(n), "2027-06-01", null).periods.length).toBeLessThanOrEqual(31);
+
+    // 30 days: every day its own bar, today's not whole yet.
+    const month = eachDay("2026-09-16", "2026-10-15").map((d) => day(d, 10));
+    const daily = trendPeriods(month, { from: "2026-09-16", to: "2026-10-15" }, "2026-10-15", null);
+    expect(daily.by).toBe("day");
+    expect(daily.periods).toHaveLength(30);
+    expect(daily.periods.at(-1)).toMatchObject({ key: "2026-10-15", status: "partial" });
+    expect(daily.periods[0]).toMatchObject({ key: "2026-09-16", from: "2026-09-16", to: "2026-09-16", status: "complete" });
+
+    // Wed 2 Sep to Thu 15 Oct (44 days) by week; today is the 15th; orders imported from 10 Sep.
+    const range = { from: "2026-09-02", to: "2026-10-15" };
+    const weekly = trendPeriods(eachDay(range.from, range.to).map((d) => day(d, 10)), range, "2026-10-15", "2026-09-10");
+    expect(weekly.by).toBe("week");
+    expect(weekly.periods.map((p) => [p.from, p.to, p.status, p.days.length])).toEqual([
+      // Never imported: no days to add up, not a week of zeros.
+      ["2026-09-02", "2026-09-06", "not_imported", 0],
+      // Imported from the Thursday: its four days only, and it says it isn't whole.
+      ["2026-09-07", "2026-09-13", "partial", 4],
+      ["2026-09-14", "2026-09-20", "complete", 7],
+      ["2026-09-21", "2026-09-27", "complete", 7],
+      ["2026-09-28", "2026-10-04", "complete", 7],
+      ["2026-10-05", "2026-10-11", "complete", 7],
+      // Holds today.
+      ["2026-10-12", "2026-10-15", "partial", 4],
+    ]);
+
+    // A year by calendar month: the days of each month, the month the dates start in cut to them.
+    const year = { from: "2025-10-16", to: "2026-10-15" };
+    const monthly = trendPeriods(eachDay(year.from, year.to).map((d) => day(d, 1)), year, "2026-10-15", null);
+    expect(monthly.by).toBe("month");
+    expect(monthly.periods.map((p) => p.key)).toEqual(["2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"]);
+    expect(monthly.periods.map((p) => p.days.length)).toEqual([16, 30, 31, 31, 28, 31, 30, 31, 30, 31, 31, 30, 15]);
+    expect(monthly.periods.map((p) => p.status)).toEqual([...Array<string>(12).fill("complete"), "partial"]);
   });
 
   it("names the months it covers whole, but not the one still running or one not fully imported", () => {

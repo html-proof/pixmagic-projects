@@ -12,7 +12,7 @@
  */
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/sales), and its bundler doesn't map "./dates.js" to dates.ts.
-import { addDays, daysBetweenInclusive, eachDay, periodsOf } from "./dates";
+import { addDays, daysBetweenInclusive, eachDay, periodsOf, type PeriodGranularity } from "./dates";
 import { delta, type DailyMetricsRow } from "./kpi";
 import { customSales, type ComponentSelection, type SalesLines } from "./salesCalculation";
 
@@ -222,6 +222,60 @@ export function periodBreakdown<D extends SalesDay>(b: DailyBreakdown<D>, range:
       cumulative: imported.at(-1)?.cumulative ?? null,
     };
   });
+}
+
+/** The longest dates a headline tile's small chart draws a bar a day for; past it, a bar a week. */
+export const TREND_DAILY_MAX_DAYS = 31;
+/** The longest dates it draws a bar a week for (about six months); past it, a bar a month. */
+export const TREND_WEEKLY_MAX_DAYS = 183;
+
+/**
+ * What one bar of a headline tile's small chart stands for, from how long the dates picked are: a
+ * day up to a month of them, a week up to about six months, a calendar month past that. So the
+ * bars stay few enough to tell apart (31 at most until the dates run past two and a half years),
+ * where a point a day turned a year into a scribble.
+ */
+export function trendGranularity(range: { from: string; to: string }): PeriodGranularity {
+  const n = daysBetweenInclusive(range.from, range.to);
+  return n <= TREND_DAILY_MAX_DAYS ? "day" : n <= TREND_WEEKLY_MAX_DAYS ? "week" : "month";
+}
+
+/** One bar of a headline tile's small chart: a day, week or month of the dates picked (`trendPeriods`). */
+export interface TrendPeriod<D extends { day: string }> {
+  /** As `periodsOf`: the day, "2026-W43" or "2026-10". */
+  key: string;
+  /** Its first and last day inside the dates picked. */
+  from: string;
+  to: string;
+  /** Its imported days, for the tile to add up its own figure over. */
+  days: D[];
+  /** As `BreakdownPeriod`: `partial` holds today or days not imported, `not_imported` has none imported. */
+  status: "complete" | "partial" | "not_imported";
+}
+
+/**
+ * The dates picked as the bars of a headline tile's small chart (`trendGranularity`), every period
+ * present and in order. A day before the imported history adds nothing and is left out of its
+ * period's `days`, so a period is never a lower figure passed off as whole, nor a zero for days
+ * nobody knows about.
+ */
+export function trendPeriods<D extends { day: string }>(
+  series: D[],
+  range: { from: string; to: string },
+  today: string,
+  historyFrom: string | null,
+): { by: PeriodGranularity; periods: Array<TrendPeriod<D>> } {
+  const by = trendGranularity(range);
+  const byDay = new Map(series.map((d) => [d.day, d]));
+  const periods = periodsOf(range, by).map((p): TrendPeriod<D> => {
+    const days = eachDay(p.from, p.to)
+      .filter((day) => historyFrom === null || day >= historyFrom)
+      .map((day) => byDay.get(day))
+      .filter((d): d is D => d !== undefined);
+    const status = days.length === 0 ? "not_imported" : days.length < daysBetweenInclusive(p.from, p.to) || days.some((d) => d.day === today) ? "partial" : "complete";
+    return { key: p.key, from: p.from, to: p.to, days, status };
+  });
+  return { by, periods };
 }
 
 export type MonthCoverage = "full" | "partial" | "none";

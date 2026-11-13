@@ -407,8 +407,14 @@ removed by the owner on 2026-11-13.) Reference implementation: `apps/web/src/com
 carries; nothing is estimated.
 
 - **Headline tiles**: Total sales (Net sales without `finance.breakdown`), Orders, Average order
-  value, Total products sold, each with a sparkline of the same figure day by day
-  (`series`; a day's `units` are its net items sold). Under Total sales: "Refunds −A$…", what
+  value, Total products sold, each with a small bar chart of the same figure over the dates
+  (`series`; a day's `units` are its net items sold): a bar a day up to 31 days, a bar a week
+  (Monday to Sunday) up to 183, a bar a calendar month past that (`trendPeriods` in
+  `@app/shared/sales`), from a zero line, with the first and last date under it; pointing at a
+  bar names it and says its figure. A week or month adds up its days; average order value is
+  what its orders sold for over how many there were, and a period with no orders has no bar.
+  A period before the imported history has none either, and one that holds today or days not
+  imported is drawn lighter. Under Total sales: "Refunds −A$…", what
   refunds took off it in the dates (`sales_overview.current.totalRefunded`, Total refunded above),
   then the store's Custom sales when it shows them.
 - **Orders at a glance** (asked for by the owner on 2026-10-30, under the tiles; module
