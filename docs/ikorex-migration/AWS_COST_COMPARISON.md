@@ -22,7 +22,9 @@ the conclusion below.
 The owner's revised decisions (2026-11-07, [IKOREX_INFRASTRUCTURE_ARCHITECTURE.md](IKOREX_INFRASTRUCTURE_ARCHITECTURE.md#decisions-2026-11-07)):
 Cognito is replaced by the app's own sign-in (users move over gradually, `AUTH_MODE`), SMS by
 Twilio (`SMS_PROVIDER`), and the AWS account is **closed** after the 14-day rollback period. So the
-AWS bill after stage F is **0.00**.
+AWS bill after stage F is **0.00**. (Customer Messaging (SMS) was removed from the app on
+2026-11-13: there are no texts and no Twilio bill, and the SMS rows below are kept as they were
+estimated.)
 
 What the earlier plan kept, and where it went:
 
@@ -31,7 +33,7 @@ What the earlier plan kept, and where it went:
 | Cognito | 0.00 | The app's own sign-in (`apps/api/src/localAuth.ts`); deleted at stage F |
 | KMS key for Cognito's emailed codes | ~1.15 | The app emails its own codes through Resend; deleted with Cognito |
 | Lambda `cognito-email` + its secret | 0.40 | Deleted with Cognito |
-| End User Messaging SMS + SNS + the `smsEvents` queue | per message | Twilio (per message, billed by Twilio); deleted at stage F |
+| End User Messaging SMS + SNS + the `smsEvents` queue | per message | Removed with Customer Messaging (SMS) on 2026-11-13 (the plan was Twilio, per message) |
 | CloudTrail + its bucket | ~0.05 | Nothing left to audit; deleted at stage F |
 | Cost Explorer (daily cost email) | 0.30 | No AWS bill to report: the server never sends it; AWS's own schedule sends it until the account closes |
 
@@ -47,7 +49,7 @@ CloudWatch, DynamoDB, S3 buckets, the SQS queues, Lambda `api`/`jobs`/`cron`, Cl
 | Cloudflare Tunnel, managed rules, one rate-limit rule | 0.00 | Free plan |
 | Cloudflare R2, backups | 0.00 up to 10 GB, then 0.015 per GB | ~2 GB database, 14 days of WAL and dumps: expected under 10 GB |
 | External uptime check | 0.00 | Free tier |
-| Twilio (SMS) | per message, in US dollars | Twilio's price for each country texted (Australia only, by Geo Permissions); nothing until the owner switches (`docs/sms.md`, "Twilio"). Merchants' monthly SMS limits cap it, as they did on AWS |
+| Twilio (SMS) | per message, in US dollars | Twilio's price for each country texted (Australia only, by Geo Permissions); nothing until the owner switches. Merchants' monthly SMS limits cap it, as they did on AWS. **Not needed since 2026-11-13:** Customer Messaging (SMS) was removed |
 | A server of its own, **only if the capacity test says no go** | to be quoted | 4 vCPU / 8 GB / 80 GB SSD |
 
 ## The saving
@@ -58,7 +60,8 @@ CloudWatch, DynamoDB, S3 buckets, the SQS queues, Lambda `api`/`jobs`/`cron`, Cl
 | AWS after stage F (account closed) | 0.00 | 0.00 |
 | **Saving a month** | **~135.76** | **~149.34** |
 
-Twilio's texts are the one new bill that grows with use, as AWS's did; the saving above is before them.
+Twilio's texts were the one new bill that would have grown with use, as AWS's did; with Customer
+Messaging (SMS) removed on 2026-11-13 there is none.
 
 Of that, **29.00 (the support plan) is saved anyway** by the downgrade to Basic allowed from
 ~2026-11-14, move or not. Against the cheapest AWS setup that keeps a managed database (the cost
@@ -121,7 +124,7 @@ Not infrastructure: they follow what merchants do, whatever hosts the app.
 | Service | Price | At 1,000 / 10,000 / 100,000 / 1,000,000 users |
 | --- | --- | --- |
 | Resend (email: codes, invitations, alerts; ~10 a user a month) | Free to 3,000 a month; Pro US$20 for 50,000; Scale from US$90 for 100,000 to US$1,150 for 2.5 million | ~US$20 / ~US$35–90 / ~US$500–650 / a negotiated plan (10 million a month) |
-| Twilio (SMS) | US$0.0515 per message part to Australia (list price, US dollars) | Per text merchants send: US$51.50 per 1,000, capped by each merchant's monthly SMS limit. Charged on to merchants, not carried by the app |
+| Twilio (SMS) | US$0.0515 per message part to Australia (list price, US dollars) | Per text merchants send: US$51.50 per 1,000, capped by each merchant's monthly SMS limit. Charged on to merchants, not carried by the app. Not needed since 2026-11-13 (Customer Messaging (SMS) removed) |
 | WhatsApp | Sent through the merchant's own linked number (the WhatsApp service) | No per-message fee to bizinsights |
 | Shopify, Meta, Google Ads, Zapier APIs | No fee | Their rate limits are what grows, not a bill |
 | Cloudflare | Free today; Pro ~US$20–25, Business ~US$200–250 a month a domain | Free / Free or Pro / Business / Enterprise (quoted) |

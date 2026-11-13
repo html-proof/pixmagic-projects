@@ -466,6 +466,10 @@ now"); people with a role (admins, developers, testers) can connect their own bu
   A task that can't reach its database fails its migration at start: check the `evolution` database
   and role (re-run: invoke `insights-production-cron` with `{"action":"evolution-db"}`). Messages
   wait meanwhile; stores see "WhatsApp messages are waiting".
+- **`messaging-send-failures`**: the provider refused 25 or more WhatsApp messages in five minutes,
+  two periods in a row (the jobs function's `whatsapp send refused by the provider` line). The
+  provider, an account or a number has a problem; WhatsApp Automation's message history gives each
+  message's reason.
 - **A store logged out**: only its owner can link again (new QR code). Messages wait 48 hours.
 - **Upgrading Evolution**: test the new tag locally (`docker compose --profile whatsapp up -d
   evolution`, then the API tests' calls by hand), pin its digest in `whatsapp-stack.ts` and

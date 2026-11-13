@@ -5,6 +5,12 @@ research, navigation, design strategy, Stitch screens, Figma prototype, developm
 QA, deployment). The brief's rule is **keep every feature, cut what a beginner has to face**, and nothing
 is to be built before the design is approved. Nothing in the app was changed for this document.
 
+**Update, 2026-11-13.** Customer Messaging (SMS), Email integrations and the Automations hub were removed
+from the app at the owner's request. This document predates that and still describes them: the Automations
+and Customer Messaging rows of the audit, the menu table, journey 8 and item J. The screens
+`screens/automations.png` and `screens/create-automation.png`, and the same screens in
+`figma/wire-prototype.js`, show pages that are no longer in the app. WhatsApp Automation stays.
+
 ## Where each phase stands
 
 | Phase | State |

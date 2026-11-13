@@ -31,7 +31,7 @@ change, or the day an owner-only step is done.
 
 | AWS service | Status | Notes |
 | --- | --- | --- |
-| SNS | Kept | US$0; alarm emails and SMS delivery events |
+| SNS | Kept | US$0; alarm emails (and SMS delivery events until that topic went with Customer Messaging (SMS), removed 2026-11-13) |
 | SQS | Kept | US$0.02 |
 | EventBridge Scheduler | Kept | US$0 |
 | Lambda | Kept | US$0 (free tier) |

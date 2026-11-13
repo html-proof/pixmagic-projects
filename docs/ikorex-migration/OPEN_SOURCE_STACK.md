@@ -20,7 +20,7 @@ thing the brief asks for stands. Nothing here changes the server or AWS.
 | AWS audit (brief §2) | Done: [AWS_INVENTORY.md](AWS_INVENTORY.md), every service with its code, settings, data and cost |
 | Self-hosted runtime (queues, schedules, coordinator, files, metrics, Compose, deploy and backup scripts) | Built and tested, on `main` since release 167 |
 | Sign-in without Cognito | **Live in production** since release 173 (`AUTH_MODE=migrating`): each user moves over at their next sign-in, under the same user id |
-| SMS without AWS | Built (Twilio, release 172), off until the owner's Twilio account is ready |
+| SMS without AWS | No longer needed: Customer Messaging (SMS) was removed from the app on 2026-11-13. Twilio (release 172) was built, never switched on, and removed with it |
 | Database copy RDS → server, and its check | Built and tested on the PC; never run against RDS |
 | Deploy workflow (GitHub Actions over SSH) | Built, off until the deploy key is agreed with the server's administrator |
 | **The server** | First login and read-only inspection on 2026-11-08: **no go on memory** (3.9 GB in all, 2.5 GB available, twelve other containers already running). The administrator was asked for 8 GB and 4 vCPU. Inspected again on 2026-11-12: not enlarged, still no go. Nothing of bizinsights is installed there |
@@ -42,19 +42,20 @@ this server.
 | Reverse proxy, TLS | Traefik + Let's Encrypt | MIT, v3.7.18 | **Cloudflare Tunnel** (`cloudflared`, Apache-2.0, 2026.10.7) | The server's ports 80 and 443 already belong to the other websites' nginx gateway (inspection, 2026-11-08): Traefik can't take them without changing those sites, which the administrator's condition rules out. The tunnel dials out, so bizinsights opens no port and needs no certificate on the server; Cloudflare, already in front of `bizinsights.io`, ends TLS |
 | Sign-in | Keycloak | Apache-2.0, 26.8.2 | **The app's own sign-in** (`localAuth.ts`, `migratingAuth.ts`), live | Cognito never exports password hashes, whatever replaces it. The app's own checks each password with Cognito once and keeps the account under the same id, so nobody resets. Keycloak can only do that with a custom Java plugin against Cognito; without one, every password user resets. Keycloak needs 1,250 MB (vendor) on a server with 2.5 GB to spare, and users are already moving to the app's own sign-in in production: switching would be a second migration of the same people |
 | Cache | Valkey | BSD-3-Clause, 9.1.3 | **Nothing** | There is no cache on AWS either (no ElastiCache). DynamoDB's twelve coordination items (rate limits, sign-in state, locks) are a PostgreSQL table (`pgCoord.ts`) |
-| Events (SNS) | NATS JetStream | Apache-2.0, v2.15.3 | **Alertmanager** for alarms, **Twilio's signed webhooks** for SMS events | SNS carries only those two things. The app's own notifications (the bell, alerts, emails) never went through SNS: they are rows in the database and jobs in the queue |
+| Events (SNS) | NATS JetStream | Apache-2.0, v2.15.3 | **Alertmanager** for alarms | SNS carries only the alarms (and carried SMS delivery events until Customer Messaging (SMS) was removed on 2026-11-13). The app's own notifications (the bell, alerts, emails) never went through SNS: they are rows in the database and jobs in the queue |
 | Queues (SQS) | RabbitMQ | MPL-2.0, v4.4.0 | **A PostgreSQL queue** (`pgQueues.ts`) with SQS's contract: delays, acknowledgements, retries, dead-letter after 10 deliveries, redrive, per-queue concurrency, any number of workers | 34,719 jobs a week (0.06 a second). A job and the rows it is about commit in one database and are backed up together, so a restore never leaves a queue ahead of or behind its data. RabbitMQ's production minimum is 4 GiB a node (vendor). Tested against PostgreSQL: 13 tests, a worker dying mid-job included |
 | Scheduled tasks | (RabbitMQ) | | **Schedules in the worker** (`schedules.ts`): cron with time zones, each tick once across workers, catch-up after a restart | Replaces EventBridge Scheduler; RabbitMQ has no scheduler of its own |
 | Object storage (S3) | Garage | AGPL-3.0, v2.5.0 | **A Docker volume** (`fsBlobs.ts`) for the 7-day files; **Cloudflare R2** for backups | S3 holds no customer uploads, product images, reports or exports: only webhook bodies and WhatsApp media waiting for their job, the built pages (served by the app now), and database dumps. An object store on the same disk as the database is not a backup, so backups have to leave the server either way |
 | Email (SES) | Postal or an external SMTP relay | MIT, 3.3.7 (June 2026) | **Resend**, the external relay the brief allows | SES was never the sender: Resend sends every email today, and the domain's DKIM key (`resend._domainkey`), the sending subdomain's SPF and DMARC (`p=quarantine`) are published (checked 2026-11-11). Postal wants 4 GB, 2 cores, MariaDB and a server "running no other software" (vendor), outbound port 25, and a new IP address has no sending reputation: sign-in codes would start in spam |
 | Workers (Lambda) | Docker workers | | **`web` and `worker` containers** from one image, plus `admin` for one-off commands | The same handlers as the Lambda functions, unchanged |
-| Metrics, dashboards | Prometheus, Grafana | Apache-2.0, v3.16.0; AGPL-3.0, v13.3.1 | **Prometheus, Alertmanager, Grafana** (16 alert rules) and an external uptime check | Same, plus the outside check a monitor on the same server can't replace |
+| Metrics, dashboards | Prometheus, Grafana | Apache-2.0, v3.16.0; AGPL-3.0, v13.3.1 | **Prometheus, Alertmanager, Grafana** (15 alert rules) and an external uptime check | Same, plus the outside check a monitor on the same server can't replace |
 | Logs | Loki | AGPL-3.0, v3.7.9 | **Loki + Alloy as a profile, off** (decision 7) | The collector needs the Docker socket, which is root on a server shared with other people's workloads. Docker's rotated log files until the administrator agrees |
 | Secrets | OpenBao | MPL-2.0, v2.7.2 | **`env/*.env` files**, mode 600, one per container; copies in the owner's password manager | OpenBao starts sealed after every restart. Unsealing by hand means the app stays down after a reboot until someone types keys; unsealing automatically on one server means the unseal key sits on the same disk as the vault, which protects no more than a mode-600 file does |
 | Backups | Restic | BSD-2-Clause, v0.19.1 | **pgBackRest** (MIT, 2.60.0) to R2: WAL every 5 minutes, nightly backups, AES-256 before upload, weekly restore test | Everything that must survive is in PostgreSQL. Restic copies files and can't restore a running database to a point in time; pgBackRest can, to within 5 minutes, as RDS does |
 
 Not in the brief's table but in the move: **Evolution API** (the WhatsApp service, same pinned
-image as on AWS) and **Twilio** for SMS, since no software sends a text without a carrier.
+image as on AWS). Twilio for SMS was in the move until Customer Messaging (SMS) was removed on
+2026-11-13.
 
 ### What the brief's full list would need
 
@@ -125,7 +126,7 @@ the same thing: nothing can be installed until the server has room and its admin
 | Shopify connection | BLOCKED (needs staging on a public address; the code is the one live on AWS) | BLOCKED |
 | Shopify webhook processing | PASS for the queue under it (same handlers); a real webhook BLOCKED | BLOCKED |
 | Product, order and customer synchronisation | BLOCKED (needs staging with a copy of the data) | BLOCKED |
-| SNS replacement | Alert rules load (16); a test alert and a real text's delivery report BLOCKED (stage C; the owner's Twilio account) | BLOCKED |
+| SNS replacement | Alert rules load (16 then; 15 since the SMS events alert went on 2026-11-13); a test alert BLOCKED (stage C) | BLOCKED |
 | SQS replacement | PASS (13 tests against PostgreSQL: delay, retry, dead-letter, redrive, two workers, a worker dying) | BLOCKED |
 | Background workers | PASS (the built bundle ran a schedule tick and a queued job against a migrated database) | BLOCKED |
 | Email delivery | BLOCKED from the server (Resend delivers from AWS today; not re-tested for this move) | BLOCKED |
@@ -172,7 +173,7 @@ Nothing below has been done on anyone's behalf.
 | 2 | Agreement to install bizinsights on the server at all, and a separate Linux user for it | The administrator |
 | 3 | ~~The stack: keep what is built or the brief's list~~ **Answered 2026-11-11: keep what is built** | The owner |
 | 4 | Google sign-in on the app's own client: add `https://bizinsights.io/auth/callback` to the Google client's redirect addresses | The owner |
-| 5 | A Twilio account, then the one-line switch (`docs/sms.md`, "Switching to Twilio") | The owner |
+| 5 | ~~A Twilio account, then the one-line switch~~ **Not needed since 2026-11-13:** Customer Messaging (SMS) was removed from the app | — |
 | 6 | The Cloudflare Tunnel's token and the R2 bucket's token (stages B and C) | The owner, in Cloudflare |
 | 7 | The deploy key: a key of its own on the server, limited to `ssh-gate.sh` | The administrator |
 | 8 | The cutover date; later, stage F and closing the AWS account | The owner |

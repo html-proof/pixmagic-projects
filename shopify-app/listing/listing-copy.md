@@ -172,7 +172,7 @@ it by installing this app from its install link, never with the in-app connect b
 **Screencast URL** (OWNER): 3-8 minutes in English, on YouTube (unlisted) or a direct video file:
 not Google Drive or Vimeo. Show install on a development store, "is connected", sign-in, the import,
 the dashboard and the panels above, Sync now, uninstall and reinstall. Leave out WhatsApp, Staff,
-advertising, email and the "More insights you can unlock" Enable flows.
+advertising and the "More insights you can unlock" Enable flows.
 
 ---
 
@@ -215,6 +215,6 @@ Level 2 (name, email, phone) is needed only for the optional "Customers to follo
 - **A full data export.** "Download CSV" saves the section on screen (top 5 products, up to 10
   low-stock items, the 10 latest orders), not the store's data.
 - **Paid plans, email alerts, API access**, and the **WhatsApp, Meta Ads, Google Ads, AdSense,
-  email automation, staff and payroll** modules: billing is off, the API keys page is hidden, and a
+  staff and payroll** modules: billing is off, the API keys page is hidden, and a
   reviewer can't complete the third-party flows.
 - No statistics, guarantees or superlatives, and no "best" or "average" in the listing text.
