@@ -92,10 +92,10 @@ What the account costs from here, a month, before 10% GST:
 | After part 3 and the last step | 0 |
 
 November's invoice will still be about US$70: the support charge for the month was taken on the
-1st and the first 12 days ran the whole stack. Whether October's invoice was paid is not in the
-API. The card failed twice on 2026-10-18 (the two reserved-instance orders above), so the owner
-should look at Billing → Payments before closing anything: AWS doesn't close an account cleanly
-over an unpaid invoice.
+1st and the first 12 days ran the whole stack. Nothing is owed: read in the console on
+2026-11-13 (Billing → Payments), the outstanding balance is A$0.00 with no payment due, and
+October's invoice of A$100.88 shows as paid by the card on file on 2026-11-02. So the card that
+failed twice on 2026-10-18 (the two reserved-instance orders above) works again.
 
 No commitment outlasts the account: no reserved instance is active, no Savings Plan, no domain
 renewal, no Marketplace subscription. The support plan is monthly.
@@ -144,7 +144,8 @@ In this order. Each deletion below needs the owner's yes at that moment; none is
 
 1. **The owner, any time from 2026-11-14 04:43 UTC:** the support plan to Basic (root console →
    Support plans). Ends US$29 of the US$32.
-2. **The owner:** Billing → Payments: is October's invoice paid, does the card work.
+2. **Done 2026-11-13:** Billing → Payments checked, nothing owed. Look once more after
+   November's invoice (early December) and after the last one.
 3. **Sign-in off Cognito** ([LEAVING_AWS.md](LEAVING_AWS.md#sign-in-off-cognito)): Google goes
    straight to Google already; left are the notice to the 3 people whose password only Cognito
    knows, then `AUTH_MODE=local`, then a person signing in each way. After it, part 2: the Auth
