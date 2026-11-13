@@ -1,33 +1,54 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
-import { FolderCog, Plus, Printer, Scale } from "lucide-react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { CalendarPlus, ChartColumn, CircleDollarSign, Download, LayoutGrid, Plus, Printer, Sheet, TrendingUp, type LucideIcon } from "lucide-react";
+import type { BusinessEvent } from "@app/shared/businessEvents";
 import { STATEMENT_GRAINS, type StatementGrain } from "@app/shared/profit";
+import type { SheetGrain } from "@app/shared/sheet";
+import { useQueryParam } from "@/components/advertising/useAdvertising";
 import { canManage as canManageStores, StoresPending, useApp } from "@/components/AppContext";
 import { Skeleton, useAction } from "@/components/AppUi";
 import { blankCost } from "@/components/costs/CostForm";
-import { CompareDates, CompareSelect, CustomDates, DateRangeSelect, periodWords } from "@/components/dashboard/DateRange";
+import { CompareDates, CustomDates, DateRangeSelect, versusWords } from "@/components/dashboard/DateRange";
 import { fmtDay, fmtRange } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { CategoriesDialog, ExpenseDialog, type Editing } from "@/components/profit/ExpenseDialog";
 import { ExpenseTable } from "@/components/profit/ExpenseTable";
-import { OverviewCards, OverviewCharts } from "@/components/profit/Overview";
+import { KpiCards } from "@/components/profit/Kpis";
+import { OverviewTab } from "@/components/profit/Overview";
 import { PaymentsDialog, RecurringCosts } from "@/components/profit/RecurringCosts";
+import { AnalysisTab, ExpensesSummary, OperatingDays, RevenueTab } from "@/components/profit/Sections";
 import { saveFile, Statement, statementCsv } from "@/components/profit/Statement";
 import { useStatement, type ListedExpense, type StatementState } from "@/components/profit/useStatement";
+import { EventDialog, type EventDraft } from "@/components/sheet/EventDialog";
+import { SheetSection } from "@/components/sheet/SheetSection";
 import { Alert, EmptyState } from "@/components/ui";
-import { api, friendlyError, isTransient } from "@/lib/api";
-import { SalesTabs } from "@/components/dashboard/SalesFrame";
+import { api, friendlyError, isTransient, useApi } from "@/lib/api";
 
 const GRAIN_LABEL: Record<StatementGrain, string> = { day: "Daily", week: "Weekly", month: "Monthly", year: "Yearly" };
 
+/** The page's sections, in the design's order. `?tab=` keeps the one open, so a link reproduces the view. */
+const TABS: ReadonlyArray<{ id: Tab; label: string; icon: LucideIcon }> = [
+  { id: "overview", label: "Overview", icon: LayoutGrid },
+  { id: "revenue", label: "Revenue", icon: TrendingUp },
+  { id: "expenses", label: "Expenses", icon: CircleDollarSign },
+  { id: "analysis", label: "Profit Analysis", icon: ChartColumn },
+  { id: "table", label: "Detailed Table", icon: Sheet },
+];
+type Tab = "overview" | "revenue" | "expenses" | "analysis" | "table";
+const isTab = (v: string): v is Tab => TABS.some((t) => t.id === v);
+
 /**
- * Profit & Loss (docs/kpis.md "Profit and loss" and "Costs and net profit"): whether the store made
- * money in any dates, laid out as the owner's own workbook (revenue with and without tax, the sales
- * stats, advertising, variable and fixed costs, profit, MER, VCR, FCR and the sitewide ROAS), against
- * the dates it's compared with, a column per day, week, month or year; and the store's own costs,
- * managed here: added, changed, copied and removed, in categories of the store's own, paid once or
- * every period (each payment recorded and kept as paid), or worked out from the sales.
+ * Profit & Loss (docs/kpis.md "Profit & Loss page"): whether the store made money in any dates, in one
+ * place (the owner's design, 13 Nov 2026). Four figures at the top (revenue, expenses, profit, margin),
+ * then five sections: Overview (the trend, what stands out, where the money went, the statement
+ * against the dates compared with), Revenue, Expenses (the store's own costs, managed here: added,
+ * changed, copied and removed, in categories of the store's own, paid once or every period),
+ * Profit Analysis, and the Detailed Table: the statement period by period and the day-by-day sheet
+ * with the team's business events (the Profit sheet page, /sheet, until this design folded it in).
+ *
+ * A member shown the sales but not their breakdown ("View gross sales, discounts, tax, shipping and
+ * total sales") gets the day-by-day sheet alone, as /sheet gave them.
  */
 export default function ProfitPage() {
   const { storesStatus, stores, store, workspace } = useApp();
@@ -41,60 +62,118 @@ export default function ProfitPage() {
       />
     );
   }
-  // A store's own page: switching stores starts again (the dates stay in the address).
+  // A store's own page: switching stores starts again (the dates and the section stay in the address).
   return <ProfitView key={store.id} />;
 }
 
 function ProfitView() {
   const s = useStatement();
+  const { allowed, me } = useApp();
+  const [tabParam, setTab] = useQueryParam("tab", isTab);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [payments, setPayments] = useState<{ expense: ListedExpense; focus: string | null } | null>(null);
+  const [eventDraft, setEventDraft] = useState<EventDraft | null>(null);
+  // Goes up when a business event is added from the page's quick action, so the sheet asks for its events again.
+  const [eventsVersion, setEventsVersion] = useState(0);
   const { data } = s;
-  const today = s.costs?.today ?? data?.today ?? "";
+  const today = s.costs?.today ?? data?.today ?? s.dates.today;
+  const tab: Tab = s.sees ? (tabParam ?? "overview") : "table";
+  // The business events of the dates on screen: how many there are is one of the Overview's insights.
+  const events = useApi<{ events: BusinessEvent[] }>(s.base && data ? `${s.base}/business-events?from=${data.range.from}&to=${data.range.to}` : null);
+  // Whoever sees the sales marks events, signed in to the account (not from a shared link).
+  const canAddEvent = allowed("analytics.sales") && !me.shared;
+  // The sheet's columns follow the page's Daily / Weekly / Monthly (it has no column per year).
+  const by: SheetGrain | null = s.grain === "year" ? "month" : (s.grain ?? null);
+  const download = data && s.canExport ? () => saveFile(`profit-and-loss-${data.range.from}-to-${data.range.to}-${data.grain}.csv`, statementCsv(data)) : null;
+  const addExpense = () => setEditing({ expense: null, draft: blankCost(today) });
+  const addEvent = () => setEventDraft({ from: s.dates.today, to: s.dates.today });
+  const eventsChanged = () => void events.reload();
 
-  if (!s.sees) {
-    return (
-      <EmptyState
-        title="Profit and loss isn't shared with you"
-        body="It is worked out from the sales breakdown (shipping, fees and tax) and the store's costs. Ask an owner or admin for “View gross sales, discounts, tax, shipping and total sales” in Team & Access."
-      />
-    );
-  }
+  const sheet = <SheetSection dates={s.dates} by={by} eventsVersion={eventsVersion} onEventsChanged={eventsChanged} />;
 
   return (
     <div className="space-y-5" data-print-root data-testid="pl-page">
-      {/* The Sales area's tabs (the Stitch design): this is its Profit & Loss tab. */}
-      <SalesTabs active="profit" />
-      <Header s={s} onAdd={() => setEditing({ expense: null, draft: blankCost(today) })} onCategories={() => setCategoriesOpen(true)} />
+      <Header s={s} onDownload={download} />
 
-      {s.error && !data && <LoadError what="your profit and loss" error={s.error} onRetry={() => window.dispatchEvent(new Event("insights:retry"))} busy={s.loading} />}
-      {s.error && data && s.older && (
-        <Alert kind={isTransient(s.error) ? "info" : "error"}>
-          Couldn&apos;t load {s.dates.asking?.label}, so the figures below are still for {fmtRange(data.range.from, data.range.to)}. {friendlyError(s.error)}
-        </Alert>
-      )}
-      {!data && !s.error && (
-        <div className="card">
-          <p className="sr-only" role="status">
-            Loading your profit and loss…
-          </p>
-          <Skeleton lines={8} />
-        </div>
-      )}
-
-      {data && (
+      {!s.sees ? (
         <>
-          <OverviewCards a={data} />
-          <Completeness s={s} />
-          <OverviewCharts a={data} />
-          <Statement a={data} onDownload={s.canExport ? () => saveFile(`profit-and-loss-${data.range.from}-to-${data.range.to}-${data.grain}.csv`, statementCsv(data)) : null} />
-          <ExpenseTable s={s} a={data} onEdit={setEditing} onPayment={(expense, due) => setPayments({ expense, focus: due })} />
+          <section className="home-card p-5 text-sm text-muted" data-testid="profit-no-access">
+            <h2 className="font-semibold text-text">Profit and loss isn&apos;t shared with you</h2>
+            <p className="mt-1">
+              It is worked out from the sales breakdown (shipping, fees and tax) and the store&apos;s costs. Ask an owner or admin for &ldquo;View gross sales, discounts, tax, shipping and total sales&rdquo; in Team &amp; Access. The day-by-day
+              sheet below is yours to use meanwhile.
+            </p>
+          </section>
+          {sheet}
+        </>
+      ) : (
+        <>
+          {s.error && !data && <LoadError what="your profit and loss" error={s.error} onRetry={() => window.dispatchEvent(new Event("insights:retry"))} busy={s.loading} />}
+          {s.error && data && s.older && (
+            <Alert kind={isTransient(s.error) ? "info" : "error"}>
+              Couldn&apos;t load {s.dates.asking?.label}, so the figures below are still for {fmtRange(data.range.from, data.range.to)}. {friendlyError(s.error)}
+            </Alert>
+          )}
+          {!data && !s.error && (
+            <div className="home-card p-5">
+              <p className="sr-only" role="status">
+                Loading your profit and loss…
+              </p>
+              <Skeleton lines={8} />
+            </div>
+          )}
+          {data && <KpiCards a={data} versus={versusWords(s.shown)} />}
+
+          <Tabs
+            tab={tab}
+            onTab={setTab}
+            actions={
+              <>
+                {s.canManage && (
+                  <button type="button" className="home-btn border border-home-line bg-surface" onClick={addExpense} disabled={!s.costs} data-testid="pl-add-expense">
+                    <Plus aria-hidden className="h-4 w-4" />
+                    Add Expense
+                  </button>
+                )}
+                {canAddEvent && (
+                  <button type="button" className="home-btn border border-home-line bg-surface" onClick={addEvent} data-testid="pl-add-event">
+                    <CalendarPlus aria-hidden className="h-4 w-4" />
+                    Add Business Event
+                  </button>
+                )}
+              </>
+            }
+          />
+
+          <div role="tabpanel" id="pl-panel" aria-labelledby={`pl-tab-${tab}`} className="space-y-4" data-testid={`pl-panel-${tab}`}>
+            {data && tab !== "revenue" && tab !== "table" && <Completeness s={s} />}
+            {data && tab === "overview" && <OverviewTab a={data} s={s} events={events.data ? events.data.events.length : null} onAddEvent={canAddEvent ? addEvent : null} onDownload={download} onDetails={() => goTo(setTab, "table")} />}
+            {data && tab === "revenue" && <RevenueTab a={data} s={s} />}
+            {tab === "expenses" && (
+              <>
+                {data && (
+                  <>
+                    <ExpensesSummary a={data} s={s} onCategories={() => setCategoriesOpen(true)} />
+                    <ExpenseTable s={s} a={data} onEdit={setEditing} onPayment={(expense, due) => setPayments({ expense, focus: due })} />
+                  </>
+                )}
+                <RecurringCosts s={s} onEdit={setEditing} onPayments={(expense) => setPayments({ expense, focus: null })} />
+                {data && <OperatingDays a={data} s={s} />}
+              </>
+            )}
+            {data && tab === "analysis" && <AnalysisTab a={data} s={s} />}
+            {tab === "table" && (
+              <>
+                {data && <Statement a={data} onDownload={download} />}
+                {sheet}
+              </>
+            )}
+          </div>
         </>
       )}
-      <RecurringCosts s={s} onEdit={setEditing} onPayments={(expense) => setPayments({ expense, focus: null })} />
 
-      {s.base && (
+      {s.base && s.sees && (
         <>
           <ExpenseDialog
             editing={editing}
@@ -110,85 +189,133 @@ function ProfitView() {
           <PaymentsDialog s={s} expense={payments?.expense ?? null} focus={payments?.focus ?? null} onClose={() => setPayments(null)} />
         </>
       )}
+      {s.base && (
+        <EventDialog
+          draft={eventDraft}
+          base={s.base}
+          today={s.dates.today}
+          onClose={() => setEventDraft(null)}
+          onSaved={() => {
+            eventsChanged();
+            setEventsVersion((v) => v + 1);
+          }}
+          onRemoved={() => {
+            eventsChanged();
+            setEventsVersion((v) => v + 1);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function Header({ s, onAdd, onCategories }: { s: StatementState; onAdd: () => void; onCategories: () => void }) {
+/** Opens a section from inside another (the Overview's "View Details") and brings its top into view. */
+function goTo(setTab: (t: Tab) => void, tab: Tab) {
+  setTab(tab);
+  window.requestAnimationFrame(() => document.getElementById("pl-tabs")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+}
+
+function Header({ s, onDownload }: { s: StatementState; onDownload: (() => void) | null }) {
   const { stores, store, setStoreId } = useApp();
   const { dates, shown, data } = s;
   return (
-    <header className="animate-rise">
+    <header className="animate-rise space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0">
-          <h1 className="page-title flex items-center gap-2">
-            <span aria-hidden className="grid size-9 place-items-center rounded-xl bg-accent/12 text-accent">
-              <Scale className="h-[18px] w-[18px]" />
-            </span>
-            Profit &amp; Loss
-          </h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted">
-            Your profit or loss {shown ? periodWords(dates, shown) : "for the dates you pick"}: revenue with and without tax, every cost (synced from Shopify and your ad accounts, and your own), and what is left. Add, change
-            and remove your expenses here; the figures follow at once.
-          </p>
+        <div className="flex min-w-0 items-start gap-3">
+          <span aria-hidden className="grid size-11 shrink-0 place-items-center rounded-xl bg-accent/12 text-accent">
+            <ChartColumn className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <h1 className="page-title">Profit &amp; Loss</h1>
+            <p className="mt-1 max-w-2xl text-sm text-muted">Understand your revenue, expenses and actual profit, all in one place.</p>
+            {shown && (
+              <p className="mt-1 hidden text-sm print:block">
+                {store?.name ?? store?.shopDomain} · {fmtRange(shown.range.from, shown.range.to)}
+              </p>
+            )}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2" data-print-hide>
-          {s.canManage && (
-            <button type="button" className="btn-primary h-9 gap-1.5 px-3 text-sm" onClick={onAdd} disabled={!s.costs} data-testid="pl-add-expense">
-              <Plus aria-hidden className="h-4 w-4" />
-              Add Expense
-            </button>
-          )}
-          <button type="button" className="btn-secondary h-9 gap-1.5 px-3 text-sm" onClick={onCategories} disabled={!s.costs} data-testid="pl-categories-open">
-            <FolderCog aria-hidden className="h-4 w-4" />
-            Categories
-          </button>
-          <button type="button" className="btn-secondary h-9 gap-1.5 px-3 text-sm" onClick={() => window.print()}>
-            <Printer aria-hidden className="h-4 w-4" />
-            Print
-          </button>
-        </div>
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-2" data-print-hide>
-        {stores.length > 1 && (
-          <label className="flex items-center gap-2 text-xs text-muted">
-            Store
-            <select className="input h-9 w-auto max-w-[14rem] py-0 text-sm" aria-label="Store" value={store?.id ?? ""} onChange={(e) => setStoreId(e.target.value)}>
+          {stores.length > 1 && (
+            <select className="input h-9 w-auto max-w-[14rem] py-0 text-sm" aria-label="Store" value={store?.id ?? ""} onChange={(e) => setStoreId(e.target.value)} data-testid="pl-store">
               {stores.map((x) => (
                 <option key={x.id} value={x.id}>
                   {x.name ?? x.shopDomain}
                 </option>
               ))}
             </select>
-          </label>
-        )}
-        <DateRangeSelect r={dates} shown={shown} id="pl-dates" label="Dates" size="sm" />
-        <CompareSelect r={dates} shown={shown} current={!s.older} id="pl-compare" label="Compare with" size="sm" />
-        <div className="flex items-center rounded-lg border border-border bg-bg p-0.5" role="group" aria-label="Report by" data-testid="pl-grain">
-          {STATEMENT_GRAINS.map((g) => (
-            <button
-              key={g}
-              type="button"
-              aria-pressed={s.grain === g}
-              className={`h-8 rounded-md px-3 text-sm font-medium transition ${s.grain === g ? "bg-surface text-text shadow-sm" : "text-muted hover:text-text"}`}
-              onClick={() => s.setGrain(g)}
-            >
-              {GRAIN_LABEL[g]}
+          )}
+          <DateRangeSelect r={dates} shown={shown} id="pl-dates" label="Dates" size="sm" />
+          <div className="flex items-center rounded-lg border border-home-line bg-surface p-0.5" role="group" aria-label="Show by" data-testid="pl-grain">
+            {STATEMENT_GRAINS.map((g) => (
+              <button key={g} type="button" aria-pressed={s.grain === g} className={`h-8 rounded-md px-3 text-[13px] font-medium transition ${s.grain === g ? "bg-accent text-accent-ink shadow-sm" : "text-muted hover:text-text"}`} onClick={() => s.setGrain(g)}>
+                {GRAIN_LABEL[g]}
+              </button>
+            ))}
+          </div>
+          {onDownload && (
+            <button type="button" className="home-btn border border-home-line bg-surface" onClick={onDownload} title="Download the profit and loss statement as a CSV file" data-testid="pl-export">
+              <Download aria-hidden className="h-4 w-4" />
+              Export
             </button>
-          ))}
+          )}
+          <button type="button" className="home-btn border border-home-line bg-surface" onClick={() => window.print()} aria-label="Print">
+            <Printer aria-hidden className="h-4 w-4" />
+          </button>
         </div>
       </div>
-      <div className="mt-2 flex flex-wrap gap-2 empty:hidden" data-print-hide>
+      <div className="flex flex-wrap gap-2 empty:hidden" data-print-hide>
         {dates.preset === "custom" && <CustomDates r={dates} />}
         {dates.compare === "custom" && <CompareDates r={dates} />}
       </div>
       {data && (
-        <p className="mt-3 text-xs text-muted">
+        <p className="text-xs text-muted">
           Days in the store&apos;s time zone ({data.timezone}), in {data.currency}; weeks run Monday to Sunday.
-          {data.grain !== s.grain && s.grain ? " Too many columns for those dates: shown a period coarser." : ""}
+          {data.grain !== s.picked && s.picked ? " Too many columns for those dates: shown a period coarser." : ""}
         </p>
       )}
     </header>
+  );
+}
+
+/** The row of sections (the design's pills, the open one filled) with the page's quick actions on its right. */
+function Tabs({ tab, onTab, actions }: { tab: Tab; onTab: (t: Tab) => void; actions: ReactNode }) {
+  const keys = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    const i = TABS.findIndex((t) => t.id === tab);
+    const next = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length]!;
+    onTab(next.id);
+    document.getElementById(`pl-tab-${next.id}`)?.focus();
+  };
+  return (
+    <div id="pl-tabs" className="flex scroll-mt-20 flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-home-line pb-3" data-print-hide>
+      <div role="tablist" aria-label="Profit and loss sections" className="-mx-4 flex max-w-[100vw] gap-1 overflow-x-auto px-4 sm:mx-0 sm:max-w-full sm:px-0" onKeyDown={keys}>
+        {TABS.map((t) => {
+          const on = t.id === tab;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              id={`pl-tab-${t.id}`}
+              aria-selected={on}
+              aria-controls="pl-panel"
+              tabIndex={on ? 0 : -1}
+              className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-lg px-4 text-sm font-medium whitespace-nowrap outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent ${on ? "bg-accent text-accent-ink shadow-sm" : "text-muted hover:bg-home-soft hover:text-text"}`}
+              onClick={() => onTab(t.id)}
+              data-testid={`pl-tab-${t.id}`}
+            >
+              <t.icon aria-hidden className="h-4 w-4" />
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Quick actions" data-testid="pl-quick-actions">
+        {actions}
+      </div>
+    </div>
   );
 }
 

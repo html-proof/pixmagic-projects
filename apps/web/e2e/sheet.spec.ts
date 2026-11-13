@@ -5,7 +5,8 @@ import { E2E_ENV } from "../playwright.config";
 import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
- * The Profit sheet (/sheet): every figure a column per day, the days added up first; a business
+ * The day-by-day sheet in Profit & Loss's Detailed Table (the Profit sheet's own page, /sheet, until
+ * 13 Nov 2026: its address still opens it): every figure a column per day, the days added up first; a business
  * event marked with the pencil on a day shows under the days it runs on, narrows the sheet to its
  * days and sets them against the others; weeks add the days up; the download is the sheet as on
  * screen; the event comes off again; and the page fits a phone (the sheet scrolls, not the page).
@@ -59,8 +60,12 @@ test("lays the store out day by day, and marks, filters and compares business ev
   const storeId = await insertStore(db, ws, `sheet-${Date.now()}.myshopify.com`, ["read_orders", "read_products", "read_customers", "write_pixels", "read_customer_events"]);
   await seed(ws, storeId);
 
+  // The old address opens Profit & Loss on its Detailed Table, with the dates it carried.
   await page.goto(`/sheet?preset=custom&from=${day(-6)}&to=${day(-1)}`);
-  await expect(page.getByRole("heading", { name: "Profit sheet" })).toBeVisible();
+  await expect(page).toHaveURL(/\/profit\?.*tab=table/);
+  await expect(page.getByRole("heading", { name: "Profit & Loss", exact: true })).toBeVisible();
+  await expect(page.getByTestId("pl-tab-table")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "Day-by-Day Sheet" })).toBeVisible();
   const cols = page.getByTestId("sheet-col");
   // Six days: a column each (days are the columns for dates this short), the six added up first.
   await expect(cols).toHaveCount(6);
@@ -79,13 +84,16 @@ test("lays the store out day by day, and marks, filters and compares business ev
   await expect(page.getByTestId("sheet-no-events")).toBeVisible();
 
   // Profit and loss: revenue on the sheet's own rows; no costs list marked complete yet, so no
-  // operating profit, and the section above says what is missing rather than show a figure.
+  // operating profit, and the statement above the sheet says what is missing rather than show a figure.
   await expect(totalOf(page, "revenue")).toHaveText("$2,100.00");
   await expect(totalOf(page, "operating_profit")).toHaveText("—");
-  await expect(page.getByTestId("profit-daily")).toBeVisible();
-  await expect(page.getByTestId("profit-day-operating")).toContainText("Missing data");
-  await expect(page.getByTestId("profit-missing")).toContainText("Your costs list isn't marked complete");
-  await expect(page.getByTestId("profit-cash-flow")).toContainText("Not connected");
+  await expect(page.getByTestId("pl-card-profit-value")).toHaveText("Missing data");
+  await expect(page.getByTestId("pl-statement-gaps")).toContainText("Your costs list isn't marked complete");
+  // The same on Profit Analysis, which also says cash flow isn't read.
+  await page.getByTestId("pl-tab-analysis").click();
+  await expect(page.getByTestId("pl-analysis-total")).toContainText("Missing data");
+  await expect(page.getByTestId("pl-cash-flow")).toContainText("Not connected");
+  await page.getByTestId("pl-tab-table").click();
 
   // A sale over the last two days, marked with the pencil on the first of them.
   await page.locator(`[data-testid="sheet-col"][data-key="${day(-2)}"]`).getByTestId("sheet-add-event").click();
@@ -125,8 +133,8 @@ test("lays the store out day by day, and marks, filters and compares business ev
   await page.getByTestId("sheet-clear-filter").click();
 
   // Weeks: the same six days, added up by Monday-to-Sunday weeks.
-  await page.getByTestId("sheet-grain").getByRole("button", { name: "Weeks" }).click();
-  await expect(page).toHaveURL(/by=week/);
+  await page.getByTestId("pl-grain").getByRole("button", { name: "Weekly" }).click();
+  await expect(page).toHaveURL(/grain=week/);
   expect(await cols.count()).toBeLessThanOrEqual(2);
   await expect(totalOf(page, "orders")).toHaveText("21");
   await expect(page.getByTestId("sheet-row-ads_share_3d")).toHaveCount(0);
@@ -139,7 +147,7 @@ test("lays the store out day by day, and marks, filters and compares business ev
   expect(csv).toMatch(/Ads as share of sales,14\.29%,/);
 
   // The event comes off again.
-  await page.getByTestId("sheet-grain").getByRole("button", { name: "Days" }).click();
+  await page.getByTestId("pl-grain").getByRole("button", { name: "Daily" }).click();
   await page.getByTestId("sheet-event-chip").first().click();
   await expect(page.getByTestId("event-title")).toHaveValue("Spring sale");
   await page.getByTestId("event-remove").click();

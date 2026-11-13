@@ -20,6 +20,8 @@ export interface LineSeries {
   values: Array<number | null>;
   /** Columns below zero in this colour instead (a loss in red), with `bars`. */
   negativeColor?: string;
+  /** With `bars`: this series stays a line with a dot per point, drawn over the columns (profit over revenue and expenses). */
+  line?: boolean;
 }
 
 /** The runs of days a series has figures for, as [first, last] index pairs: each is drawn on its own. */
@@ -128,6 +130,10 @@ export function LineChart({
   // A grouped chart names its weeks or months; today is a day, so it is only marked on a daily one.
   const longName = (i: number) => periods?.[i]?.long ?? `${fmtLongDay(days[i]!)}${days[i] === today ? " · today so far" : ""}`;
   const describe = (i: number) => `${longName(i)}: ${series.map((s) => `${s.label} ${show(s.values[i])}`).join(", ")}.`;
+  // With `bars`, the series drawn as columns and those kept as lines over them.
+  const columns = bars ? series.filter((s) => !s.line) : [];
+  const lines = bars ? series.filter((s) => s.line) : series;
+  const isColumn = (s: LineSeries) => bars && !s.line;
 
   return (
     <div className="min-w-0">
@@ -135,7 +141,7 @@ export function LineChart({
         <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
           {series.map((s) => (
             <span key={s.key} className="inline-flex items-center gap-1.5">
-              <span aria-hidden className={bars ? "inline-block h-2.5 w-2.5 rounded-sm" : "inline-block h-0.5 w-4 rounded"} style={{ background: s.color }} />
+              <span aria-hidden className={isColumn(s) ? "inline-block h-2.5 w-2.5 rounded-sm" : "inline-block h-0.5 w-4 rounded"} style={{ background: s.color }} />
               {s.label}
             </span>
           ))}
@@ -181,11 +187,11 @@ export function LineChart({
               </text>
             ))}
             {bars &&
-              series.map((s, j) => (
+              columns.map((s, j) => (
                 <g key={s.key} fill={s.color} className="animate-fade">
                   {s.values.map((v, i) => {
                     if (!v) return null;
-                    const w = barW / series.length;
+                    const w = barW / columns.length;
                     // A day with very little still shows a sliver, so it never reads as nothing.
                     const yTop = Math.abs(y(v) - y(0)) < 2 ? y(0) - Math.sign(v) * 2 : y(v);
                     const dim = (at !== null && at !== i ? 0.45 : 1) * (days[i] === today ? 0.45 : 1);
@@ -209,8 +215,7 @@ export function LineChart({
                   )),
               )}
             {/* One line per run of days with figures; a day alone between gaps is a dot. */}
-            {!bars &&
-              series.flatMap((s) =>
+            {lines.flatMap((s) =>
                 runsOf(s.values).map(([a, b]) =>
                   a === b ? (
                     <circle key={`${s.key}-${a}`} cx={x(a)} cy={y(s.values[a] ?? 0)} r={n <= 1 ? 4 : 2.5} fill={s.color} stroke="var(--surface)" strokeWidth={n <= 1 ? 2 : 1} />
@@ -229,6 +234,11 @@ export function LineChart({
                     />
                   ),
                 ),
+              )}
+            {/* Over columns, a line marks each of its points: a period is a column wide, not a slope. */}
+            {bars &&
+              lines.flatMap((s) =>
+                s.values.map((v, i) => (v === null ? null : <circle key={`${s.key}-p${i}`} cx={x(i)} cy={y(v)} r={at === i ? 4 : 2.5} fill="var(--surface)" stroke={v < 0 && s.negativeColor ? s.negativeColor : s.color} strokeWidth={2} />)),
               )}
             {at !== null && !bars && (
               <g>
@@ -259,7 +269,7 @@ export function LineChart({
             <div className="text-muted">{longName(at)}</div>
             {series.map((s) => (
               <div key={s.key} className="mt-1 flex items-center gap-2">
-                <span aria-hidden className={bars ? "inline-block h-2.5 w-2.5 shrink-0 rounded-sm" : "inline-block h-0.5 w-3 shrink-0 rounded"} style={{ background: s.color }} />
+                <span aria-hidden className={isColumn(s) ? "inline-block h-2.5 w-2.5 shrink-0 rounded-sm" : "inline-block h-0.5 w-3 shrink-0 rounded"} style={{ background: s.color }} />
                 <span className="font-semibold tabular-nums text-text">{show(s.values[at])}</span>
                 <span className="truncate text-muted">{s.label}</span>
               </div>
