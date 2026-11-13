@@ -80,7 +80,18 @@ export function fmtPeriod(p: { key: string; from: string; to: string }, g: Exclu
   return whole ? name : `${name} · ${fmtSpan(p.from, p.to)} only`;
 }
 
-const lastOfMonth = (day: string) => new Date(Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)), 0)).toISOString().slice(0, 10);
+/**
+ * A day, week or month of a small chart in as few words as say which: "Mon 9 Nov", "9–15 Nov",
+ * "Nov 2026". A month the dates picked cut short is named by the days of it they hold
+ * ("1–13 Nov 2026"), as a week always is.
+ */
+export function fmtPeriodShort(p: { key: string; from: string; to: string }, g: PeriodGranularity): string {
+  if (g === "day") return `${fmtWeekday(p.from)} ${fmtDay(p.from, { year: false })}`;
+  if (g === "month" && p.from.endsWith("-01") && p.to === lastOfMonth(p.from)) return fmtMonth(p.key, { short: true, year: true });
+  return fmtSpan(p.from, p.to, { year: g === "month" });
+}
+
+const lastOfMonth =(day: string) => new Date(Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)), 0)).toISOString().slice(0, 10);
 
 /** Money without cents, for labels on chart marks: "A$1,751". */
 export function fmtMoneyWhole(n: number, currency: string): string {

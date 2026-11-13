@@ -202,7 +202,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   forgets the window. Stores imported before the record existed were given 60 days before their last
   successful orders sweep (a start they surely hold), and their next window import makes it exact.
   `oldestOrderDay`/`newestOrderDay` stay the orders actually held ("Orders from … to …").
-- **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0, days before the imported history are "not imported" (null in the breakdown, drawn hatched).
+- **Daily series** (the sales chart and the tiles' small bar charts) has one point per day of the range; days without orders or sales are 0, days before the imported history are "not imported" (null in the breakdown, drawn hatched).
 - **Every section follows the dates picked**, in the store's time zone: the tiles, both sales panels'
   daily view, the sales, product, customer, channel, discount and fulfillment details, recent orders
   (the latest 10 placed in the dates, and how many orders were cancelled in them, counted on the day of
@@ -407,8 +407,14 @@ removed by the owner on 2026-11-13.) Reference implementation: `apps/web/src/com
 carries; nothing is estimated.
 
 - **Headline tiles**: Total sales (Net sales without `finance.breakdown`), Orders, Average order
-  value, Total products sold, each with a sparkline of the same figure day by day
-  (`series`; a day's `units` are its net items sold). Under Total sales: "Refunds −A$…", what
+  value, Total products sold, each with a small bar chart of the same figure over the dates
+  (`series`; a day's `units` are its net items sold): a bar a day up to 31 days, a bar a week
+  (Monday to Sunday) up to 183, a bar a calendar month past that (`trendPeriods` in
+  `@app/shared/sales`), from a zero line, with the first and last date under it; pointing at a
+  bar names it and says its figure. A week or month adds up its days; average order value is
+  what its orders sold for over how many there were, and a period with no orders has no bar.
+  A period before the imported history has none either, and one that holds today or days not
+  imported is drawn lighter. Under Total sales: "Refunds −A$…", what
   refunds took off it in the dates (`sales_overview.current.totalRefunded`, Total refunded above),
   then the store's Custom sales when it shows them.
 - **Orders at a glance** (asked for by the owner on 2026-10-30, under the tiles; module
