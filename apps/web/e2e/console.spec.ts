@@ -171,7 +171,8 @@ test.describe("signed in", () => {
     ["/whatsapp", /./],
     ["/messaging", /./],
     ["/automations", /./],
-    ["/sheet", /Profit sheet/],
+    // The Profit sheet's old address: it opens Profit & Loss on its Detailed Table.
+    ["/sheet", /Profit & Loss/],
     ["/profit", /Profit & Loss|Connect your store/],
     // A new email template: its live preview renders before it has a name.
     ["/settings/email/templates/edit", /./],
