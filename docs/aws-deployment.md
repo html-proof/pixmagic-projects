@@ -708,6 +708,15 @@ job signs in only with the OIDC deploy role and checks that it did.
   setting the variable back, Smart App Control has to be off, or one small job has to be seen
   running its steps on the PC (a docs-only pull request costs one 10-minute red check if it is
   still blocked).
+  2026-11-13: the owner had the PC cut off from AWS. `aws logout` removed the owner's sign-in on
+  the PC (the account has no IAM users and no access keys, so nothing there can reach AWS until
+  someone runs `aws login` again), and bizinsights-pc was removed from GitHub (Settings → Actions →
+  Runners is empty), so no job, Deploy included, can run on the PC. CI and Deploy stay on GitHub's
+  machines, as they were. The runner's Windows service (stopped), `C:\actions-runner` and the
+  ghrunner account are still on the PC and can no longer connect; "Back to GitHub's runners" below
+  removes them (skip `config.cmd remove`, the registration is already gone, and delete the service
+  with `sc.exe delete "actions.runner.html-proof-pixmagic-projects.bizinsights-pc"`). To use the PC
+  again, install the runner again from the top of this section before setting the variable.
   Setting the variable: its value must be JSON, quotes included, because every `runs-on` passes it
   to `fromJSON`. Windows PowerShell 5.1 drops the double quotes inside a single-quoted argument to
   a program, so `--body '["self-hosted","bizinsights-pc"]'` (right in Git Bash) stores
