@@ -69,15 +69,19 @@ running with 0 restarts.
   day (`selfhost.ts`, `canonicalHost`: GET and HEAD through the edge on any other name, 301).
 - No backups leave the server (no bucket; `ARCHIVE_MODE=off`), no monitoring stack, no external
   uptime check. RDS holds the data as of 05:59 UTC.
-- Deploy to AWS fails from here on (its smoke test asks the public address for the Lambda release).
-  Deploy to iKorex is not set up (no deploy key): changes ship with `ship.sh` from the PC.
+- Deploy to AWS failed from here on (its smoke test asks the public address for the Lambda release),
+  and the owner had the workflow switched off at 07:12 UTC (`gh workflow disable aws-deploy.yml`).
+  Three runs had failed by then, all at the CloudFront function's comment, none as far as the
+  migrate gate; had one got there, the cron function's reserved concurrency 0 would have throttled
+  its invoke and rolled the stack back. Deploy to iKorex is not set up (no deploy key): changes
+  ship with `ship.sh` from the PC.
 - `server-test.bizinsights.io` still points at the tunnel.
 - The first freeze command (05:47) stopped at its second step on a path error and froze nothing; only
   the two GitHub variables had changed. Production stayed up until the freeze above.
 
 **The way back** while nothing was written on the server that matters: delete the three functions'
 reserved concurrency, enable the schedules, the WhatsApp service back to 1 task, the two variables
-back, and `bizinsights.io` and `www` back to `d2mr8m2p1qkh58.cloudfront.net` in Cloudflare's
+back, the Deploy to AWS workflow enabled again, and `bizinsights.io` and `www` back to `d2mr8m2p1qkh58.cloudfront.net` in Cloudflare's
 dashboard (cloudflared can't set that record). After writes on the server: the copy back
 ([ROLLBACK_PLAN.md](ROLLBACK_PLAN.md#the-copy-back-de-after-writes-on-ikorex)).
 
