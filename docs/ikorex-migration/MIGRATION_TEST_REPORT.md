@@ -65,7 +65,8 @@ running with 0 restarts.
   refused with 401, which is the app not knowing a removed instance). Whoever was pairing starts
   again, on the server. The service itself is healthy and answers the app.
 - `www.bizinsights.io` used to redirect to `bizinsights.io` (CloudFront's function did it). Through
-  the tunnel it serves the app under `www`: a redirect is still to be added.
+  the tunnel it served the app under `www` until the web handler took the redirect over the same
+  day (`selfhost.ts`, `canonicalHost`: GET and HEAD through the edge on any other name, 301).
 - No backups leave the server (no bucket; `ARCHIVE_MODE=off`), no monitoring stack, no external
   uptime check. RDS holds the data as of 05:59 UTC.
 - Deploy to AWS fails from here on (its smoke test asks the public address for the Lambda release).
