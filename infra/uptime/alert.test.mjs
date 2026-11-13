@@ -13,6 +13,8 @@ test("wrangler.json: every 10 minutes, no address of its own, the alert goes whe
   assert.equal(config.routes, undefined);
   assert.deepEqual(config.send_email, [{ name: "ALERT", destination_address: TO }]);
   assert.match(FROM, /@bizinsights\.io$/);
+  // Email Routing sends only for a domain in the Worker's own account: the one that holds bizinsights.io.
+  assert.equal(config.account_id, "cb2258607adff3712311e91007ec4017");
 });
 
 test("urlsFrom: the usual two, plus https addresses from EXTRA_URLS", () => {

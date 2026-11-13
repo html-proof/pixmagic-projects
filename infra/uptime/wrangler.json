@@ -1,5 +1,6 @@
 {
   "name": "bizinsights-uptime",
+  "account_id": "cb2258607adff3712311e91007ec4017",
   "main": "worker.mjs",
   "compatibility_date": "2026-10-27",
   "compatibility_flags": ["nodejs_compat"],

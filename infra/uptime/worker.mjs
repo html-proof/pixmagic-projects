@@ -7,7 +7,10 @@
 //
 // It has no address of its own (workers_dev false, no route): nothing outside can call it.
 //
-// Published from a checkout, by hand (signed in with `npx wrangler@4.154.0 login`):
+// Published from a checkout, by hand, into the Cloudflare account that holds bizinsights.io
+// (wrangler.json's account_id: Email Routing refuses to send for a domain in another account, as it
+// did when it was first published into the wrong one on 2026-11-13). Signed in with
+// `npx wrangler@4.154.0 login` as a login that can open that account:
 //
 //   npx --yes wrangler@4.154.0 deploy --config infra/uptime/wrangler.json
 //
