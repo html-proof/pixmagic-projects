@@ -45,7 +45,6 @@ const daily = (c: AdConn, from: string, to: string, over: Partial<AdDayRow> = {}
 
 const week = (over: Partial<AdsAsk> = {}): AdsAsk => ({
   range: { from: d(-6), to: TODAY },
-  previous: { from: d(-13), to: d(-7), until: "12:00:00" },
   storeCurrency: "USD",
   storeTimeZone: "UTC",
   netSales: 1000,

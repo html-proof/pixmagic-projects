@@ -1,18 +1,17 @@
-import { Prisma, type Tx } from "@app/db";
+import type { Tx } from "@app/db";
 import {
   adsFromShopify,
   PLATFORM_SOURCES,
   visitsCounted,
   type AdSourceFacts,
   type AdSpendProvider,
-  type Comparison,
   type DateRange,
   type SourcedDay,
   type SourcedSales,
   type SourcedVisits,
 } from "@app/shared";
 import type { AdsFigures } from "./ads.js";
-import { localMoment, MERCHANDISE, num, SALE_VALUE, type Scope } from "./common.js";
+import { MERCHANDISE, num, SALE_VALUE, type Scope } from "./common.js";
 
 // ---------------------------------------------------------------------------
 // Meta Ads and Google Ads from the store's own orders (packages/shared/src/adsFromShopify.ts): what
@@ -23,21 +22,18 @@ import { localMoment, MERCHANDISE, num, SALE_VALUE, type Scope } from "./common.
 /**
  * Each order's net sales from the sales in `r`, for the orders placed in `r` or with sales in it, by
  * the order's visit (source, medium, the link's campaign), as the traffic module counts them
- * (salesByOrder in orders.ts). `until`: the dates compared with a running day, cut at the same time of
- * day on their last day (Shopify's like-for-like): no order placed, and no sale made, after it.
+ * (salesByOrder in orders.ts).
  */
-async function bySource(tx: Tx, { ws, storeId }: Scope, r: DateRange, until: Prisma.Sql | null): Promise<SourcedSales[]> {
+async function bySource(tx: Tx, { ws, storeId }: Scope, r: DateRange): Promise<SourcedSales[]> {
   const rows = await tx.$queryRaw<Array<{ source: string | null; medium: string | null; campaign: string | null; orders: number; sales: string }>>`
     SELECT o.traffic_source AS source, o.traffic_medium AS medium, o.traffic_campaign AS campaign,
-           (COUNT(*) FILTER (WHERE o.local_day BETWEEN ${r.from} AND ${r.to} AND NOT o.gift_card_only
-              ${until ? Prisma.sql`AND COALESCE(o.shopify_processed_at, o.shopify_created_at) < ${until}` : Prisma.empty}))::int AS orders,
+           (COUNT(*) FILTER (WHERE o.local_day BETWEEN ${r.from} AND ${r.to} AND NOT o.gift_card_only))::int AS orders,
            COALESCE(SUM(v.sales), 0)::text AS sales
     FROM orders o
     LEFT JOIN (
       SELECT s.order_id, SUM(${SALE_VALUE}) AS sales
       FROM order_sales s
       WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND ${MERCHANDISE} AND s.local_day BETWEEN ${r.from} AND ${r.to}
-        ${until ? Prisma.sql`AND s.happened_at < ${until}` : Prisma.empty}
       GROUP BY s.order_id
     ) v ON v.order_id = o.id
     WHERE o.workspace_id = ${ws} AND o.store_id = ${storeId}
@@ -85,27 +81,23 @@ async function visitsBySource(tx: Tx, { ws, storeId }: Scope, r: DateRange, sour
 }
 
 /**
- * Meta's and Google's figures from the store's orders (`provider`: one of them only), for the dates
- * and, when `compare` (their orders imported, as the dashboard's sales compare), for the dates compared
- * with; `visits`: the storefront pixel records visits (the funnel capability), so they are counted too.
+ * Meta's and Google's figures from the store's orders (`provider`: one of them only), for the dates;
+ * `visits`: the storefront pixel records visits (the funnel capability), so they are counted too.
  */
 export async function adsFromShopifyModule(
   tx: Tx,
   scope: Scope,
-  dates: { range: DateRange; previous: Comparison },
-  opts: { currency: string; timeZone: string; compare: boolean; historyFrom: string | null; provider?: AdSpendProvider; visits?: boolean },
+  range: DateRange,
+  opts: { currency: string; historyFrom: string | null; provider?: AdSpendProvider; visits?: boolean },
 ) {
-  const { range, previous } = dates;
   const providers: AdSpendProvider[] = opts.provider ? [opts.provider] : ["meta", "google"];
   const sources = providers.flatMap((p) => PLATFORM_SOURCES[p]);
-  const until = opts.compare && previous.until ? localMoment(previous.to, previous.until, opts.timeZone) : null;
-  const [rows, days, previousRows, visits] = await Promise.all([
-    bySource(tx, scope, range, null),
+  const [rows, days, visits] = await Promise.all([
+    bySource(tx, scope, range),
     byDay(tx, scope, range, sources),
-    opts.compare ? bySource(tx, scope, previous, until) : null,
     opts.visits ? visitsBySource(tx, scope, range, sources) : null,
   ]);
-  return adsFromShopify({ providers, rows, days, previousRows, range, compared: previous, currency: opts.currency, historyFrom: opts.historyFrom, visits });
+  return adsFromShopify({ providers, rows, days, range, currency: opts.currency, historyFrom: opts.historyFrom, visits });
 }
 
 /**

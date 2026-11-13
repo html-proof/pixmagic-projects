@@ -2,7 +2,6 @@
 // (@app/shared/shopifyMarketing), and its bundler doesn't map "./dates.js" to dates.ts.
 import type { AdSpendProvider } from "./ads";
 import { eachDay, type DateRange } from "./dates";
-import { delta } from "./kpi";
 
 /**
  * Ad spend, impressions and clicks as the store's marketing apps report them to Shopify: Shopify's
@@ -117,9 +116,6 @@ export interface MarketingGroup {
   availability: MarketingAvailability;
   /** Null when unavailable. */
   totals: MarketingFigures | null;
-  /** The dates compared with; null when not compared (`ShopifyMarketing.compared`). */
-  previous: MarketingFigures | null;
-  deltas: { spend: number | null; clicks: number | null; impressions: number | null; sales: number | null; roas: number | null };
   /** Every day of the dates. */
   daily: MarketingDay[];
   /** By campaign, the 10 that spent most (then sold most). */
@@ -188,8 +184,6 @@ export interface ShopifyMarketing {
    * when none did. A platform whose own API is connected is in it too: never add it to that API's spend.
    */
   reportedSpend: number | null;
-  /** The dates compared with; null: not compared (still running, or not read back that far). */
-  compared: DateRange | null;
   /**
    * The days of the dates whose figures are read, `from` to `through`: the dates' own, or less while
    * earlier days are still being read (`sync.coveredFrom`) or the latest aren't read yet
@@ -264,18 +258,16 @@ function group(input: {
   platform: MarketingPlatform;
   name: string;
   rows: readonly MarketingRow[];
-  previousRows: readonly MarketingRow[] | null;
   /** Every day this platform's channels reported anything, of the days read (for `lastDay` and availability). */
   lastDay: string | null;
   range: DateRange;
   from: string | null;
   through: string | null;
 }): MarketingGroup {
-  const { rows, previousRows, range, from, through } = input;
+  const { rows, range, from, through } = input;
   const day = rows.filter((r) => r.campaign === null);
   const availability: MarketingAvailability = spent(day) ? "reported" : input.lastDay ? "no_spend" : "unavailable";
   const totals = availability === "unavailable" ? null : marketingFigures(day);
-  const previous = previousRows && availability !== "unavailable" ? marketingFigures(previousRows.filter((r) => r.campaign === null)) : null;
   const byDay = new Map<string, MarketingRow[]>();
   for (const r of day) byDay.set(r.day, [...(byDay.get(r.day) ?? []), r]);
   const campaigns = new Map<string, MarketingRow[]>();
@@ -287,14 +279,6 @@ function group(input: {
     apps: uniq(rows.map((r) => r.app)),
     availability,
     totals,
-    previous,
-    deltas: {
-      spend: previous ? delta(totals?.spend ?? null, previous.spend) : null,
-      clicks: previous ? delta(totals?.clicks ?? null, previous.clicks) : null,
-      impressions: previous ? delta(totals?.impressions ?? null, previous.impressions) : null,
-      sales: previous ? delta(totals?.sales ?? null, previous.sales) : null,
-      roas: previous ? delta(totals?.roas ?? null, previous.roas) : null,
-    },
     daily: eachDay(range.from, range.to).map((d) => {
       // A day not read yet, or a platform that reports nothing: unknown. A read day it reported nothing
       // on: 0. A figure it left empty that day stays unknown.
@@ -358,22 +342,19 @@ export function marketingSpendPeriod(input: { rows: readonly MarketingRow[]; las
 /**
  * The Shopify marketing module for the dates: Meta's and Google's figures as their apps report them
  * to Shopify, the other channels that reported spend, and where the reading stands. `rows`: the
- * stored rows of the dates; `previousRows`: those of the dates compared with, or null when they aren't
- * (the dates still running, or not read back that far); `lastDays`: the last day each channel
+ * stored rows of the dates; `lastDays`: the last day each channel
  * reported anything, of every day read (a channel quiet in these dates isn't "unavailable");
  * `current`: the store's today and the rows of its month so far, for today's and this month's spend.
  */
 export function shopifyMarketing(input: {
   rows: readonly MarketingRow[];
-  previousRows: readonly MarketingRow[] | null;
   lastDays: LastDays;
   range: DateRange;
-  compared: DateRange | null;
   currency: string;
   sync: MarketingSyncState;
   current?: { today: string; rows: readonly MarketingRow[] };
 }): ShopifyMarketing {
-  const { previousRows, range, sync, current } = input;
+  const { range, sync, current } = input;
   const [from, through] = readSpan(range, sync);
   // Only the days read: a day after a gap, read on its own, waits for the days before it.
   const rows = from && through ? input.rows.filter((r) => r.day >= from && r.day <= through) : [];
@@ -383,7 +364,6 @@ export function shopifyMarketing(input: {
       platform: p,
       name: PLATFORM_NAME[p],
       rows: rows.filter((r) => platformOf(r) === p),
-      previousRows: previousRows?.filter((r) => platformOf(r) === p) ?? null,
       lastDay: lastOf((x) => platformOf(x) === p),
       range,
       from,
@@ -399,7 +379,6 @@ export function shopifyMarketing(input: {
         platform: "other",
         name: channel,
         rows: rows.filter((r) => platformOf(r) === "other" && r.channel === channel),
-        previousRows: previousRows?.filter((r) => platformOf(r) === "other" && r.channel === channel) ?? null,
         lastDay: lastOf((x) => platformOf(x) === "other" && x.channel === channel),
         range,
         from,
@@ -417,7 +396,6 @@ export function shopifyMarketing(input: {
     platforms,
     others,
     reportedSpend: spends.length ? r2(spends.reduce((a, b) => a + b, 0)) : null,
-    compared: previousRows ? input.compared : null,
     from,
     through,
     current: current

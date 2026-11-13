@@ -460,9 +460,6 @@ export function accountCoverage(
   return { from: c.historyFrom, through: isClosedAdAccount(c) && accountToday > c.syncedThrough ? accountToday : c.syncedThrough };
 }
 
-/** Whether a comparison can be worked out from these days: it starts on or after the day they start. */
-export const canCompareFrom = (c: AdCoverage, previous: { from: string }) => c.from !== null && previous.from >= c.from;
-
 /** The days every one of these accounts covers: the latest start to the earliest end (nothing if one has none). */
 export function commonCoverage(list: AdCoverage[]): AdCoverage {
   if (!list.length) return NO_COVERAGE;
@@ -493,23 +490,6 @@ export function coveredPart(c: AdCoverage, range: { from: string; to: string }):
   const from = c.from > range.from ? c.from : range.from;
   const to = c.through < range.to ? c.through : range.to;
   return from <= to ? { from, to } : null;
-}
-
-/**
- * The days a change is worked out on. Ad platforms report whole days, and a day still running (the
- * store's today, or an ad account's today in its own zone) holds only part of its figures: set
- * against a whole day it reads as a drop that never happened. So while the range reaches past
- * `lastWholeDay` (the last day finished everywhere), the range and the comparison both lose that
- * many days at their end, and the change is "through" the range's last whole day. A range of running
- * days only (Today) has nothing to compare: null.
- */
-export function adComparisonWindows(range: { from: string; to: string }, previous: { from: string; to: string }, lastWholeDay: string) {
-  if (range.to <= lastWholeDay) return { current: { from: range.from, to: range.to }, previous: { from: previous.from, to: previous.to }, trimmed: 0 };
-  if (lastWholeDay < range.from) return null;
-  const trimmed = eachDay(addDays(lastWholeDay, 1), range.to).length;
-  const prevTo = addDays(previous.to, -trimmed);
-  if (prevTo < previous.from) return null;
-  return { current: { from: range.from, to: lastWholeDay }, previous: { from: previous.from, to: prevTo }, trimmed };
 }
 
 /** The last day that is over for the store and for each of these ad accounts, in its own time zone. */
@@ -622,12 +602,6 @@ export function campaignTotals(rows: AdDayRow[], limit = 10) {
     })
     .sort((a, b) => b.spend - a.spend || b.clicks - a.clicks)
     .slice(0, limit);
-}
-
-/** The range just before, as many days long (the dashboard's comparison period). */
-export function previousRange(range: { from: string; to: string }) {
-  const days = eachDay(range.from, range.to).length;
-  return { from: addDays(range.from, -days), to: addDays(range.from, -1) };
 }
 
 /** Meta reports every action type it tracks; these are the ones that mean a purchase or a lead, best first. */

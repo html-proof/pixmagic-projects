@@ -579,7 +579,7 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
 | Conversions (all conversion actions) | Google: `metrics.conversions`, every action set to count in Conversions (leads, sign-ups, calls and purchases) | Shown on the Google Ads card and the Ads panel only, never called or added up as purchases. Meta's conversions are its purchases |
 | Cost per conversion | spend ÷ conversions | |
 | Ads as share of sales | ad spend ÷ the store's net sales for the same dates | Only when both are in the same currency and every day of the ad spend is known |
-| Sales per unit of ad spend (MER) | the store's net sales ÷ ad spend (every platform), for the same dates | The marketing efficiency ratio: every sale the store made, whatever brought it, against everything spent on ads. The store's own measure, kept apart from a platform's ROAS (which counts only the purchases the platform credits to itself). Same conditions as the share of sales; `null` while nothing was spent. The answer's change on it, and on the cost per order, only when the dates picked have ended (both sides whole ranges), since the store's figures are for the whole of each |
+| Sales per unit of ad spend (MER) | the store's net sales ÷ ad spend (every platform), for the same dates | The marketing efficiency ratio: every sale the store made, whatever brought it, against everything spent on ads. The store's own measure, kept apart from a platform's ROAS (which counts only the purchases the platform credits to itself). Same conditions as the share of sales; `null` while nothing was spent |
 | Cost per Shopify order | ad spend ÷ the store's orders for the same dates (gift-card-only orders aside, as Shopify counts) | A derived cost, labelled as such: every order, not what an order from an ad cost. `null` without orders |
 | Orders from a platform's ads (Shopify's visit record) | orders whose last visit before the order (Shopify's `customerJourneySummary.lastVisit`, see Traffic sources) came from Facebook or Instagram (Meta) or Google or YouTube (Google Ads) through a link tagged as an ad (`traffic_medium` paid), and their net sales | The store's attribution, shown beside the platform's own purchases and never added to them: a platform can claim a sale that would have happened anyway, Shopify sees only the last visit. Orders on the day they happened in the store's zone; the platforms count purchases on the day of the click in the ad account's zone. Sales from those orders ÷ that platform's spend is given too ("sales per unit, Shopify's record"), same currency only. Team & Access "View conversion attribution" |
 
@@ -632,15 +632,11 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   and ROAS ("Meta Ads credits … in purchases to its ads (2.4×) and Google Ads … (1.9×), each by its own
   count"), and Overview's details have a "Return on ad spend (Meta Ads' own)" row per platform in place
   of the platforms' one (`businessHealth`, `OverviewDetail`).
-- **Changes compare whole days only** (the answer's `deltas`; the pages show none). `compared` holds
-  the days each side is worked out on and their totals: while the range reaches a day still running
-  (the store's today, or a counted account's today in its own zone; `lastWholeAdDay`), both sides
-  lose that many days at their end (`trimmed`, `adComparisonWindows`). Today alone (or yesterday
-  while an account's day is still running) has no change: `notCompared` is `running`. The `previous`
-  figures and dates are those compared. `notCompared` is also `no_history` (the comparison starts
-  before `historyFrom`) or `incomplete` (a counted account lacks days of either side). Each
-  platform is compared from its own history, so the comparison's days are read whenever any
-  counted platform's figures reach back to them (`daysToRead`); when they aren't read, nothing is compared (`no_history`), never set against $0.
+- **No change on the dates before.** The ad modules carry the dates' own figures only: the stored
+  days of the period before are no longer read (`daysToRead` reads the range), and `previous`,
+  `deltas`, `compared`, `notCompared`, a campaign's `change` and the before-and-change half of
+  `sales` were removed on 2026-11-13. `soFar` still stops at the last day that is over everywhere
+  (`lastWholeAdDay`).
 - **Days** are each ad account's own calendar days. When an account's time zone has other days than
   the store's (`otherTimeZone`, `sameDays`: not the name, the local date and time now and half a year
   either side), its card says "Google Ads days follow the ad account's time zone, America/Los_Angeles",
@@ -658,7 +654,7 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   (never an average of daily rates), and a week or month missing any day's figures is left blank, as a
   missing day is.
 - **Freshness:** the last 3 days are refreshed hourly. The last 30 days are fetched again daily, because purchases keep being credited after the click. A first connection fetches 90 days. An account whose stored history falls short of those 90 days (its first sync failed and a later one worked, or it was connected before `history_from` was recorded) gets the whole 90 days in its daily re-check instead, until they are in (`recheckDays` in packages/core/src/adConnections/sync.ts).
-- **No earlier data:** comparisons go back only to where every counted account's figures start (see Conventions).
+- **Where the figures start:** `historyFrom`, the first day every counted account has figures from. Days of the dates before it are missing, never 0.
 
 ### Live reports: figures read for the dates picked
 
@@ -687,7 +683,6 @@ account connected").
 | Orders | those orders placed in the range | Gift-card-only orders aside, as everywhere |
 | Share of your sales | the platform's sales ÷ the store's net sales over the range, every source together | Orders whose visit isn't read yet count in the whole, in no platform (`pending`) |
 | From links tagged as ads | the same for `traffic_medium = 'paid'` | An untagged Meta ad counts as a visit from Facebook or Instagram, not as an ad |
-| Change (the answer's `deltas`) | (now − before) ÷ before, for the dates compared with | Only with their orders imported; a running day is cut at the same time of day (orders by processed time, sales by when they happened) |
 
 Each day of the range is given, a day before the store's imported orders as unknown (never 0). These are
 the store's last-click view and never added to, or shown as, a platform's own figures.
@@ -723,7 +718,7 @@ and day in `adsense_daily`; never in `ad_campaign_daily`.
   after its last sync that worked) is missing, never $0, and the totals for a range that needs it are
   `null` with `partial` giving what is known (or `soFar`, as for ads, while only days not over yet are
   missing).
-- **Changes** compare whole days only, as for ads.
+- **No change on the dates before**, as for ads.
 - **Days** are the AdSense account's own calendar days (`reportingTimeZone=ACCOUNT_TIME_ZONE`).
 - **Currency** is chosen as for ads: the store's when any AdSense account uses it, otherwise the first known.
 - **Earnings are money in, ad spend is money out:** the two modules are separate and never summed.

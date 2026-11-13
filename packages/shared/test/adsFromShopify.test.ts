@@ -3,7 +3,6 @@ import { redactOverview, type MemberAccess } from "../src/access";
 import { adJourney, adPlatformSources, adsFromShopify, adsFromShopifyWithoutAttribution, visitsCounted, type AdSourceFacts, type SourcedDay, type SourcedSales } from "../src/adsFromShopify";
 
 const range = { from: "2026-10-01", to: "2026-10-03" };
-const compared = { from: "2026-09-28", to: "2026-09-30" };
 
 const rows: SourcedSales[] = [
   { source: "facebook", medium: "paid", campaign: "Diwali", orders: 2, sales: 100 },
@@ -24,7 +23,7 @@ const days: SourcedDay[] = [
 ];
 
 const ask = (over: Partial<Parameters<typeof adsFromShopify>[0]> = {}) =>
-  adsFromShopify({ providers: ["meta", "google"], rows, days, previousRows: null, range, compared, currency: "AUD", historyFrom: "2026-01-01", ...over });
+  adsFromShopify({ providers: ["meta", "google"], rows, days, range, currency: "AUD", historyFrom: "2026-01-01", ...over });
 
 describe("Meta and Google advertising from the store's own orders", () => {
   it("adds up each platform's sources: Facebook and Instagram for Meta, Google and YouTube for Google, tagged ads apart", () => {
@@ -61,21 +60,10 @@ describe("Meta and Google advertising from the store's own orders", () => {
     expect(none!.daily.every((d) => d.sales === null)).toBe(true);
   });
 
-  it("compares with the dates before only when their orders were read, never against a made-up 0", () => {
-    const m = ask({ previousRows: [{ source: "facebook", medium: "paid", orders: 1, sales: 100 }, { source: "google", medium: "unpaid", orders: 1, sales: 0 }] });
-    expect(m.compared).toEqual(compared);
-    const [meta, google] = m.platforms;
-    expect(meta!.previous).toEqual({ orders: 1, sales: 100, paidOrders: 1, paidSales: 100 });
-    expect(meta!.deltas.sales).toBeCloseTo(1);
-    expect(meta!.deltas.orders).toBeCloseTo(3);
-    expect(meta!.deltas.paidSales).toBeCloseTo(0.7);
-    // Nothing to set a change against: no change, rather than an infinite one.
-    expect(google!.deltas.sales).toBeNull();
-
-    const not = ask();
-    expect(not.compared).toBeNull();
-    expect(not.platforms[0]!.previous).toBeNull();
-    expect(not.platforms[0]!.deltas).toEqual({ orders: null, sales: null, paidSales: null });
+  it("is the dates' own: nothing of the dates before", () => {
+    const m = ask();
+    expect(m).not.toHaveProperty("compared");
+    for (const p of m.platforms) for (const k of ["previous", "deltas"]) expect(p).not.toHaveProperty(k);
   });
 
   it("answers one platform alone, and has no share of no sales", () => {
@@ -89,14 +77,13 @@ describe("Meta and Google advertising from the store's own orders", () => {
   });
 
   it("leaves out the tagged-ad figures and the campaigns without View conversion attribution", () => {
-    const m = adsFromShopifyWithoutAttribution(ask({ previousRows: [{ source: "facebook", medium: "paid", orders: 1, sales: 100 }] }));
+    const m = adsFromShopifyWithoutAttribution(ask());
     const text = JSON.stringify(m);
     expect(text).not.toContain("paidOrders");
     expect(text).not.toContain("paidSales");
     expect(text).not.toContain("Diwali");
     const [meta] = m.platforms;
-    expect(meta).toMatchObject({ orders: 4, sales: 200, previous: { orders: 1, sales: 100 } });
-    expect(meta!.deltas).toEqual({ orders: 3, sales: 1 });
+    expect(meta).toMatchObject({ orders: 4, sales: 200 });
     expect(meta!.daily[0]).toEqual({ day: "2026-10-01", orders: 2, sales: 100 });
   });
 

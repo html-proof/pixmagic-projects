@@ -585,9 +585,9 @@ describe("ads on the dashboard", () => {
     const ads = res.json().modules.ads;
     expect(ads.currency).toBe("USD");
     expect(ads.current).toMatchObject({ spend: 40, clicks: 100, impressions: 4000, conversions: 4, conversionValue: 180, cpc: 0.4, costPerConversion: 10, roas: 4.5 });
-    expect(ads.previous).toMatchObject({ spend: 20, conversions: 1, imported: true });
+    // The week's own figures: the $20 of the week before is in none of them.
+    for (const k of ["previous", "deltas", "compared", "notCompared", "imported"]) expect(ads).not.toHaveProperty(k);
     expect(ads.historyFrom).toBe(day(89));
-    expect(ads.deltas.spend).toBe(1);
     expect(ads.series).toHaveLength(7);
     expect(ads.series.find((d: { day: string }) => d.day === day(1)).spend).toBe(30);
     expect(ads.campaigns.map((c: { name: string; spend: number }) => [c.name, c.spend])).toEqual([["Spring", 30], ["Retarget", 10]]);
@@ -644,9 +644,8 @@ describe("AdSense on the dashboard", () => {
     expect(m.ads.accounts.map((a: { provider: string }) => a.provider)).toEqual(["meta", "meta"]);
     expect(m.adsense.currency).toBe("USD");
     expect(m.adsense.current).toMatchObject({ earnings: 15, pageViews: 6000, impressions: 11000, clicks: 25, pageRpm: 2.5 });
-    expect(m.adsense.previous).toMatchObject({ earnings: 5, pageViews: 2500, imported: true });
+    for (const k of ["previous", "deltas", "compared", "notCompared", "imported"]) expect(m.adsense).not.toHaveProperty(k);
     expect(m.adsense.historyFrom).toBe(day(13));
-    expect(m.adsense.deltas.earnings).toBe(2);
     expect(m.adsense.sites.map((s: { site: string; earnings: number }) => [s.site, s.earnings])).toEqual([["ads-shop.example.com", 12.5], ["blog.example.com", 2.5]]);
     expect(m.adsense.series).toHaveLength(7);
     expect(m.adsense.vsSales).toBe(0.05);
@@ -1358,7 +1357,7 @@ describe("the AdSense report", () => {
   });
 });
 
-describe("the Meta Ads report compared with other dates", () => {
+describe("the Meta Ads report, for its own dates only", () => {
   /** Meta's insights: the account and campaign levels, with a spend of `spend[since]` for each range. */
   const insights = (asked: string[], spend: Record<string, string>): FetchLike => async (input) => {
     const u = new URL(String(input));
@@ -1388,7 +1387,7 @@ describe("the Meta Ads report compared with other dates", () => {
   };
   const reportUrl = (connection: string, q: Record<string, string>) => `/workspaces/${ws}/stores/${storeId}/ads/meta/report?${new URLSearchParams({ connection, from: "2026-09-01", to: "2026-09-30", ...q })}`;
 
-  it("both ranges at once, each cached on its own; the comparison's totals and rows by id", async () => {
+  it("a link that still names dates to compare with is answered as the report alone: Meta is asked for its dates only", async () => {
     ctx.setFetch(metaPlatform);
     await connectAll("meta");
     const conn = await systemDb.adConnection.findFirstOrThrow({ where: { storeId, accountId: "act_1" } });
@@ -1399,30 +1398,26 @@ describe("the Meta Ads report compared with other dates", () => {
     const body = res.json();
     expect(body.cached).toBe(false);
     expect(body.report).toMatchObject({ since: "2026-09-01", until: "2026-09-30", totals: { spend: 100 }, rows: [{ id: "11", name: "Spring sale", status: "ACTIVE", spend: 100 }] });
-    expect(body.report.comparison).toMatchObject({ since: "2026-08-01", until: "2026-08-30", totals: { spend: 80, reach: 400 }, rows: [{ id: "11", spend: 80, linkClicks: 10 }] });
-    // Each window's purchases are among the figures compared, so the window picked compares like with like.
     expect(body.report.rows[0].byWindow["1d_click"]).toMatchObject({ purchases: 2 });
-    expect(body.report.comparison.rows[0].byWindow["1d_click"]).toMatchObject({ purchases: 1 });
-    // The account's row had no purchase: none under the window, as under each ad set's own setting.
-    expect(body.report.comparison.totals.byWindow["1d_click"]).toEqual({ purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 });
-    // Only figures beside each id: no names or statuses again.
-    expect(body.report.comparison.rows[0].name).toBeUndefined();
-    // Delivery statuses are read for the report's own rows only (they're list calls on Meta's rate limit).
-    expect(asked.sort()).toEqual(["account:2026-08-01", "account:2026-09-01", "campaign:2026-08-01", "campaign:2026-09-01", "statuses"]);
-    // The range on its own comes from the cache now.
+    // No figures of August beside it, and Meta wasn't asked for them: three calls, not five.
+    expect(body.report).not.toHaveProperty("comparison");
+    expect(asked.sort()).toEqual(["account:2026-09-01", "campaign:2026-09-01", "statuses"]);
+    // The range without those dates is the same report, from the cache.
     const alone = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, {}), headers });
     expect(alone.json()).toMatchObject({ cached: true, report: { totals: { spend: 100 } } });
-    expect(alone.json().report.comparison).toBeUndefined();
-    expect(asked).toHaveLength(5);
-    // The comparison's dates asked as a report of their own: never the status-less copy, read again with statuses.
+    expect(asked).toHaveLength(3);
+    // August asked as a report of its own is read, with its statuses.
     const own = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/ads/meta/report?${new URLSearchParams({ connection: conn.id, from: "2026-08-01", to: "2026-08-30" })}`, headers });
     expect(own.json()).toMatchObject({ cached: false, report: { totals: { spend: 80 }, rows: [{ id: "11", status: "ACTIVE" }] } });
-    expect(asked).toHaveLength(8);
-    // Comparison dates that aren't a real range of up to a year, or only one of them: refused.
-    const bad: Array<Record<string, string>> = [{ cfrom: "2026-08-30", cto: "2026-08-01" }, { cfrom: "2026-08-01" }, { cfrom: "2024-01-01", cto: "2026-08-01" }, { cto: "2026-08-01" }];
-    for (const q of bad) {
-      expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
+    expect(asked).toHaveLength(6);
+    // Whatever an old link says of dates to compare with, it is left aside, never a reason to refuse the report.
+    const old: Array<Record<string, string>> = [{ cfrom: "2026-08-30", cto: "2026-08-01" }, { cfrom: "2026-08-01" }, { cfrom: "2024-01-01", cto: "2026-08-01" }, { cto: "2026-08-01" }];
+    for (const q of old) {
+      const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ cached: true, report: { totals: { spend: 100 } } });
     }
+    expect(asked).toHaveLength(6);
   });
 
   it("a report Meta is still preparing when the request's time is up says so, apart from Meta being busy", async () => {
@@ -1442,7 +1437,7 @@ describe("the Meta Ads report compared with other dates", () => {
         }
         return metaPlatform(input);
       });
-      const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { cfrom: "2026-08-01", cto: "2026-08-30" }), headers });
+      const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, {}), headers });
       expect(res.statusCode).toBe(503);
       expect(res.json()).toEqual({ error: "meta_report_pending", message: "Meta is still preparing this report. Try again in a minute." });
     } finally {

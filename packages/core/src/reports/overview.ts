@@ -1,7 +1,6 @@
 import type { Store, Tx } from "@app/db";
 import {
   adPlatformSources,
-  comparisonImported,
   marketingReports,
   localDay,
   pastYearBreakdown,
@@ -11,7 +10,6 @@ import {
   yearBreakdown,
   type AdPlatformSource,
   type AdProvider,
-  type Comparison,
   type DailyMetricsRow,
   type ReportDates,
   type ShopifyMarketing,
@@ -62,7 +60,7 @@ export interface AdsView {
   platform?: AdProvider;
   /** Only this account (an ad connection's id). */
   account?: string;
-  /** Every campaign, each with its change, rather than the 10 that spent most. */
+  /** Every campaign, rather than the 10 that spent most. */
   allCampaigns?: boolean;
   /** Meta's and Google's figures from the store's own orders as well (`ads_from_shopify`), for a platform with no ad account connected. */
   fromShopify?: boolean;
@@ -90,14 +88,14 @@ export interface AdsView {
 export async function storeOverview(
   tx: Tx,
   store: Store,
-  dates: ReportDates & { previous: Comparison },
+  dates: ReportDates,
   now = new Date(),
   sees: (module: string) => boolean = () => true,
   adsView: AdsView = {},
   funnelView?: FunnelView,
   sheet: { visitsByDay?: boolean; profitByDay?: boolean } = {},
 ) {
-  const { range, previous } = dates;
+  const { range } = dates;
   const ws = store.workspaceId;
   const storeId = store.id;
   // "Today" in the store's zone, for all-time ages and the trailing stock-velocity window.
@@ -200,11 +198,11 @@ export async function storeOverview(
     allCampaigns: adsView.allCampaigns,
   };
   if (sees("ads") && platform !== "adsense") {
-    const ads = await adsModule(tx, scope, range, previous, store.currency, someSpend ? null : netSales, { ...adsOpts, provider: platform });
+    const ads = await adsModule(tx, scope, range, store.currency, someSpend ? null : netSales, { ...adsOpts, provider: platform });
     if (ads) modules.ads = ads;
   }
   if (sees("adsense") && (!platform || platform === "adsense")) {
-    const adsense = await adsenseModule(tx, scope, range, previous, store.currency, account ? null : netSales, adsOpts);
+    const adsense = await adsenseModule(tx, scope, range, store.currency, account ? null : netSales, adsOpts);
     if (adsense) modules.adsense = adsense;
   }
   if (sees("ad_connections")) {
@@ -234,7 +232,7 @@ export async function storeOverview(
   // once its reports are granted: Meta's and Google's where their own API's figures aren't shown, and
   // the other channels'. Read from what the worker keeps; never for one account, or AdSense alone.
   if (enabled.has("shopify_marketing") && !account && platform !== "adsense") {
-    const marketing = await shopifyMarketingModule(tx, scope, store, dates, today);
+    const marketing = await shopifyMarketingModule(tx, scope, store, range, today);
     if (marketing) modules.shopify_marketing = marketing;
   }
   const reported = modules.shopify_marketing as ShopifyMarketing | undefined;
@@ -247,10 +245,8 @@ export async function storeOverview(
   // Meta and Google as the store's orders record them: the Advertising pages' for a platform with no ad
   // account, and the dashboard's for a platform whose source is the orders.
   if (fromOrders && !account && platform !== "adsense" && (adsView.fromShopify || sources?.some((s) => s.source === "shopify"))) {
-    modules.ads_from_shopify = await adsFromShopifyModule(tx, scope, dates, {
+    modules.ads_from_shopify = await adsFromShopifyModule(tx, scope, range, {
       currency: store.currency,
-      timeZone: store.timezone,
-      compare: comparisonImported(previous, data.historyFrom),
       historyFrom: data.historyFrom,
       provider: platform,
       // The storefront pixel's visits from each platform's sites, while it records them.

@@ -165,9 +165,6 @@ export interface AdAccount<P extends AdProvider = AdProvider> {
   finalThrough?: string | null;
 }
 
-/** Why a change isn't given: only running days picked, a comparison before the figures start, or days missing on either side. */
-export type NotCompared = "running" | "no_history" | "incomplete";
-
 export interface FiguresWindow<T> {
   from: string;
   to: string;
@@ -178,9 +175,7 @@ export interface FiguresWindow<T> {
  * Figures that exist only for days every account they add up has stored. `current` is null when
  * one of them lacks a day of the range ("Unavailable"), and `partial` then gives the days they all
  * have; `soFar` is that same part when the only days it lacks are at the end and not over yet (shown
- * as the figure, "through" its last day); `compared` is what each side of the change is worked out
- * on (whole days only: while the dates include today, both sides stop at the last day that is
- * over), null with `notCompared` why.
+ * as the figure, "through" its last day).
  */
 export interface AdFigures<T> {
   coverage: AdCoverage & { complete: boolean };
@@ -188,43 +183,16 @@ export interface AdFigures<T> {
   partial: FiguresWindow<T> | null;
   /** Absent from answers that predate it. */
   soFar?: FiguresWindow<T> | null;
-  compared: { current: FiguresWindow<T>; previous: FiguresWindow<T>; trimmed: number } | null;
-  notCompared: NotCompared | null;
   /** The first day every account has figures from (each brings the 90 days before it was connected). */
   historyFrom: string | null;
   /** When the least recently updated account last synced; null while one never has. */
   updatedAt: string | null;
 }
 
-export interface AdsComparison {
-  /** The dates the "before" figures are from (the compared side); null when nothing is compared. */
-  from: string | null;
-  to: string | null;
-  spend: number | null;
-  linkClicks: number | null;
-  conversions: number | null;
-  conversionValue: number | null;
-  purchases: number | null;
-  purchaseValue: number | null;
-  roas: number | null;
-  /** False when the comparison starts before `historyFrom`: "No earlier data". */
-  imported: boolean;
-}
-export interface AdsDeltas {
-  spend: number | null;
-  linkClicks: number | null;
-  conversions: number | null;
-  purchases: number | null;
-  purchaseValue: number | null;
-  roas: number | null;
-}
-
 /** One platform's figures (byProvider): its totals flat on the entry too (null when unavailable). */
 export type AdsProviderFigures = AdFigures<AdTotals> & { [K in keyof AdTotals]: AdTotals[K] | null } & {
   provider: AdSpendProvider;
   accounts: string[];
-  previous: AdsComparison;
-  deltas: AdsDeltas;
   /** Every account of this platform here is the demo: its card says so. */
   demo?: boolean;
 };
@@ -247,9 +215,6 @@ export interface AdsModule extends AdFigures<AdTotals> {
    * (`byProvider`, `seriesByProvider`) instead. Absent from older answers.
    */
   claimsAddUp?: boolean;
-  /** The figures compared with (from `compared.previous`): all null when nothing is compared. */
-  previous: AdsComparison;
-  deltas: AdsDeltas;
   /** Every day of the range; a day a counted account has no figures for is null throughout. */
   series: AdSeriesDay[];
   byProvider: AdsProviderFigures[];
@@ -258,7 +223,7 @@ export interface AdsModule extends AdFigures<AdTotals> {
   /**
    * Team & Access: "View campaigns and their performance". `complete` false: its account's figures stop
    * before the range ends. The dashboard gets the 10 that spent most; the Advertising pages
-   * (?parts=advertising) every one, each with its `change`.
+   * (?parts=advertising) every one.
    */
   campaigns?: Array<
     AdTotals & {
@@ -267,7 +232,6 @@ export interface AdsModule extends AdFigures<AdTotals> {
       campaignId: string;
       name: string;
       complete?: boolean;
-      change?: CampaignChange | null;
       /** The platform's own word for the campaign's delivery now (Google's campaign.status, Meta's effective_status); null: not read yet. Absent from older answers. */
       status?: string | null;
       statusGroup?: CampaignStatusGroup | null;
@@ -287,11 +251,10 @@ export interface AdsModule extends AdFigures<AdTotals> {
   demo?: boolean;
   /**
    * The store's own sales (Shopify's net sales and orders for the same dates) set against the ad
-   * spend: sales per unit of spend (MER), the spend's share of sales, the cost per order; with the
-   * dates compared with and the changes when both sides are whole ranges. Null when not known,
-   * in another currency, or some days of the spend are missing. Absent from older answers.
+   * spend: sales per unit of spend (MER), the spend's share of sales, the cost per order. Null when
+   * not known, in another currency, or some days of the spend are missing. Absent from older answers.
    */
-  sales?: AdsVsSalesFigures | null;
+  sales?: AdsVsSales | null;
   /**
    * Per platform, the orders Shopify's own visit record credits to its ads (a paid visit from
    * Facebook or Instagram, from Google or YouTube) and the store's sales from them per unit of that
@@ -301,30 +264,10 @@ export interface AdsModule extends AdFigures<AdTotals> {
   sourced?: Array<{ provider: AdSpendProvider; orders: number; sales: number; salesPerSpend: number | null }> | null;
 }
 
-/**
- * A campaign's change on the same whole days as the totals' (`compared`); null when the totals have
- * none. A campaign that ran on no day of the dates compared with has a spend of 0 then, and no change.
- */
-export interface CampaignChange {
-  /** The dates compared with. */
-  from: string;
-  to: string;
-  previous: { spend: number | null; linkClicks: number | null; purchases: number | null; purchaseValue: number | null; roas: number | null };
-  deltas: { spend: number | null; linkClicks: number | null; purchases: number | null; purchaseValue: number | null; roas: number | null };
-}
-
-/** adsVsSales (@app/shared/ads) with the dates compared with and the changes (salesVsSpend in the API). */
-export interface AdsVsSalesFigures extends AdsVsSales {
-  previous: { netSales: number; orders: number; salesPerSpend: number | null; costPerOrder: number | null } | null;
-  deltas: { netSales: number | null; orders: number | null; salesPerSpend: number | null; costPerOrder: number | null };
-}
-
 /** What connected AdSense accounts earned from ads shown on the store's site (see adsenseFigures in the API). */
 export interface AdsenseModule extends AdFigures<AdsenseTotals> {
   currency: string;
   accounts: Array<AdAccount<"adsense">>;
-  previous: { from: string | null; to: string | null; earnings: number | null; pageViews: number | null; clicks: number | null; pageRpm: number | null; imported: boolean };
-  deltas: { earnings: number | null; pageViews: number | null; clicks: number | null; pageRpm: number | null };
   series: AdsenseSeriesDay[];
   /** The store's sites the ads were shown on; one row with site "" when AdSense didn't split by site. */
   sites: Array<AdsenseTotals & { site: string }>;

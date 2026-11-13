@@ -1,7 +1,6 @@
 import { isClosedAdAccount, trafficSourcePlatform, type AdSpendProvider } from "./ads";
-import { eachDay, type Comparison, type DateRange } from "./dates";
+import { eachDay, type DateRange } from "./dates";
 import { FUNNEL_STEPS, PURCHASED_STEP } from "./journey";
-import { delta } from "./kpi";
 import { TRAFFIC_LABEL, type TrafficSource } from "./traffic";
 
 /**
@@ -68,9 +67,6 @@ export interface ShopifyAdPlatform extends ShopifyAdFigures {
    * null with `visits`. Absent with `visits`, and from answers that predate it.
    */
   journey?: AdJourney | null;
-  /** The dates compared with; null when they weren't (`AdsFromShopify.compared`). */
-  previous: ShopifyAdFigures | null;
-  deltas: { orders: number | null; sales: number | null; paidSales?: number | null };
 }
 
 export interface AdsFromShopify {
@@ -81,8 +77,6 @@ export interface AdsFromShopify {
   storeSales: number;
   /** Orders in the dates whose visit hasn't been read from Shopify yet: counted in no platform, never guessed. */
   pending: number;
-  /** The dates compared with (to the same time of day while the dates are running); null: not compared, their orders aren't imported. */
-  compared: Comparison | null;
   /** The first day of the store's imported orders. */
   historyFrom: string | null;
   /**
@@ -142,22 +136,19 @@ const ofPlatform = (p: AdSpendProvider) => (x: SourcedSales) => trafficSourcePla
 
 /**
  * Each platform's figures (`providers`, in that order) from the store's orders for the dates (`rows`,
- * every source, the unread ones too), day by day (`days`, the platforms' sources), and for the dates
- * compared with (`previousRows`; null when not compared).
+ * every source, the unread ones too) and day by day (`days`, the platforms' sources).
  */
 export function adsFromShopify(input: {
   providers: readonly AdSpendProvider[];
   rows: readonly SourcedSales[];
   days: readonly SourcedDay[];
-  previousRows: readonly SourcedSales[] | null;
   range: DateRange;
-  compared: Comparison | null;
   currency: string;
   historyFrom: string | null;
   /** The storefront pixel's visits over the dates (from `visitsCounted`'s day); absent without the pixel. */
   visits?: SourcedVisits | null;
 }): AdsFromShopify {
-  const { rows, days, previousRows, range, historyFrom } = input;
+  const { rows, days, range, historyFrom } = input;
   const visitsFrom = input.visits ? visitsCounted(input.visits.from, range) : undefined;
   const storeSales = r2(rows.reduce((a, x) => a + x.sales, 0));
   const pending = rows.filter((x) => !x.source).reduce((a, x) => a + x.orders, 0);
@@ -177,7 +168,6 @@ export function adsFromShopify(input: {
     }
     const byDay = new Map<string, SourcedDay[]>();
     for (const x of days.filter(ofPlatform(provider))) byDay.set(x.day, [...(byDay.get(x.day) ?? []), x]);
-    const before = previousRows ? figuresOf(previousRows.filter(ofPlatform(provider))) : null;
     return {
       provider,
       ...total,
@@ -189,16 +179,10 @@ export function adsFromShopify(input: {
         const f = figuresOf(byDay.get(day) ?? []);
         return { day, orders: f.orders, sales: f.sales, paidSales: f.paidSales };
       }),
-      previous: before,
-      deltas: {
-        orders: before ? delta(total.orders, before.orders) : null,
-        sales: before ? delta(total.sales, before.sales) : null,
-        paidSales: before ? delta(total.paidSales, before.paidSales) : null,
-      },
       ...(input.visits ? visitsOf(input.visits.rows.filter((x) => trafficSourcePlatform(x.source) === provider), !!visitsFrom) : {}),
     };
   });
-  return { currency: input.currency, platforms, storeSales, pending, compared: previousRows ? input.compared : null, historyFrom, ...(input.visits ? { visitsFrom } : {}) };
+  return { currency: input.currency, platforms, storeSales, pending, historyFrom, ...(input.visits ? { visitsFrom } : {}) };
 }
 
 /** A platform's visits and how far they went; null both while none of the dates' days is counted. */
@@ -243,8 +227,6 @@ export function adsFromShopifyWithoutAttribution(m: AdsFromShopify): AdsFromShop
         ...rest,
         sources: p.sources.map(withoutPaid),
         daily: p.daily.map(({ paidSales: _paid, ...d }) => d),
-        previous: p.previous && withoutPaid(p.previous),
-        deltas: { orders: p.deltas.orders, sales: p.deltas.sales },
       };
     }),
   };

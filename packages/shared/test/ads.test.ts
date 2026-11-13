@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   accountCoverage,
-  adComparisonWindows,
   adSeries,
   adsenseAccountId,
   adsenseSeries,
@@ -15,7 +14,6 @@ import {
   googleCampaignFacts,
   metaCampaignFacts,
   campaignTotals,
-  canCompareFrom,
   claimsAddUp,
   commonCoverage,
   coverageAfter,
@@ -45,7 +43,6 @@ import {
   isMetaObjectId,
   metaParentFits,
   metaAccountId,
-  previousRange,
   siteTotals,
   adErrorMessage,
   ADSENSE_FINALIZED_BY_DAY,
@@ -395,7 +392,6 @@ describe("ad totals", () => {
       ["meta", "Spring (renamed)", 41],
       ["google", "Search", 20],
     ]);
-    expect(previousRange({ from: "2026-10-01", to: "2026-10-04" })).toEqual({ from: "2026-09-27", to: "2026-09-30" });
   });
 });
 
@@ -437,31 +433,13 @@ describe("what the stored days cover", () => {
     expect(coverageAfter(c, "2026-06-01")).toEqual(c);
     expect(coverageAfter(c, "2026-10-19")).toEqual({ from: null, through: null });
     expect(coverageAfter({ from: null, through: null }, "2026-10-01")).toEqual({ from: null, through: null });
-    expect(canCompareFrom(c, { from: "2026-07-21" })).toBe(true);
-    expect(canCompareFrom(c, { from: "2026-07-20" })).toBe(false);
-    expect(canCompareFrom({ from: null, through: null }, { from: "2026-10-01" })).toBe(false);
     expect(isClosedAdAccount({ errorCode: "account_closed" })).toBe(true);
     expect(isClosedAdAccount({ accountStatus: "closed" })).toBe(true);
     expect(isClosedAdAccount({ errorCode: "account_disabled", accountStatus: "disabled" })).toBe(false);
   });
 
-  it("compares whole days only: a range reaching a running day loses it on both sides, and Today has nothing to compare", () => {
-    const week = { from: "2026-10-13", to: "2026-10-19" };
-    const before = { from: "2026-10-06", to: "2026-10-12" };
-    // Today is the 19th: both sides lose their last day.
-    expect(adComparisonWindows(week, before, "2026-10-18")).toEqual({ current: { from: "2026-10-13", to: "2026-10-18" }, previous: { from: "2026-10-06", to: "2026-10-11" }, trimmed: 1 });
-    // A finished range compares as picked.
-    expect(adComparisonWindows({ from: "2026-10-01", to: "2026-10-07" }, { from: "2026-09-24", to: "2026-09-30" }, "2026-10-18")).toEqual({
-      current: { from: "2026-10-01", to: "2026-10-07" },
-      previous: { from: "2026-09-24", to: "2026-09-30" },
-      trimmed: 0,
-    });
-    // Today alone, or yesterday while an ad account's own day is still running.
-    expect(adComparisonWindows({ from: "2026-10-19", to: "2026-10-19" }, { from: "2026-10-18", to: "2026-10-18" }, "2026-10-18")).toBeNull();
-    expect(adComparisonWindows({ from: "2026-10-18", to: "2026-10-18" }, { from: "2026-10-17", to: "2026-10-17" }, "2026-10-17")).toBeNull();
-    // Dates picked to compare with that are shorter than what's left out: nothing to compare.
-    expect(adComparisonWindows(week, { from: "2026-09-01", to: "2026-09-01" }, "2026-10-18")).toBeNull();
-    // The last day that is over everywhere: the store's yesterday, or earlier for an account whose day lags.
+  it("knows the last day that is over everywhere", () => {
+    // The store's yesterday, or earlier for an account whose day lags.
     expect(lastWholeAdDay("2026-10-19", [])).toBe("2026-10-18");
     expect(lastWholeAdDay("2026-10-19", ["2026-10-19", "2026-10-18"])).toBe("2026-10-17");
     expect(lastWholeAdDay("2026-10-19", ["2026-10-20"])).toBe("2026-10-18");

@@ -1,6 +1,5 @@
 import type { Store, Tx } from "@app/db";
 import {
-  addDays,
   autoStatementGrain,
   eachDay,
   expenseTotals,
@@ -66,10 +65,8 @@ async function profitInputs(tx: Tx, store: Store, span: DateRange, now: Date, se
     dailyRows(tx, scope.ws, scope.storeId, span),
     expenseTerms(tx, scope),
     sees.productCosts && productsShared ? productCostsByDay(tx, scope, span) : null,
-    // Spend only, whole days; nothing is compared, so the comparison is the day before.
-    ...adRanges.map((r) =>
-      sees.ads ? adsModule(tx, scope, r, { from: addDays(r.from, -1), to: addDays(r.from, -1) }, store.currency, null, { timeZone: store.timezone, now }) : Promise.resolve(null as AdsAnswer),
-    ),
+    // Spend only, whole days.
+    ...adRanges.map((r) => (sees.ads ? adsModule(tx, scope, r, store.currency, null, { timeZone: store.timezone, now }) : Promise.resolve(null as AdsAnswer))),
   ]);
 
   // Ad spend is set against the store's sales only as the dashboard does: in its currency, no account

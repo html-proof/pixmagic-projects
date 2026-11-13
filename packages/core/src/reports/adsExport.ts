@@ -41,14 +41,9 @@ export interface CsvTable {
 }
 
 const NOT_REPORTED = "Not reported";
-/** A row the dates compared with don't list (no activity then, or not among the rows that spent most). */
-const NOT_LISTED = "Not listed for the dates compared";
 
-/** A rate (a fraction) as a percentage with two decimals; a change as one with one decimal; a multiple with two. */
+/** A rate (a fraction) as a percentage with two decimals; a multiple with two. */
 const rate = (v: number | null | undefined): Cell => (typeof v === "number" ? Math.round(v * 10_000) / 100 : null);
-const pct = (v: number | null | undefined): Cell => (typeof v === "number" ? Math.round(v * 1000) / 10 : null);
-/** (now − before) ÷ before, as the page's change column: none with nothing (or 0) before. */
-const changeOf = (now: number | null | undefined, before: number | null | undefined): Cell => (typeof now === "number" && typeof before === "number" && before !== 0 ? pct((now - before) / Math.abs(before)) : null);
 const times = (v: number | null | undefined): Cell => (typeof v === "number" ? Math.round(v * 100) / 100 : null);
 /** A money column's heading names the ad account's currency: "Spend (USD)", "Purchase value (USD; Meta's count, 1-day click)". */
 const inCurrency = (currency: string | null) => (label: string) => (!currency ? label : label.includes("(") ? label.replace("(", `(${currency}; `) : `${label} (${currency})`);
@@ -74,26 +69,20 @@ type Column<T> = [label: string, cell: (x: T) => Cell];
 
 /**
  * One live report as a table: the top row (the account's, or the campaign's, ad set's or ad group's
- * opened), the dates compared with when asked, then every row of the answer, whatever the page's
- * filters show; each object's own facts, the figures, and the change in spend and in purchases or
- * conversions. Notes last.
+ * opened), then every row of the answer, whatever the page's filters show; each object's own facts
+ * and the figures. Notes last.
  */
 function liveTable<M, R extends M & { id: string; name: string }>(
   report: { since: string; until: string; totals: M; rows: R[]; truncated: boolean },
-  compared: { since: string; until: string; totals: M; rows: R[] } | null,
-  spec: { one: string; top: string; describe: Array<Column<R>>; metrics: Array<Column<M>>; change: Array<[label: string, before: string, key: (x: M) => number | null | undefined]>; demo: boolean; notes: string[] },
+  spec: { one: string; top: string; describe: Array<Column<R>>; metrics: Array<Column<M>>; demo: boolean; notes: string[] },
 ): CsvTable {
-  const before = new Map((compared?.rows ?? []).map((r) => [r.id, r]));
   const figures = (x: M) => spec.metrics.map(([, cell]) => cell(x));
-  const changes = (now: M, was: M | undefined): Cell[] =>
-    !compared ? [] : spec.change.flatMap(([, , key]): Cell[] => (was === undefined ? [NOT_LISTED, null] : [key(was) ?? null, changeOf(key(now), key(was))]));
   const blank = (n: number): Cell[] => Array<Cell>(n).fill(null);
-  const header = [spec.one, ...spec.describe.map(([label]) => label), ...spec.metrics.map(([label]) => label), ...(compared ? spec.change.flatMap(([label, beforeLabel]) => [beforeLabel, `${label} change (%)`]) : [])];
+  const header = [spec.one, ...spec.describe.map(([label]) => label), ...spec.metrics.map(([label]) => label)];
   const rows: Cell[][] = [];
   if (spec.demo) rows.push(simulatedRow());
-  rows.push([spec.top, ...blank(spec.describe.length), ...figures(report.totals), ...changes(report.totals, compared?.totals)]);
-  if (compared) rows.push([`Before (${compared.since} to ${compared.until})`, ...blank(spec.describe.length), ...figures(compared.totals), ...blank(spec.change.length * 2)]);
-  for (const r of report.rows) rows.push([r.name, ...spec.describe.map(([, cell]) => cell(r)), ...figures(r), ...changes(r, before.get(r.id))]);
+  rows.push([spec.top, ...blank(spec.describe.length), ...figures(report.totals)]);
+  for (const r of report.rows) rows.push([r.name, ...spec.describe.map(([, cell]) => cell(r)), ...figures(r)]);
   if (report.truncated) rows.push(note(`Only the ${report.rows.length} that spent most are listed.`));
   for (const n of spec.notes) rows.push(note(n));
   return { header, rows };
@@ -115,7 +104,7 @@ function windowFigure(m: MetaReportMetrics, w: MetaAttributionWindow, key: keyof
  * by each ad set's own setting, then under 1-day click, 7-day click and 1-day view, each Meta's own count.
  * Reach Meta didn't give is Not reported.
  */
-export function metaReportTable(report: MetaReport, compared: MetaReport | null, parent: MetaReportParent, opts: LiveReportCsvOptions): CsvTable {
+export function metaReportTable(report: MetaReport, parent: MetaReportParent, opts: LiveReportCsvOptions): CsvTable {
   const level = report.level;
   const money = inCurrency(opts.currency);
   const objects = level === "campaign" || level === "adset" || level === "ad";
@@ -158,22 +147,17 @@ export function metaReportTable(report: MetaReport, compared: MetaReport | null,
     }),
   ];
   const whole = parent.adset !== undefined ? "ad set" : parent.campaign !== undefined ? "campaign" : "ad account";
-  return liveTable(report, compared, {
+  return liveTable(report, {
     one: META_ONE[level],
     top: `Whole ${whole}`,
     describe,
     metrics,
-    change: [
-      ["Spend", money("Spend before"), (m) => m.spend],
-      ["Purchases", `Purchases before (Meta's count, ${setting})`, (m) => m.purchases],
-    ],
     demo: !!opts.demo,
     notes: [
       `Meta's figures for ${report.since} to ${report.until}${opts.timezone ? `, days in the ad account's time zone (${opts.timezone})` : ""}, as Meta reported them.`,
       ...(reachesToday(report.until, opts) ? ["Today's numbers are still coming in: Meta updates them through the day, and can revise purchases for some days afterwards."] : []),
       `Reach counts each person once over the dates, so the rows don't add up to the ${whole}'s reach.`,
       "Purchases and purchase value are Meta's own count of sales it credits to the ads, under the attribution each column names: not Shopify orders, and never added to the store's sales. Not reported: no figure from Meta under that window (Meta refused the windows for this read, or its figure couldn't be read).",
-      ...(compared ? [`Changes compare with ${compared.since} to ${compared.until}, as Meta reports those dates now.`] : []),
       ...(report.rows.length === 0 ? [`Nothing in this ${whole} was shown to anyone in these dates.`] : []),
     ],
   });
@@ -222,7 +206,7 @@ function googleTop(level: GoogleReportLevel, parent: GoogleReportParent): string
 }
 
 /** The Google Ads report as the page shows it: each row's facts (status and delivery now, budgets, types, match type, Quality Score), then Google's figures. */
-export function googleReportTable(report: GoogleReport, compared: GoogleReport | null, parent: GoogleReportParent, opts: LiveReportCsvOptions): CsvTable {
+export function googleReportTable(report: GoogleReport, parent: GoogleReportParent, opts: LiveReportCsvOptions): CsvTable {
   const level = report.level;
   const money = inCurrency(opts.currency);
   const demo = !!opts.demo;
@@ -259,15 +243,11 @@ export function googleReportTable(report: GoogleReport, compared: GoogleReport |
   const scope = parent.adGroup !== undefined ? "ad group" : "campaign";
   const ownRow = demo ? "The top row is the demo's own row for it." : "The top row is Google's own row for it.";
   const rowsOf = level === "asset_group" ? "asset groups" : level === "ad" ? "ads" : "ad groups";
-  return liveTable(report, compared, {
+  return liveTable(report, {
     one: GOOGLE_ONE[level],
     top: googleTop(level, parent),
     describe,
     metrics: googleMetrics(money, demo),
-    change: [
-      ["Spend", money("Spend before"), (m) => m.spend],
-      ["Conversions", `Conversions before (${counted(demo)})`, (m) => m.conversions],
-    ],
     demo,
     notes: [
       demo
@@ -289,7 +269,6 @@ export function googleReportTable(report: GoogleReport, compared: GoogleReport |
       demo
         ? "Conversions and their value are simulated, standing for what Google counts: every conversion action it's set to count (purchases, and also leads, sign-ups or calls). Not Shopify orders, and never added to the store's sales."
         : "Conversions and their value are Google's own count of every conversion action it's set to count (purchases, and also leads, sign-ups or calls): not Shopify orders, and never added to the store's sales.",
-      ...(compared ? [`Changes compare with ${compared.since} to ${compared.until}, as ${demo ? "the demo has them" : "Google reports those dates now"}.`] : []),
       // Down from a campaign or an ad group the top row is these rows added up: none listed says nothing of whether
       // the campaign itself ran. The whole account's top row is its own, so nothing there means nothing ran.
       ...(report.rows.length === 0 && !detail
