@@ -14,8 +14,10 @@ What is left in the account is what the two ties below need, and little else.
 **Parts 2 and 3 followed the same day, and the account is empty since 08:45 UTC.** On the owner's
 "delete cognito too" and "Yes, delete it" (the backups bucket), Cognito, the bucket, both IAM users
 and everything else went ([what is left](#what-is-left-in-the-account): nothing that runs or
-costs). Nothing in production uses AWS. What remains is the owner closing the account, and the
-last AWS code leaving the repository.
+costs). Nothing in production uses AWS.
+
+**The account is closed since 2026-11-13, about 10:40 UTC** ([how](#the-account-is-closed)). What
+remains is its last bill.
 
 ## What replaced what
 
@@ -195,7 +197,26 @@ Outside AWS, two loose ends of it:
   (three MX, SPF, `cf2024-1._domainkey`), Resend (`resend._domainkey`, `rsend`, `send`), `_dmarc`,
   Google's site verification and `_domainconnect`. No Worker route, redirect rule or origin rule
   exists in the zone; its one rule is the cache bypass for `/api/`.
-- **The last bill** arrives the month after: about US$66.52 had run up by 2026-11-13, before GST.
+- **The last bill** arrives the month after: about US$66.52 had run up by 2026-11-13, before GST
+  (US$29.00 of it the Business Support+ plan, which ended with the account).
+
+## The account is closed
+
+On the owner's "Close the account" (2026-11-13, about 10:40 UTC), in the AWS console as its root
+user: Billing and Cost Management → Account → Close account. Read first, the same minute: nothing
+running in Sydney, us-east-1 or Melbourne (the one opt-in region that was enabled), no domain
+registered at Route 53, no Savings Plan or reserved instance, no organization. The console answered
+"Your account closure request is submitted" and shows "The account is closed"; the root user's
+command-line sign-in was refused straight after, and `https://bizinsights.io/api/readyz` answered
+200 as before.
+
+What AWS's closing page says of it:
+
+- The owner still owes what ran up to the closing: the last bill above.
+- Closing is the notice that ends the AWS Customer Agreement for this account.
+- The account can be opened again for 90 days (until about 2027-02-11); charges for whatever was
+  left in it would then start again. After the 90 days it is closed for good and anything left in
+  it is deleted.
 
 ## What parts 2 and 3 deleted (2026-11-13)
 
@@ -237,5 +258,5 @@ the copy tools and every `COGNITO_*` and `AWS_*` setting are removed
 
 **Last:** both `CDKToolkit` stacks and GuardDuty are deleted (2026-11-13), and `node
 scripts/aws-dependency-scan.mjs --none-left` passes: no file in the repository runs, calls or
-configures AWS, and `pnpm lint` keeps it so. Open: the owner closes the account in the AWS console
-as its root user (Account → Close account), which nothing in the account now stands in the way of.
+configures AWS, and `pnpm lint` keeps it so. The account itself is closed the same day
+([above](#the-account-is-closed)).
