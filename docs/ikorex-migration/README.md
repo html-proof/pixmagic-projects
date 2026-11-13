@@ -30,7 +30,7 @@ record what was true on their date.
   tested against PostgreSQL; with it, `AWS_WHATSAPP=off`, which keeps AWS's WhatsApp service from
   starting again against the server's through the rollback period.
 
-**The server (2026-11-12): inspected twice, read-only, and no go on memory both times.** It has
+**The server (2026-11-13): inspected three times, read-only, and no go on memory each time.** It has
 3.9 GB in all with about 2.5 GB free beside what already runs there, and bizinsights needs 3.2 to
 4.6 GB ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md)). The administrator has been asked
 for at least 8 GB and 4 cores. Nothing has been installed or changed on the server, and AWS keeps

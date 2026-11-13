@@ -197,9 +197,9 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "migrateBeforeLive
       name: "bizinsights.io",
       redirects: ["www.bizinsights.io"],
       certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7",
-      // Step one of two (docs/aws-migration/AWS_MIGRATION_PLAN.md, change 6): "enforce" once
-      // https://bizinsights.io/edge-lock answers 204, which is Cloudflare sending the header.
-      originLock: "report",
+      // Enforcing since 2026-11-12, once https://bizinsights.io/edge-lock answered 204 (Cloudflare
+      // sending the header). Back to "report" before anything that takes Cloudflare out of the path.
+      originLock: "enforce",
       originLockRead: "2026-11-12",
     },
     cognitoDomainPrefix: "insights-605411278365",
