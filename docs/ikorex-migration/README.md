@@ -98,7 +98,7 @@ ended the same day (above).
 | 2026-11-13 brief: the AWS account audited | [AWS_ACCOUNT_AUDIT.md](AWS_ACCOUNT_AUDIT.md) | What is in the account after the deletion, what it still costs, and what stands before a closed account |
 | 2026-11-08 brief: what still uses AWS | [AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md) | 79 files (2026-11-13), each with the step that removes it; `scripts/aws-dependency-scan.mjs` keeps new AWS code out (`pnpm lint`) and is stage F's check |
 | 2026-11-08 brief: its suggested providers | [PROVIDER_CHOICES.md](PROVIDER_CHOICES.md) | Hetzner, Supabase, Upstash, BullMQ, Better Auth… against what the move uses, and when each would become right; costs at 1,000 to 1,000,000 users in [AWS_COST_COMPARISON.md](AWS_COST_COMPARISON.md#at-scale-1000-to-1000000-users) |
-| 2026-11-13: finish the move and delete AWS | [LEAVING_AWS.md](LEAVING_AWS.md) | What replaced each AWS service; **the AWS account emptied on 2026-11-13** (no way back to AWS since): what was deleted and when, how sign-in and the backups left it, and what is still open (the owner closing the account, the last AWS code) |
+| 2026-11-13: finish the move and delete AWS | [LEAVING_AWS.md](LEAVING_AWS.md) | What replaced each AWS service; **the AWS account emptied on 2026-11-13** (no way back to AWS since): what was deleted and when, how sign-in and the backups left it, and **the account closed the same day** (what is left: its last bill) |
 
 The earlier cost audit of the same day, which this builds on, is in
 [../aws-migration/](../aws-migration/AWS_MIGRATION_PLAN.md). Its conclusion still holds for staying
