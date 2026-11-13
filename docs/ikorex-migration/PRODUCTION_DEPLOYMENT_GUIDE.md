@@ -215,6 +215,7 @@ before it needs the file copied again into `C:\ProgramData\bizinsights-runner` (
 | Check a store against Shopify | `docker compose --profile admin run --rm admin shopify-check --shop <x>.myshopify.com` |
 | Row counts | `docker compose --profile admin run --rm admin counts` |
 | What is configured (names only) | `docker compose --profile admin run --rm admin config` |
+| Who still signs in through Cognito (counts) | `docker compose --profile admin run --rm admin sign-in-move` ([LEAVING_AWS.md](LEAVING_AWS.md#sign-in-off-cognito)) |
 | Backups in the bucket | `docker compose exec backup pgbackrest --stanza=bizinsights info` |
 | Restore test now | `docker compose exec backup restore-test.sh` |
 | Turn schedules on (production, at the cutover) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=on/' .env && docker compose up -d worker` |
