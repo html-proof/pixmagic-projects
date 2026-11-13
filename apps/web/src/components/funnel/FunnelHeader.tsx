@@ -6,7 +6,7 @@ import { SITE_SECTIONS } from "@app/shared/journey";
 import { hasFullAccess } from "@app/shared/access";
 import { TRAFFIC_LABEL, TRAFFIC_SOURCES } from "@app/shared/traffic";
 import { useApp } from "@/components/AppContext";
-import { CompareDates, CompareSelect, CustomDates, DateRangeSelect, comparedWith } from "@/components/dashboard/DateRange";
+import { CustomDates, DateRangeSelect, comparedWith } from "@/components/dashboard/DateRange";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { SECTION_LABEL } from "@/components/dashboard/Funnel";
 import { countryName } from "./FunnelUi";
@@ -99,11 +99,9 @@ export function FunnelHeader({ s }: { s: FunnelState }) {
           </label>
         )}
         <DateRangeSelect r={s.dates} shown={s.shown} id="funnel-dates" label="Dates" size="sm" />
-        <CompareSelect r={s.dates} shown={s.shown} current={!s.older} id="funnel-compare" label="Compare with" size="sm" />
       </div>
       <div className="mt-2 flex flex-wrap gap-2 empty:hidden" data-print-hide>
         <CustomDates r={s.dates} />
-        <CompareDates r={s.dates} />
       </div>
 
       {f && (

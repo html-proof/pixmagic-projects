@@ -197,9 +197,12 @@ const ENVIRONMENTS: Record<EnvConfig["name"], Omit<EnvConfig, "migrateBeforeLive
       name: "bizinsights.io",
       redirects: ["www.bizinsights.io"],
       certificateArn: "arn:aws:acm:us-east-1:605411278365:certificate/776966d7-d73c-4896-bd30-1568c9f7b3f7",
-      // Enforcing since 2026-11-12, once https://bizinsights.io/edge-lock answered 204 (Cloudflare
-      // sending the header). Back to "report" before anything that takes Cloudflare out of the path.
-      originLock: "enforce",
+      // "report", which is what is deployed. "enforce" was set on 2026-11-13 once /edge-lock answered
+      // 204, never deployed (its one Deploy rolled back), and an hour later bizinsights.io moved to
+      // the iKorex server: /edge-lock can't answer for CloudFront while the name points elsewhere,
+      // and "enforce" needs that 204 first. Back to "enforce" only when Cloudflare sends this name's
+      // traffic to CloudFront again and the probe says 204 (docs/aws-deployment.md, "Origin lock").
+      originLock: "report",
       originLockRead: "2026-11-12",
     },
     cognitoDomainPrefix: "insights-605411278365",

@@ -966,29 +966,6 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     // WhatsApp Automation: customers' numbers, consent, messages, automations, campaigns and the
     // store's connection (its Evolution API instance goes first: the erase's caller deletes it).
     ...purgeWhatsappStoreOps(storeId),
-    // Customer Messaging (SMS) and the email module were removed on 2026-11-13; nothing reads or
-    // writes their tables any more. Until those are dropped, what they hold about the store and
-    // its customers still goes with it.
-    systemDb.emailBusinessEvent.deleteMany({ where: { storeId } }),
-    systemDb.emailMessage.deleteMany({ where: { storeId } }),
-    systemDb.smsDeliveryEvent.deleteMany({ where: { storeId } }),
-    systemDb.smsCostRecord.deleteMany({ where: { storeId } }),
-    systemDb.smsMessageJob.deleteMany({ where: { storeId } }),
-    systemDb.smsCampaignRecipient.deleteMany({ where: { storeId } }),
-    systemDb.smsCampaign.deleteMany({ where: { storeId } }),
-    systemDb.smsSegment.deleteMany({ where: { storeId } }),
-    systemDb.smsAutomationRule.deleteMany({ where: { storeId } }),
-    systemDb.smsTemplateVersion.deleteMany({ where: { storeId } }),
-    systemDb.smsTemplate.deleteMany({ where: { storeId } }),
-    systemDb.smsCheckout.deleteMany({ where: { storeId } }),
-    systemDb.smsConsentRecord.deleteMany({ where: { storeId } }),
-    systemDb.smsContactOrder.deleteMany({ where: { storeId } }),
-    systemDb.smsContact.deleteMany({ where: { storeId } }),
-    systemDb.smsSuppression.deleteMany({ where: { storeId } }),
-    systemDb.smsTestNumber.deleteMany({ where: { storeId } }),
-    systemDb.smsAuditLog.deleteMany({ where: { storeId } }),
-    systemDb.smsSenderConfiguration.deleteMany({ where: { storeId } }),
-    systemDb.smsSetup.deleteMany({ where: { storeId } }),
     // Zapier: the store's connections (their tokens stop working), its Zaps' triggers and its outbox.
     ...purgeZapierStoreOps(storeId),
     // The orders and visits are gone, and where their history started with them: the next import

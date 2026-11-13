@@ -3,6 +3,139 @@
 What has been tested, how, and with what result. Only runs that happened are recorded here; a
 criterion with no run says so. Newest first.
 
+## 2026-11-13: backups off the server, and the restore test
+
+Forty-five minutes after the cutover, on the owner's "Yes, set up backups" (to a new S3 bucket in the
+AWS account, rather than wait for R2). Before it, the same hour: `main` (`dc325638ec67`, with #390 and
+#393) shipped to the server by the new road, its one migration applied, no rollback.
+
+| UTC | Step | Result |
+| --- | --- | --- |
+| before 06:47 | Bucket `bizinsights-backups-<account>` (private, SSE, TLS only, versioned with 14 days of old versions) and IAM user `bizinsights-backups` (that bucket only) | Made |
+| before 06:47 | A new passphrase and access key into the server's `env/postgres.env`; the passphrase also into Parameter Store `/bizinsights/ikorex/backup-cipher-pass` | Names only on screen |
+| 06:47:21 | `ARCHIVE_MODE=off` removed, `postgres` recreated with the archive on | Healthy again in 10 s; the worker logged five "claiming jobs failed" in that gap and carried on |
+| 06:47:44 | `backup` container: `stanza-create`, `check` | Both completed |
+| 06:47:45–06:48:33 | The first full backup | 122.8 MB of database, 19 MB in the bucket, AES-256 |
+| 06:48:40 | `pg_stat_archiver` | 4 segments archived, 0 failed |
+| 06:48:55–06:49:36 | `restore-test.sh`: the newest backup restored from the bucket into a scratch PostgreSQL, compared with the live one | **PASS: 121,481 rows and 69 migrations on both sides**; the `backup` container stayed inside its 192 MB |
+
+From AWS's side the bucket held 2,647 objects, 21 MB. Not yet seen: a nightly run (02:30 UTC), the
+Sunday full backup with its own restore test, a restore on another host. There is no backup ping yet.
+
+## 2026-11-13: the cutover (stage D), from the owner's PC
+
+The owner's instruction the same afternoon, after the rehearsal below: "when the copy is done make
+it live on the server", then "Yes, go live now". Not the Sunday window the plan named: a Friday,
+16:58–17:03 Melbourne time. Production then held 8 users, 4 stores and 9 workspaces.
+
+Before the freeze: the production project started idle in `~/bizinsights` (release `ff7c01c98186`,
+its own passwords, AWS's settings merged in, schedules off) with staging stopped; the owner
+authorised `cloudflared` for the zone; the tunnel `bizinsights` (made with `cloudflared tunnel
+create`, run by token with `TUNNEL_URL=http://web:8080`, so no dashboard configuration) answered
+`/api/readyz` on a spare name, `server-test.bizinsights.io`; an IAM user `bizinsights-ikorex` with
+four Cognito admin actions on the pool, its key piped into `env/app.env`.
+
+| UTC | Step | Result |
+| --- | --- | --- |
+| 05:58:26 | AWS's three schedules disabled; GitHub variables `AWS_SCHEDULES=off`, `AWS_WHATSAPP=off` | Done |
+| 05:58:45 | Reserved concurrency 0 on `insights-production-api` and `-cron` (the public address answers 429 from here: there is no "webhooks answer 503" switch in the code, which the plan assumed) | **Site down** |
+| 05:58:48 | AWS's WhatsApp service to 0 tasks | No task at 05:59:10 |
+| 05:59:29 | Every queue empty twice running; `insights-production-jobs` to 0 too; the coordinator table scanned (38 items) | Frozen |
+| 05:59:41–06:01:37 | `copy-db.mjs --cutover --replace`: one snapshot each of `app` (130 tables) and `evolution` (37), restored into the server's databases, `admin migrate` (68 applied, none new) | **Every table's count, row-level security and policies equal, before and after `migrate`** |
+| 06:01:5x | `admin import-coord` | 12 items imported (the rest had expired) |
+| 06:02:02 | `web`, `worker`, `evolution` started on the copied data | Healthy; `/api/readyz` 200 on the spare name |
+| 06:02:17 | `cloudflared tunnel route dns --overwrite-dns` for `bizinsights.io`, then `www` | Cloudflare kept answering from CloudFront for about a minute |
+| 06:03:24 | The public address serves the server: `/api/version` names `ff7c01c98186`, `/api/readyz` 200 | **Site up: 4 minutes 39 seconds down** |
+| 06:04:3x | `SCHEDULES=on`, worker restarted | The 06:00 tick ran on the server and refreshed a Shopify token; the nightly tick caught up |
+
+After it, on the public address: `/`, `/login`, `/signup`, `/dashboard`, `/terms`, `/privacy` 200;
+`/api/me` 401 without a session; a hashed script 200 as `text/javascript`; the security headers
+present. On the server: 8 users, 4 stores, 9 workspaces, 340 daily metrics rows; bizinsights at
+about 600 MB with schedules on; 2,027 MB still available; the server's twelve other containers
+running with 0 restarts.
+
+**Not checked, or known to differ:**
+
+- No person has signed in on the server yet (password, emailed code, Google through Cognito): the
+  owner's first sign-in is the test.
+- WhatsApp: no store had a linked number at the switch, so "linked numbers still connected" has
+  nothing to show. The one instance copied was a QR pairing started at 05:50 UTC, eight minutes
+  before the freeze, and never finished; the server's first sweep (06:04:33) timed it out and
+  removed it, as the sweep does on AWS (`pairing_timeout`; the service's last webhooks for it were
+  refused with 401, which is the app not knowing a removed instance). Whoever was pairing starts
+  again, on the server. The service itself is healthy and answers the app.
+- `www.bizinsights.io` used to redirect to `bizinsights.io` (CloudFront's function did it). Through
+  the tunnel it served the app under `www` until the web handler took the redirect over the same
+  day (`selfhost.ts`, `canonicalHost`: GET and HEAD through the edge on any other name, 301).
+- No backups leave the server (no bucket; `ARCHIVE_MODE=off`), no monitoring stack, no external
+  uptime check. RDS holds the data as of 05:59 UTC.
+- Deploy to AWS failed from here on (its smoke test asks the public address for the Lambda release),
+  and the owner had the workflow switched off at 07:12 UTC (`gh workflow disable aws-deploy.yml`).
+  Three runs had failed by then, all at the CloudFront function's comment, none as far as the
+  migrate gate; had one got there, the cron function's reserved concurrency 0 would have throttled
+  its invoke and rolled the stack back. Deploy to iKorex is not set up (no deploy key): changes
+  ship with `ship.sh` from the PC.
+- `server-test.bizinsights.io` still points at the tunnel.
+- The first freeze command (05:47) stopped at its second step on a path error and froze nothing; only
+  the two GitHub variables had changed. Production stayed up until the freeze above.
+
+**The way back** while nothing was written on the server that matters: delete the three functions'
+reserved concurrency, enable the schedules, the WhatsApp service back to 1 task, the two variables
+back, the Deploy to AWS workflow enabled again, and `bizinsights.io` and `www` back to `d2mr8m2p1qkh58.cloudfront.net` in Cloudflare's
+dashboard (cloudflared can't set that record). After writes on the server: the copy back
+([ROLLBACK_PLAN.md](ROLLBACK_PLAN.md#the-copy-back-de-after-writes-on-ikorex)).
+
+## 2026-11-13: the first deploy to the server (staging), from the owner's PC
+
+The owner decided to run bizinsights on the iKorex server as it is, without waiting for more memory
+([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#the-owners-decision-2026-11-13-run-it-on-the-server-as-it-is)).
+A staging copy went first: `~/bizinsights-staging`, project `bizinsights-staging`, an empty database,
+`SCHEDULES=off`, the limits of `docker-compose.lean.yml`. Commit `ba8673fa05d4` of branch
+`claude/ssh-deploy-aws-1acde4`, sent with `ship.sh` at 16:26 Melbourne time (05:26 UTC).
+
+| Check | Result |
+| --- | --- |
+| `ship.sh send`: files received, image built on the server, `deploy.sh` | **"live"** 83 seconds after the release was built on the PC, the images' downloads included |
+| Migrations (`admin migrate`), the WhatsApp service's database (`admin evolution-db`) | **68 applied, 130 tables**; databases `app` and `evolution` |
+| `web`, `worker`, `postgres`, `evolution` | **Healthy** |
+| Inside `web`: `/api/readyz`, `/api/version`, `/__health`, `/`, `/login` | **200** each; readyz `db`, `coord`, `tenantDb` true; version names the commit |
+| Worker | "worker ready", schedules off |
+| PostgreSQL's low-memory settings | `shared_buffers` 192 MB, `archive_mode` off |
+| Memory used by bizinsights, idle | **565 MB** (web 200, evolution 197, postgres 88, worker 75, backup 3) of 2,432 MB of limits |
+| The server after it | 2,167 MB available (2,568 before), swap 145 MB (92 before), load back under 1.3 within a minute |
+| The server's twelve other containers | **All up, 0 restarts, none stopped for memory**; the gateway kept answering (its log shows 200s through the deploy) |
+
+The first real deploy found three faults, fixed in the same change:
+
+- `ship.sh` sent Windows line endings from the PC's checkout into the env examples,
+  `postgresql.conf`, `pgbackrest.conf` and the Dockerfiles. `infra/ikorex/**` is now LF everywhere
+  (`.gitattributes`).
+- `deploy.sh` stopped on a folder's very first deploy: `.env`'s `APP_TAG` is empty then, and the
+  Compose file refuses an empty tag even for `compose up postgres`. The new release's tag now stands
+  in until the switch.
+- With no backup bucket, `archive_mode = on` would have kept every write-ahead log file on the disk.
+  `ARCHIVE_MODE=off` in `.env` until the bucket is set.
+
+**The database copy's rehearsal, the same day** (`node infra/ikorex/scripts/copy-db.mjs --rehearsal`,
+16:33 Melbourne time, production live and only read):
+
+| Check | Result |
+| --- | --- |
+| Snapshot on AWS's admin host (started for it, stopped after) | `app`: 130 tables, 121,443 rows, 8.3 MB; `evolution`: 37 tables, 61 rows, 0.1 MB; PostgreSQL 17.11 both sides |
+| Restore into `app_copy_test` and `evolution_copy_test` on the server | 4 s and 1 s |
+| Every table's row count, row-level security and policies against the snapshot | **All equal** (no difference in either database) |
+| Clean-up | The throwaway databases dropped; the dumps deleted from the bucket; the report (counts only) in `~/insights-backups` |
+
+The whole run takes about a minute, so the cutover's write freeze can be short. Its first attempt
+found a fourth fault: the free-disk check printed the server's 44 GB as `4.4389e+10` (Debian's awk)
+and refused; `copy-db.sh` now prints whole numbers. `copy-db.mjs` also takes `SHIP_SSH`, as `ship.sh`
+does, for Git Bash's ssh with its own agent.
+
+Not done, and why: nothing reaches the copy from outside (`cloudflared` is stopped: no tunnel token
+yet); no backups (no bucket yet: the `backup` container logs that and waits); no sign-in test (it
+needs the tunnel). `apps/aws/test/ikorexCompose.test.ts` (9, 1 new) and `ikorexShip.test.ts` (17) passed
+on the PC.
+
 ## 2026-11-08: the copy back for a rollback, on the owner's PC
 
 Branch `claude/ikorex-copy-back`. The last piece the rollback plan needed before the cutover:
@@ -134,7 +267,7 @@ capacity claim); everything that touches production (stages D-F).
 | # | Criterion | Status |
 | --- | --- | --- |
 | 1 | Every AWS dependency migrated or justified | Justified in [AWS_INVENTORY.md](AWS_INVENTORY.md); migration not done |
-| 2 | bizinsights runs on iKorex | Not yet (stage B). First login and inspection 2026-11-08: **no go on memory** (2.5 GB free; bizinsights needs 3.2–4.6 GB) until the server is enlarged to at least 8 GB and 4 cores, as requested of the administrator ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08)). Inspected again 2026-11-12: the same size, still no go; outbound HTTPS open ([second inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-12)). And on 2026-11-13, in business hours, when the owner asked for the push: the same size, still no go, nothing sent ([third inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-13)) |
+| 2 | bizinsights runs on iKorex | **Production runs there since 2026-11-13 06:03 UTC** ([the cutover](#2026-11-13-the-cutover-stage-d-from-the-owners-pc)), with the low-memory limits; the staging copy of the same day is stopped. Before it: first login and inspection 2026-11-08: **no go on memory** (2.5 GB free; bizinsights needs 3.2–4.6 GB) until the server is enlarged to at least 8 GB and 4 cores, as requested of the administrator ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08)). Inspected again 2026-11-12: the same size, still no go; outbound HTTPS open ([second inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-12)). And on 2026-11-13, in business hours, when the owner asked for the push: the same size, still no go, nothing sent ([third inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-13)) |
 | 3 | Customer accounts accessible | Not yet (stage D) |
 | 4 | Shopify OAuth works | Not yet (stage B/D) |
 | 5 | Shopify sync works | Code path: the queue runs the same handlers (tested above); on the server: not yet |
@@ -148,7 +281,7 @@ capacity claim); everything that touches production (stages D-F).
 | 13 | File uploads and downloads work | Blob store tested (above); there are no customer file uploads in the app |
 | 14 | Customer permissions work | Unchanged code and database roles; not yet tested on the server |
 | 15 | Historical analytics intact | The copy and its table-by-table check tested against PostgreSQL ([DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md)); against RDS: not yet (stage B rehearsal, stage D) |
-| 16 | Backups and restore tested | Scripts written; not yet run (stage C) |
+| 16 | Backups and restore tested | **Running since 2026-11-13 06:48 UTC, restore test passed** (to an S3 bucket for now: [below](#2026-11-13-backups-off-the-server-and-the-restore-test)); the weekly test and the nightly run themselves not yet seen |
 | 17 | Monitoring and alerting work | Configured; not yet run (stage C) |
 | 18 | No cross-tenant leakage | The new tables carry no tenant data and the tenant role has no rights on them (checked); the copy carries every table's row-level security and policies unchanged (tested); on the server: not yet |
 | 19 | Existing iKorex websites keep working | Not yet (nothing has run on the server) |

@@ -22,7 +22,6 @@ export default function AdProfitabilityPage() {
         sub="A ROAS of 4× isn't a profit by itself: the products, fees and your other costs come out of what the ads bring back. Here is what's left, from the platforms' figures and your store's own."
         r={s.dates}
         shown={s.shown}
-        current={!s.older}
       />
       <AdvertisingBody s={s} what="your advertising profitability">
         {(ov) => (

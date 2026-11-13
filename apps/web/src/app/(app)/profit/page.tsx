@@ -9,7 +9,7 @@ import { useQueryParam } from "@/components/advertising/useAdvertising";
 import { canManage as canManageStores, StoresPending, useApp } from "@/components/AppContext";
 import { Skeleton, useAction } from "@/components/AppUi";
 import { blankCost } from "@/components/costs/CostForm";
-import { CompareDates, CustomDates, DateRangeSelect, versusWords } from "@/components/dashboard/DateRange";
+import { CustomDates, DateRangeSelect, versusWords } from "@/components/dashboard/DateRange";
 import { fmtDay, fmtRange } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { CategoriesDialog, ExpenseDialog, type Editing } from "@/components/profit/ExpenseDialog";
@@ -266,7 +266,6 @@ function Header({ s, onDownload }: { s: StatementState; onDownload: (() => void)
       </div>
       <div className="flex flex-wrap gap-2 empty:hidden" data-print-hide>
         {dates.preset === "custom" && <CustomDates r={dates} />}
-        {dates.compare === "custom" && <CompareDates r={dates} />}
       </div>
       {data && (
         <p className="text-xs text-muted">

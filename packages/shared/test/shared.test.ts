@@ -286,7 +286,6 @@ describe("dates & time zones", () => {
     expect(WEEK_STARTS_ON).toBe(1);
     // This week so far, against the same weekdays of the week before, up to the same time of day.
     expect(resolvePreset("wtd", now, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-29" }, previous: { from: "2026-10-19", to: "2026-10-22", until: "16:44:12" } });
-    expect(resolvePreset("wtd", now, tz, undefined, { mode: "year" }).previous).toEqual({ from: "2025-10-26", to: "2025-10-29", until: "16:44:12" });
     // Last week is over: the whole week, against the whole week before it.
     expect(resolvePreset("lastweek", now, tz)).toEqual({ range: { from: "2026-10-19", to: "2026-10-25" }, previous: { from: "2026-10-12", to: "2026-10-18" } });
     // On a Monday, this week is that one day, and last week is the Monday-to-Sunday just ended.
@@ -305,7 +304,6 @@ describe("dates & time zones", () => {
     const now = new Date("2026-10-22T12:00:00Z");
     // This year so far, against as many days just before it, up to the same time of day.
     expect(resolvePreset("ytd", now, "UTC")).toEqual({ range: { from: "2026-01-01", to: "2026-10-22" }, previous: { from: "2025-03-12", to: "2025-12-31", until: "12:00:00" } });
-    expect(resolvePreset("ytd", now, "UTC", undefined, { mode: "year" }).previous).toEqual({ from: "2025-01-01", to: "2025-10-22", until: "12:00:00" });
     // A whole year is over: compared whole, with the whole year before, leap years included.
     expect(resolvePreset("lastyear", now, "UTC")).toEqual({ range: { from: "2025-01-01", to: "2025-12-31" }, previous: { from: "2024-01-01", to: "2024-12-31" } });
     expect(resolvePreset("lastyear", new Date("2029-02-01T12:00:00Z"), "UTC").range).toEqual({ from: "2028-01-01", to: "2028-12-31" });
@@ -382,62 +380,17 @@ describe("what the dates are compared with", () => {
   const now = new Date("2026-10-17T05:44:12Z");
   const tz = "Australia/Melbourne";
 
-  it("compares with the period just before unless asked otherwise", () => {
-    expect(resolvePreset("30d", now, tz, undefined, { mode: "previous" })).toEqual(resolvePreset("30d", now, tz));
-    expect(resolvePreset("lastmonth", now, tz, undefined, { mode: "previous" }).previous).toEqual({ from: "2026-08-01", to: "2026-08-31" });
-  });
-
-  it("compares with the same dates a year earlier, like for like while they run", () => {
-    // Today until 4:44 pm against 17 Oct 2025 until 4:44 pm.
-    expect(resolvePreset("today", now, tz, undefined, { mode: "year" })).toEqual({
-      range: { from: "2026-10-17", to: "2026-10-17" },
-      previous: { from: "2025-10-17", to: "2025-10-17", until: "16:44:12" },
-    });
-    expect(resolvePreset("mtd", now, tz, undefined, { mode: "year" }).previous).toEqual({ from: "2025-10-01", to: "2025-10-17", until: "16:44:12" });
-    // Finished dates are compared whole: September against September.
-    expect(resolvePreset("lastmonth", now, tz, undefined, { mode: "year" }).previous).toEqual({ from: "2025-09-01", to: "2025-09-30" });
-    expect(resolvePreset("custom", now, tz, { from: "2026-03-01", to: "2026-03-14" }, { mode: "year" }).previous).toEqual({ from: "2025-03-01", to: "2025-03-14" });
+  it("compares with the period just before, whatever the dates", () => {
+    expect(resolvePreset("30d", now, tz).previous).toEqual({ from: "2026-08-19", to: "2026-09-17", until: "16:44:12" });
+    expect(resolvePreset("mtd", now, tz).previous).toEqual({ from: "2026-09-14", to: "2026-09-30", until: "16:44:12" });
+    expect(resolvePreset("lastmonth", now, tz).previous).toEqual({ from: "2026-08-01", to: "2026-08-31" });
+    expect(resolvePreset("custom", now, tz, { from: "2026-03-01", to: "2026-03-14" }).previous).toEqual({ from: "2026-02-15", to: "2026-02-28" });
   });
 
   it("maps 29 February to the 28th a year earlier", () => {
     expect(yearEarlier("2028-02-29")).toBe("2027-02-28");
     expect(yearEarlier("2028-03-01")).toBe("2027-03-01");
     expect(yearEarlier("2029-02-28")).toBe("2028-02-28");
-    // February 2028 (29 days) against February 2027 (28).
-    expect(resolvePreset("lastmonth", new Date("2028-03-05T12:00:00Z"), "UTC", undefined, { mode: "year" })).toEqual({
-      range: { from: "2028-02-01", to: "2028-02-29" },
-      previous: { from: "2027-02-01", to: "2027-02-28" },
-    });
-    expect(resolvePreset("custom", new Date("2028-03-05T12:00:00Z"), "UTC", { from: "2028-02-29", to: "2028-02-29" }, { mode: "year" }).previous).toEqual({
-      from: "2027-02-28",
-      to: "2027-02-28",
-    });
-  });
-
-  it("compares with custom dates, cut at the same time of day while the range runs", () => {
-    // Shopify's "Today" against 14 Mar 2026: that day until 4:44 pm.
-    expect(resolvePreset("today", now, tz, undefined, { mode: "custom", from: "2026-03-14", to: "2026-03-14" }).previous).toEqual({
-      from: "2026-03-14",
-      to: "2026-03-14",
-      until: "16:44:12",
-    });
-    // Any length, even overlapping the range; finished dates against whole days.
-    expect(resolvePreset("yesterday", now, tz, undefined, { mode: "custom", from: "2026-10-01", to: "2026-10-16" }).previous).toEqual({ from: "2026-10-01", to: "2026-10-16" });
-    // Running past the store's today: counted up to today, as a custom range is.
-    expect(resolvePreset("lastmonth", now, tz, undefined, { mode: "custom", from: "2026-10-01", to: "2026-10-31" }).previous).toEqual({ from: "2026-10-01", to: "2026-10-17" });
-  });
-
-  it("refuses custom comparison dates that can't be reported on", () => {
-    const custom = (from?: string, to?: string) => () => resolvePreset("7d", now, tz, undefined, { mode: "custom", from, to });
-    expect(custom()).toThrow("Invalid comparison dates");
-    expect(custom("2026-03-14")).toThrow("Invalid comparison dates");
-    expect(custom("2026-03-14", "2026-02-31")).toThrow("Invalid comparison dates");
-    expect(custom("2026-03-14", "2026-03-01")).toThrow("Invalid comparison dates");
-    expect(custom("0202-03-01", "2026-03-14")).toThrow("Invalid comparison dates");
-    expect(custom("2026-10-18", "2026-10-20")).toThrow("Comparison starts after today");
-    expect(custom("2025-01-01", "2026-01-02")).toThrow("Comparison too long");
-    // The dates picked are checked first.
-    expect(() => resolvePreset("custom", now, tz, { from: "2026-10-18", to: "2026-10-19" }, { mode: "custom" })).toThrow("Range starts after today");
   });
 
   it("knows when the imported orders don't reach back to the comparison", () => {

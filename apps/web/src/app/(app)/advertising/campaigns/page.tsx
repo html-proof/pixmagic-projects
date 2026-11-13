@@ -18,7 +18,6 @@ export default function CampaignComparisonPage() {
         sub="Every Meta Ads and Google Ads campaign of these dates side by side, on the measures that mean the same thing on both."
         r={s.dates}
         shown={s.shown}
-        current={!s.older}
         actions={
           <>
             <label className="flex items-center gap-2 text-xs text-muted">

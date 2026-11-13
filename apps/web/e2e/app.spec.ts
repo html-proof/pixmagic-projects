@@ -746,10 +746,10 @@ test("shows Shopify's own sessions and gross profit, and checks the sales figure
   await keep("sessions", "2026-09-20|2026-09-20|", { sessions: 100, visitors: 90, cartSessions: 10, checkoutSessions: 5, completedSessions: 2, pageviews: 300 });
 
   await page.goto("/dashboard?preset=custom&from=2026-09-21&to=2026-09-21&view=sales");
-  // The comparison names its dates, as Shopify's comparison chip does, so a Shopify screen set to
-  // other dates can't pass for the same comparison ("vs Previous period" beside "Mar 14, 2026").
-  await expect(page.getByTestId("compare-dates")).toHaveText(/^vs (Sep 20, 2026|20 Sept? 2026)$/);
-  await expect(page.getByTestId("compare-dates")).not.toContainText("Previous period");
+  // The dates are compared with the day before, which their tooltip names: there is no menu to
+  // compare them with anything else.
+  await expect(page.getByTestId("date-chip")).toHaveAttribute("title", /Compared with (Sep 20|20 Sept?)\b/);
+  await expect(page.getByLabel("Compare with")).toHaveCount(0);
   const check = page.getByTestId("module-shopify-check");
   await expect(check).toContainText("All match");
   await expect(check.getByTestId("shopify-check-table")).toContainText("Net sales");

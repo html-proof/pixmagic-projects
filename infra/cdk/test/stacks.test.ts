@@ -1126,12 +1126,31 @@ describe("the origin lock", () => {
     expect(naming).toEqual(["SecretParametersHandlerServiceRoleDefaultPolicy"]);
   });
 
-  it("enforces in production, and isn't made where the app lives on CloudFront's own name", () => {
+  it("reports in production while the name points at the server, can enforce, and isn't made where the app lives on CloudFront's own name", () => {
     const source = (app: Template) => JSON.stringify(Object.values(app.findResources("AWS::CloudFront::Function"))[0]!.Properties.FunctionCode);
-    expect(source(t.app)).toContain("var ENFORCE = true;");
-    t.app.hasOutput("OriginLock", { Value: "enforce" });
-    t.app.hasResourceProperties("AWS::CloudFront::Function", { FunctionConfig: Match.objectLike({ Comment: Match.stringLikeRegexp("only Cloudflare's requests are served$") }) });
+    // "report" since 2026-11-13: bizinsights.io moved to the iKorex server, so /edge-lock can't say
+    // that Cloudflare sends CloudFront the secret, and "enforce" needs that answer first (config.ts).
+    expect(source(t.app)).toContain("var ENFORCE = false;");
+    t.app.hasOutput("OriginLock", { Value: "report" });
+    const enforcing = (() => {
+      const app = new App({ context: CDK_CONTEXT });
+      const base = envConfig((k) => app.node.tryGetContext(k));
+      const cfg = { ...base, domain: { ...base.domain!, originLock: "enforce" as const } };
+      const env = { account: cfg.account, region: cfg.region };
+      const edge = new EdgeStack(app, "E", cfg, { env: { account: cfg.account, region: "us-east-1" }, crossRegionReferences: true });
+      return Template.fromStack(new AppStack(app, "A", cfg, new DataStack(app, "D", cfg, { env }), edge.webAclArn, { env, crossRegionReferences: true }));
+    })();
+    expect(source(enforcing)).toContain("var ENFORCE = true;");
+    enforcing.hasOutput("OriginLock", { Value: "enforce" });
+    enforcing.hasResourceProperties("AWS::CloudFront::Function", { FunctionConfig: Match.objectLike({ Comment: Match.stringLikeRegexp("^Only Cloudflare's requests are served") }) });
     const staging = synth({ env: "staging" });
+    // CloudFront refuses a comment over 128 characters, and the stack rolls back with it: the one
+    // "enforce" deploy did (2026-11-13). Every function, in every environment and both modes.
+    const comments = (app: Template) => Object.values(app.findResources("AWS::CloudFront::Function")).map((fn) => fn.Properties.FunctionConfig.Comment as string);
+    for (const comment of [...comments(t.app), ...comments(staging.app), ...comments(enforcing)]) {
+      expect(comment.length, comment).toBeGreaterThan(0);
+      expect(comment.length, comment).toBeLessThanOrEqual(128);
+    }
     staging.data.resourcePropertiesCountIs("AWS::SecretsManager::Secret", { Name: Match.stringLikeRegexp("origin-lock") }, 0);
     expect(source(staging.app)).not.toContain("resolve:secretsmanager");
     expect(staging.app.findOutputs("OriginLock")).toEqual({});

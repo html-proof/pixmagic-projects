@@ -94,7 +94,7 @@ answers are kept apart.
 
 ## The question
 
-- **Dates**: the dashboard's own address-bar state (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`), kept
+- **Dates**: the dashboard's own address-bar state (`?preset=&from=&to=`), kept
   for the tab, so the dashboard and every Advertising page show the same dates. The presets are the
   dashboard's: Today, Yesterday, This week (`wtd`, Monday to today) and Last week (`lastweek`, Monday to
   Sunday), Last 7/30/90 days, This month, Last month, This year (`ytd`), Last year (`lastyear`, compared

@@ -33,8 +33,14 @@ record what was true on their date.
 **The server (2026-11-13): inspected three times, read-only, and no go on memory each time.** It has
 3.9 GB in all with about 2.5 GB free beside what already runs there, and bizinsights needs 3.2 to
 4.6 GB ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md)). The administrator has been asked
-for at least 8 GB and 4 cores. Nothing has been installed or changed on the server, and AWS keeps
-running everything.
+for at least 8 GB and 4 cores. **The owner decided on 2026-11-13 to run it there as it is, and
+production moved the same day:** since 06:03 UTC `bizinsights.io` is served by the server
+(`~/bizinsights`, the low-memory limits of `infra/ikorex/docker-compose.lean.yml`, about 600 MB
+used; the server's other containers untouched), through the Cloudflare tunnel `bizinsights`. AWS is
+frozen as the way back, its database as of the switch. Backups leave the server since 06:48 UTC that
+day (an S3 bucket for now; restore test passed). Still missing on the server:
+monitoring, the deploy key for Deploy to iKorex
+([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md#2026-11-13-the-cutover-stage-d-from-the-owners-pc)).
 
 ## The pages
 
@@ -52,6 +58,7 @@ running everything.
 | 10. Production deployment guide | [PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE.md) | Setup, deploy, everyday commands, rollback, restore; not yet run on the server |
 | 2026-11-08 brief: what still uses AWS | [AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md) | 79 files (2026-11-13), each with the step that removes it; `scripts/aws-dependency-scan.mjs` keeps new AWS code out (`pnpm lint`) and is stage F's check |
 | 2026-11-08 brief: its suggested providers | [PROVIDER_CHOICES.md](PROVIDER_CHOICES.md) | Hetzner, Supabase, Upstash, BullMQ, Better Auth… against what the move uses, and when each would become right; costs at 1,000 to 1,000,000 users in [AWS_COST_COMPARISON.md](AWS_COST_COMPARISON.md#at-scale-1000-to-1000000-users) |
+| 2026-11-13: finish the move and delete AWS | [LEAVING_AWS.md](LEAVING_AWS.md) | What replaced each AWS service; **part 1 deleted on 2026-11-13** (no way back to AWS since); the two ties left (sign-in through Cognito, backups in an S3 bucket) and what cuts each |
 
 The earlier cost audit of the same day, which this builds on, is in
 [../aws-migration/](../aws-migration/AWS_MIGRATION_PLAN.md). Its conclusion still holds for staying

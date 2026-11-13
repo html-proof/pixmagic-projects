@@ -52,8 +52,10 @@ export function server({ sshTarget, identity, project }) {
   }
   const sshArgs = ["-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${knownHosts}`, "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=20", "-i", identity, sshTarget];
   // Windows' own OpenSSH: it uses the Windows ssh-agent; Git Bash's ssh, first on its PATH, doesn't.
+  // SHIP_SSH (as in ship.sh) names another ssh program: Git Bash's own, when its agent holds the key
+  // (SSH_AUTH_SOCK), which needs no Windows service (PRODUCTION_DEPLOYMENT_GUIDE.md, "From a Windows PC").
   const windowsSsh = "C:/Windows/System32/OpenSSH/ssh.exe";
-  const sshExe = process.platform === "win32" && existsSync(windowsSsh) ? windowsSsh : "ssh";
+  const sshExe = process.env.SHIP_SSH || (process.platform === "win32" && existsSync(windowsSsh) ? windowsSsh : "ssh");
   function remote(command, input) {
     const r = spawnSync(sshExe, [...sshArgs, command], { input, encoding: "utf8", maxBuffer: 1024 * 1024 * 64, stdio: ["pipe", "pipe", "inherit"] });
     if (r.error) throw r.error;

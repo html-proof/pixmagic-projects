@@ -52,8 +52,9 @@ A figure and its change match Shopify's only when both screens ask the same ques
 reading a difference as a bug, check in this order:
 
 1. **The dates**: the same days (both in the store's time zone).
-2. **The comparison**: Shopify's second date chip shows the dates it compares with; the
-   bizinsights pill beside the dates shows its own. They must be the same dates. A custom
+2. **The comparison**: Shopify's second date chip shows the dates it compares with. bizinsights
+   always compares with the period just before the dates (the dates' tooltip and each tile name
+   it), so set Shopify's chip to "Previous period": they must be the same dates. A custom
    comparison stays chosen in Shopify: PixMagic's Shopify screen compared with 14 Mar 2026 on both
    17 and 18 Oct 2026. On 18 Oct that gave ↓25% orders (3 against 4) and ↓48% net sales (A$792.73
    against about A$1,525), while bizinsights compared with 17 Oct (6 orders, A$1,794.58: ↓50% and
@@ -111,41 +112,36 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 - **At most 12 months at a time, however far back** (`latestRangeEnd`, `MAX_RANGE_MONTHS` in
   packages/shared/src/dates.ts): a range starting on 15 Mar 2025 may end on 14 Mar 2026 at the latest,
   one starting on 1 Jan 2024 on 31 Dec 2024 (366 days, a leap year), one starting on 29 Feb on the 28th
-  a year later. One day more is refused (`400 invalid_range`, "pick up to 12 months at a time"), for
-  the dates picked and for comparison dates alike; the dates menu offers nothing longer, and the end
+  a year later. One day more is refused (`400 invalid_range`, "pick up to 12 months at a time"); the
+  dates menu offers nothing longer, and the end
   date's calendar stops there. Older periods are not limited: 1 Jan – 31 Dec 2023 is a question like
-  any other, and its comparison with the previous year is 2022. The downloads and Customer Messaging
+  any other, and it is compared with 2022. The downloads
   read the same rule; the ad platforms' own report endpoints keep their 366-day limit.
 - **Custom ranges** run from 2000-01-01 at the earliest, or from the store's first day once Shopify's
   creation date is known (`storeRangeLimits`: `Shop.createdAt`, `stores.shop_created_at`, read by the
   shop sync job, and daily by the dashboard's refresh until it is; or an earlier order's day, since an
   order imported from another platform can predate the store), and are reported only up to the
   store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today, or before
-  the store's first day, is refused (`400 invalid_range`). Comparison dates may reach back before the
-  store's first day: they then hold no orders, and the change says "No earlier data".
-- **Comparison period:** what the % changes compare with, chosen beside the dates as in Shopify
-  Analytics' second date chip (`compare` in the overview and export query; `resolvePreset` in
-  packages/shared/src/dates.ts):
-  - **Previous period** (the default, `compare=previous` or absent): the same number of days
-    immediately before the selected range (after that clamp); this week so far against the same
-    weekdays of the week before (Monday to Wednesday against Monday to Wednesday, up to the same time
-    of day), never against the days just before it; last month against the whole month
-    before it, whatever its length; last year, or any calendar year picked (1 Jan – 31 Dec), against
-    the whole calendar year before it, leap or not.
-  - **Previous year** (`compare=year`): the same dates a year earlier. 29 February, which most years
-    lack, becomes the 28th, so February 2028 is compared with 1–28 February 2027.
-  - **Custom** (`compare=custom&cfrom=…&cto=…`): any dates, under the custom-range rules above (from
-    2000-01-01, at most 12 months, reported up to the store's today, not starting after it). They may
-    have another length than the range, sit after it or overlap it. A pair that breaks a rule is
-    refused with `400 invalid_range`, as a bad custom range is.
+  the store's first day, is refused (`400 invalid_range`). The period before may reach back before the
+  store's first day: it then holds no orders, and the change says "No earlier data".
+- **Comparison period:** the % changes always compare with the **period just before** the dates
+  (`resolvePreset` in packages/shared/src/dates.ts). It isn't chosen: the comparison menu beside the
+  dates (previous period, previous year, custom dates) was removed at the owner's request on
+  2026-11-13, and a link that still carries its `compare`, `cfrom` or `cto` is answered as if it
+  didn't. The period before is the same number of days
+  immediately before the selected range (after that clamp); this week so far against the same
+  weekdays of the week before (Monday to Wednesday against Monday to Wednesday, up to the same time
+  of day), never against the days just before it; last month against the whole month
+  before it, whatever its length; last year, or any calendar year picked (1 Jan – 31 Dec), against
+  the whole calendar year before it, leap or not.
 
-  The answer's `previous` holds the dates (`from`, `to`, `until`), `compare`, and `imported`. The
-  comparison pill shows those dates ("vs 17 Oct 2026"), as Shopify's comparison chip shows its own
-  ("Mar 14, 2026"), and a finished day's tiles say "vs 17 Oct", not "vs the day before".
-  **Like for like, as Shopify's Analytics compares:** whatever the choice, while the range is still
+  The answer's `previous` holds the dates (`from`, `to`, `until`) and `imported`; `preset` says how
+  the dates were asked for, so a panel asking about them again (Sales by collection) gets the same
+  days on both sides. The dates' tooltip names the dates compared with ("Compared with 17 Oct"),
+  and a finished day's tiles say "vs 17 Oct", not "vs the day before".
+  **Like for like, as Shopify's Analytics compares:** while the range is still
   running (it ends on the store's today), the comparison stops at the same time of day on its last
-  day. Today until 4:44:12 pm is compared with yesterday until 4:44:12 pm (or 17 Oct last year until
-  4:44:12 pm, or 14 Mar until then), and the last 7 days with the 7 before up to the same
+  day. Today until 4:44:12 pm is compared with yesterday until 4:44:12 pm, and the last 7 days with the 7 before up to the same
   moment, never with whole days (that made every day look down until it was nearly over).
   `resolvePreset` returns that time as `previous.until` (store-local "HH:MM:SS", by the clock, so a
   daylight-saving change doesn't shift it). The comparison's last day is then added up from the orders
@@ -155,7 +151,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   only: while the range reaches a day still running (the store's today, or an ad account's today in
   its own time zone), both the range and the comparison lose that many days at their end and the
   change says "through yesterday"; Today on its own isn't compared (see "Ads" below). Their rows are
-  read for the range and for the comparison separately, wherever the comparison sits.
+  read for the range and for the comparison separately.
 
   **No earlier data:** when the comparison starts before the store's imported history (`historyFrom`,
   below), `previous.imported` is false: the sales figures of the comparison come back `null`, every
@@ -347,8 +343,8 @@ measure net sales only.
 The dashboard's topics as pages of their own, in the owner's approved Stitch design (prototype v2,
 project 4270728427536011606): plain white panels with a small radius and a faint shadow, soft tinted
 rows and buttons (globals.css `home-card`, `home-btn`, `--home-*`), "Updated 3 min ago · Matches
-Shopify" in words (`StatusWords`) and one date card (`DateChip`: the dates over "vs" the dates
-compared with). The layouts are the design's screens 05–08:
+Shopify" in words (`StatusWords`) and one date card (`DateChip`: the dates, the same menu as the
+Home's pill). The layouts are the design's screens 05–08:
 `apps/web/src/components/dashboard/SalesViews.tsx`, frame and tabs in `SalesFrame.tsx`). Each reads
 the same overview answer as the Home (GET …/overview for the dates picked), so a figure is the same
 wherever it shows. Under the Overview's layout, "More detail" keeps the earlier panels (Total sales
@@ -983,13 +979,12 @@ of variable costs makes ₹4,333.33 of operating profit (`packages/shared/test/p
 
 Reference implementation: `profitStatement` (`packages/core/src/reports/profit.ts`),
 `GET /workspaces/:ws/stores/:storeId/profit/statement` (the dashboard's date question, `preset`,
-`from`, `to`, `compare`, `cfrom`, `cto`, and `grain=day|week|month|year`), the page
+`from`, `to`, and `grain=day|week|month|year`), the page
 `apps/web/src/app/(app)/profit/page.tsx` and `components/profit/`.
 
 The owner's own profit and loss workbook (EEq.xlsx, a "Dashboard" sheet with a column a day and an
-"Add Cost" sheet) as a page: any dates and the dates they're compared with (the dashboard's pickers:
-today, yesterday, this week, this month, last month, this year, last year, custom; previous period,
-previous year, custom), a column per day, week, month or year (at most `MAX_STATEMENT_COLUMNS`, 62;
+"Add Cost" sheet) as a page: any dates and the period before them, which they're compared with (the dashboard's dates menu:
+today, yesterday, this week, this month, last month, this year, last year, custom), a column per day, week, month or year (at most `MAX_STATEMENT_COLUMNS`, 62;
 coarser when the dates need more). Every figure is `profitAndLoss`'s
 (`packages/shared/src/profit.ts`), worked out on the server; the page formats it.
 
@@ -1003,7 +998,7 @@ the quick actions Add Expense and Add Business Event beside them:
 
 | Section | What it shows |
 | --- | --- |
-| Overview (default) | Revenue and expenses as columns with profit as a line, per period; Key Insights; Expense Breakdown (a ring); Profit Analysis; the statement in four columns (these dates, the dates compared with, the change, its share), with the comparison picker, Download CSV and View Details |
+| Overview (default) | Revenue and expenses as columns with profit as a line, per period; Key Insights; Expense Breakdown (a ring); Profit Analysis; the statement in four columns (these dates, the dates compared with, the change, its share), with Download CSV and View Details |
 | Revenue (`revenue`) | Revenue with and without tax, tax collected, orders, items sold; revenue per period; the sum from gross sales to revenue with tax, a step a line |
 | Expenses (`expenses`) | Total, advertising, variable and fixed costs; Expense Breakdown (the ring); every cost biggest first, with what the connected ad accounts add; the expenses table; the recurring expenses; how fixed costs are spread (every day, or the days the store is open) |
 | Profit Analysis (`analysis`) | Profit Analysis; the sum from revenue before tax to profit, a step a line; profit day by day; margin, MER, ROAS, VCR and FCR each with a line of plain words; the cash-flow note |

@@ -1,6 +1,6 @@
 # AWS cost reduction: status
 
-Last updated **2026-11-12**. The plan and the numbers behind each change are in
+Last updated **2026-11-13**. The plan and the numbers behind each change are in
 [AWS_MIGRATION_PLAN.md](AWS_MIGRATION_PLAN.md). Update this page in the same pull request as each
 change, or the day an owner-only step is done.
 
@@ -13,7 +13,7 @@ change, or the day an owner-only step is done.
 | 3 | X-Ray tracing off | 0.46 | **Live** (#343; checked 2026-11-08: api, jobs and cron `live` on `PassThrough`) | — |
 | 4 | GuardDuty RDS protection off, both features (`RDS_LOGIN_EVENTS` 2.26 and Advanced RDS, `RDS_DATA_RISK`, 6.78) | ~9.04 | Our own checks in its place: change 10. Both features still `ENABLED` on 2026-11-12, 3 trial days left | Owner: one command ([aws-deployment.md](../aws-deployment.md#security-events)), once the alarm email is confirmed |
 | 5 | WhatsApp service on Fargate Spot | up to ~12.10 | **Live** (#343; checked 2026-11-08: `insights-production-evolution-a` 1/1 on `FARGATE_SPOT`) | A week of billing for the real rate |
-| 6 | AWS WAF → Cloudflare's rules | 10.08 (less 0.40 for the lock's secret) | **In progress** (owner's "just do it", 2026-11-12). Step 1 of 3, the origin lock: `"report"` live since release 180 (#375); Cloudflare sends the header since 2026-11-13 04:56 UTC (`/edge-lock` 204), so this pull request sets `"enforce"`. Cloudflare's rate limiting rule is on and tested (2026-11-12). The WAF still on | The Deploy of `"enforce"`, then the WAF goes in two releases (the distribution lets go of it, then the Edge stack deletes it) |
+| 6 | AWS WAF → Cloudflare's rules | 10.08 (less 0.40 while the lock's secret is kept) | **Closed 2026-11-13: the WAF went with AWS.** The web ACL and its two IP sets were deleted with the Edge stack at 07:38 UTC, when the owner had everything in AWS deleted ([LEAVING_AWS.md](../ikorex-migration/LEAVING_AWS.md)), not by this change's own releases, which never ran (`"enforce"` never deployed; the two WAF releases were never merged). What this change leaves in use: Cloudflare's rate limiting rule (on, tested 2026-11-12), which serves the server too. Cloudflare's header rule `Origin lock for CloudFront` was deleted the same day (07:50 UTC, the owner's yes). Left over: the secret `insights/production/origin-lock` (kept by the Data stack, US$0.40 a month) | Nothing here: the secret goes with the rest of Secrets Manager ([LEAVING_AWS.md](../ikorex-migration/LEAVING_AWS.md)) |
 | 7 | Secrets Manager → Parameter Store SecureString, all seven secrets, in three steps ([SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md)) | 2.97 (7 × 0.40 and their requests), once the secrets are deleted in step 3; nothing yet | **In progress.** Step 1 of 3 **live** 2026-11-12, release 186 (#384): every release copies each secret, unchanged, into a parameter of the same name, and the functions read the parameter first, the secret as fallback. Checked after it: seven parameters, each equal to its secret; api and cron read all of theirs from the parameters, no fallback. The secrets all still exist | A week of `secrets loaded` log lines on `parameter` (to about 2026-11-19), then step 2 (nothing reads Secrets Manager), then step 3 (the secrets deleted with a 30-day recovery window) |
 | 8 | Database single-AZ | 21.74 | **Live** 2026-11-08, release 174 (#357): `MultiAZ` false, primary 2b, same instance | — |
 | 9 | One NAT instance (nat-b, in the database's zone) | ~8.24 | **Live** 2026-11-08, release 174 (#357): nat-a terminated, both app subnets route to nat-b | — |
@@ -195,3 +195,37 @@ change, or the day an owner-only step is done.
   and `www`) carrying a header equal to the secret, compared by a script; the home page 200,
   release 188. Still open on purpose until `"enforce"` deploys: a POST straight to the
   cloudfront.net name reaches the app (404 from `/api/healthz`).
+- **2026-11-13**: change 6 stopped after step 1, not live. #391 (`"enforce"`) was merged at 05:14
+  UTC (4058b810) on a green run. Its own Deploy never started (the next push's took its place);
+  the Deploy that carried it (f287818b, 05:31 UTC) failed on the first resource: CloudFront
+  answered "The parameter Comment is too big" for the viewer function, whose enforcing comment was
+  138 characters (the limit is 128, and no test counted it). The App stack rolled back, so the
+  function stayed in `"report"` and release 189 stayed live. At 06:03 UTC production moved to the
+  iKorex server and AWS was frozen (reserved concurrency 0, schedules off), and every Deploy to
+  AWS since has failed. Read at 06:45 UTC, nothing changed: a POST straight to the cloudfront.net
+  name's `/api/healthz` got 429 (the function let it through, the frozen Lambda answered), a page
+  request there its 301, `https://bizinsights.io/edge-lock` 404 (the server's answer now). Two
+  things changed in the code the same day. The comment is fixed (88 characters, and
+  `stacks.test.ts` counts every CloudFront function's comment in production, staging and both
+  modes), so a Deploy to AWS no longer stops there; it still can't pass while AWS is frozen. And
+  `config.ts` is back on `"report"`, which is what is deployed: `"enforce"` may follow only a 204
+  from `/edge-lock`, and that address can't answer for CloudFront while the name points at the
+  server. The WAF's removal was not started on AWS: its two releases wait on the branches
+  `claude/waf-detach` and `claude/waf-remove` (written against main before #390, to be rebased),
+  each needing a Deploy that passes. Cloudflare's two rules stay as they are: the rate limit
+  serves the server too, and the header rule is what lets CloudFront enforce if AWS serves again.
+- **2026-11-13, later**: change 6 closed by AWS's deletion. #396 (the comment CloudFront accepts,
+  `"report"` again) was merged at 06:59 UTC and started no Deploy: the owner had switched Deploy
+  to AWS off. Between 07:14 and 07:38 UTC the stacks were deleted on the owner's instruction
+  (LEAVING_AWS.md). Read at 07:50 UTC with the AWS CLI: CloudFront lists no distribution, WAF no
+  web ACL and no IP set in `us-east-1` (scope CloudFront), CloudFormation shows `InsightsApp`,
+  `InsightsEdge` and `InsightsData` as deleted, and `d2mr8m2p1qkh58.cloudfront.net` has no address
+  any more. `https://bizinsights.io` answers from the server (`/api/version`, `/api/healthz`).
+  Still there: the secret `insights/production/origin-lock` with its parameter copy, and
+  Cloudflare's header rule, which now sends that value to the server for nothing. The branches
+  `claude/waf-detach` and `claude/waf-remove` are deleted: nothing is left for them to remove.
+- **2026-11-13, 07:50 UTC**: Cloudflare's header rule `Origin lock for CloudFront` deleted (the
+  owner's "Yes, delete it"), through the dashboard's own menu, the value never read. After it:
+  Rules → Overview lists one rule (`API: bypass cache`) and no header rule;
+  `https://bizinsights.io/api/healthz` 200, `/login` 200, a POST to `/api/webhooks/shopify` 401
+  (it reaches the app). The rate limiting rule `API per address` was not touched.

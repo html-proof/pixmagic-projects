@@ -156,7 +156,7 @@ cancelled ones included unless filtered out. Each order has exactly the recent o
 
 | Parameter | Means |
 | --- | --- |
-| `preset`, `from`, `to` (`compare`, `cfrom`, `cto`) | The dashboard's dates, read as `/overview` and `/export` read them (`datesQuery`, `resolveQueryDates`); 30 days when absent. The comparison is checked but not used. A range that can't be reported on is a 400 `invalid_range`. |
+| `preset`, `from`, `to` | The dashboard's dates, read as `/overview` and `/export` read them (`datesQuery`, `resolveQueryDates`); 30 days when absent. A range that can't be reported on is a 400 `invalid_range`. |
 | `q` | Part of an order number, at most 40 characters: any case, its leading `#` optional (`q=1003`, `q=#1003`, `q=eu-1`). |
 | `payment` | `paid` \| `pending` \| `refunded` \| `other`: `paymentGroup` in `@app/shared/orders`. Pending is pending, authorized and partly paid; refunded is refunded in full or in part; other is voided, expired, any other state, or none. |
 | `shipping` | `shipped` \| `partly` \| `not_shipped`: `shippingGroup` in `@app/shared/orders`. Shipped is fulfilled, partly is partially fulfilled, not shipped is every other state (unfulfilled, on hold, scheduled, restocked, ...) or none. |

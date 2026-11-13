@@ -36,6 +36,7 @@ interface Service {
   security_opt?: string[];
   mem_limit?: number | string;
   cpus?: number | string;
+  command?: string[];
   user?: string;
   volumes?: Array<{ type: string; source?: string; target: string; read_only?: boolean }>;
 }
@@ -92,6 +93,32 @@ describe.skipIf(!hasCompose)("the iKorex server's containers (docker compose con
       expect(Number(s.mem_limit), name).toBeGreaterThan(0);
       expect(Number(s.cpus), name).toBeGreaterThan(0);
     }
+  });
+
+  it("fits a server short of memory with docker-compose.lean.yml: smaller limits, the same isolation", () => {
+    const dir = stage();
+    const config = (archive: string): Record<string, Service> => {
+      const args = ["compose", "-f", "docker-compose.yml", "-f", "docker-compose.lean.yml", "--profile", "admin", "config", "--format", "json"];
+      return JSON.parse(execFileSync("docker", args, { cwd: dir, encoding: "utf8", timeout: 60_000, env: { ...process.env, ARCHIVE_MODE: archive } })).services;
+    };
+    const lean = config("off");
+    const mb = (s: Service) => Number(s.mem_limit) / 1024 / 1024;
+    expect(Object.keys(lean).sort()).toEqual(["admin", "backup", "cloudflared", "evolution", "postgres", "web", "worker"]);
+    for (const [name, s] of Object.entries(lean)) {
+      expect(mb(s), name).toBeGreaterThan(0);
+      expect(mb(s), name).toBeLessThan(mb(all[name]!));
+      expect(Number(s.cpus), name).toBeGreaterThan(0);
+      expect(s.ports ?? [], name).toEqual([]);
+      expect(s.cap_drop, name).toEqual(["ALL"]);
+      expect(s.security_opt, name).toContain("no-new-privileges:true");
+    }
+    // What stays running (`admin` is a one-off) at its worst: under the 2.5 GB the server had available.
+    const running = Object.entries(lean).filter(([name]) => name !== "admin");
+    expect(running.reduce((sum, [, s]) => sum + mb(s), 0)).toBeLessThanOrEqual(2500);
+    // PostgreSQL still reads its settings file; with no backup bucket the write-ahead log isn't kept for it.
+    expect(lean.postgres!.command).toContain("config_file=/etc/postgresql/postgresql.conf");
+    expect(lean.postgres!.command).toContain("archive_mode=off");
+    expect(config("").postgres!.command).toContain("archive_mode=on");
   });
 
   it("mounts the Docker socket only in the optional log collector, read-only, and the host's files only read-only", () => {

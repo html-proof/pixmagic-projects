@@ -32,6 +32,18 @@ Accounts and keys (owner, in each provider's console):
 | Two checks: the nightly backup ping, and `https://bizinsights.io/api/readyz` every 5 minutes | healthchecks.io / UptimeRobot (free tiers) | `env/postgres.env` `BACKUP_PING_URL` |
 | An IAM user `bizinsights-ikorex`, until stage F, with only: Cognito's password check and admin actions on the pool (`AUTH_MODE=migrating`) | AWS IAM | `env/app.env` `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
 
+**Backups as they run since 2026-11-13** (the owner's choice that day, instead of R2 for now): an S3
+bucket in the AWS account, `bizinsights-backups-<account>` in ap-southeast-2 (private, encrypted,
+TLS only, versioned: what the server's key deletes or overwrites stays 14 more days), and an IAM
+user `bizinsights-backups` that can only list that bucket and read, write and delete its objects.
+`env/postgres.env` holds the endpoint `s3.ap-southeast-2.amazonaws.com`,
+`PGBACKREST_REPO1_S3_REGION=ap-southeast-2`, `PGBACKREST_REPO1_S3_URI_STYLE=host`, the key and the
+passphrase. The owner's copy of the passphrase is the encrypted parameter
+`/bizinsights/ikorex/backup-cipher-pass` in AWS Systems Manager Parameter Store: **copy it into a
+password manager before the AWS account closes**, and move the backups to R2 (a new stanza there)
+at stage F, since the bucket goes with the account. No backup ping is set (`BACKUP_PING_URL`): a
+night's failure shows only in `docker compose logs backup` until a check exists.
+
 On the server, as `deployer`, the project folder (nothing outside it is touched):
 
 ```bash
@@ -61,6 +73,42 @@ chmod 600 *.env
   ```
 
   Merge them into `app.env` / `evolution.env` on the server, then delete the `.from-aws` files.
+
+`infra/ikorex/scripts/setup-env.sh` does the copying, the passwords and the merge in one go, and
+prints names and counts only (how the staging copy was set up on 2026-11-13). After the two
+`export-env.mjs` commands above:
+
+```bash
+ssh deployer@103.146.112.176 'bash -s -- bizinsights-staging https://staging.bizinsights.io' < infra/ikorex/scripts/setup-env.sh
+```
+
+**A server short of memory.** The limits in `docker-compose.yml` add up to about 6 GB, for a server
+with 8 GB or more. The iKorex server has 3.9 GB with about 2.5 GB free
+([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md)), and the owner decided on 2026-11-13 to run
+bizinsights there as it is. `docker-compose.lean.yml` puts smaller limits on the same containers:
+2,432 MB for everything that stays running, so bizinsights at its worst takes what was free and
+the server's other tenants keep theirs. The server's `.env` chooses it (`setup-env.sh` writes
+these):
+
+```
+COMPOSE_FILE=docker-compose.yml:docker-compose.lean.yml
+ARCHIVE_MODE=off
+```
+
+`ARCHIVE_MODE=off` is only for a copy with no backup bucket in `env/postgres.env`: without it
+PostgreSQL keeps every write-ahead log file for a bucket that isn't there, until the disk is full.
+Remove that line when the bucket is set, and restart `postgres`. With these limits two full copies
+don't fit side by side: stop staging (`docker compose -p bizinsights-staging stop`) before
+production starts. Monitoring (`docker-compose.monitoring.yml`, another 1.5 GB of limits) doesn't
+fit either; the external checks in the table above stand in for it.
+
+**From a Windows PC.** `ship.sh` sends the working copy, so `infra/ikorex/**` is pinned to Unix line
+endings (`.gitattributes`). `ssh` asks for the key's passphrase at every connection unless an agent
+holds the key; Git Bash's own agent works without changing Windows' services:
+`ssh-agent -a ~/.ssh/bizinsights-agent.sock -t 6h`, then `ssh-add` with
+`SSH_ASKPASS=/mingw64/bin/git-askpass.exe SSH_ASKPASS_REQUIRE=force` (Git's passphrase window; the
+desktop app's terminal doesn't pass typing to `ssh-add`), and `ship.sh` with `SHIP_SSH=/usr/bin/ssh`
+and a `SHIP_SSH_CONFIG` file naming that agent (`IdentityAgent`).
 
 ## Deploying a commit
 
@@ -179,6 +227,7 @@ before it needs the file copied again into `C:\ProgramData\bizinsights-runner` (
 | Check a store against Shopify | `docker compose --profile admin run --rm admin shopify-check --shop <x>.myshopify.com` |
 | Row counts | `docker compose --profile admin run --rm admin counts` |
 | What is configured (names only) | `docker compose --profile admin run --rm admin config` |
+| Who still signs in through Cognito (counts) | `docker compose --profile admin run --rm admin sign-in-move` ([LEAVING_AWS.md](LEAVING_AWS.md#sign-in-off-cognito)) |
 | Backups in the bucket | `docker compose exec backup pgbackrest --stanza=bizinsights info` |
 | Restore test now | `docker compose exec backup restore-test.sh` |
 | Turn schedules on (production, at the cutover) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=on/' .env && docker compose up -d worker` |

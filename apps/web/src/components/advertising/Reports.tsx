@@ -2,7 +2,7 @@
 import type { AccessKey } from "@app/shared/access";
 import { AD_PROVIDERS, type AdProvider, type AdSpendProvider } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
-import { comparisonHelp, CompareDates, CompareSelect, CustomDates, DateRangeSelect, type ShownComparison } from "@/components/dashboard/DateRange";
+import { comparisonHelp, CustomDates, DateRangeSelect, type ShownComparison } from "@/components/dashboard/DateRange";
 import { fmtRange } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { useApi } from "@/lib/api";
@@ -67,12 +67,10 @@ export function AdvertisingReports() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <DateRangeSelect r={q.dates} shown={t ? { range: t.range, previous: t.previous, timezone: store?.timezone ?? "UTC" } : null} id="report-dates" label="Dates" size="sm" />
-            <CompareSelect r={q.dates} shown={t ? { range: t.range, previous: t.previous, timezone: store?.timezone ?? "UTC" } : null} current={!!t} id="report-compare" label="Compare with" size="sm" />
           </div>
         </div>
         <div className="mt-2 flex flex-wrap justify-end gap-2">
           <CustomDates r={q.dates} />
-          <CompareDates r={q.dates} />
         </div>
         <div className="mt-3 flex flex-wrap gap-2" role="radiogroup" aria-label="Report">
           {reports.map((r) => (

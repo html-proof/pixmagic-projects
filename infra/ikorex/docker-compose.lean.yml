@@ -1,0 +1,64 @@
+# bizinsights on a server that is short of memory: the same containers as docker-compose.yml, with
+# smaller limits. Written for the iKorex server as it was on 2026-11-13 (3.9 GB in all, about 2.5 GB
+# available beside the websites, n8n and the CCTV services; docs/ikorex-migration/SERVER_CAPACITY_REPORT.md),
+# when the owner decided to run bizinsights there without waiting for it to be enlarged.
+#
+# The limits of the containers that stay running (web, worker, postgres, backup, evolution,
+# cloudflared) add up to 2,432 MB, under what the server had available, so bizinsights at its worst
+# takes what was free and no more: a container that outgrows its limit is the one that swaps or is
+# stopped, never the server's other tenants. The price is bizinsights' own speed under load (a large
+# Shopify backfill, many people at once). On a server with 8 GB or more, leave this file out.
+#
+# Chosen in the project folder's .env, which Compose and scripts/deploy.sh read (never shipped, so it
+# stays as the server has it):
+#
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.lean.yml
+#   ARCHIVE_MODE=off     only while there is no backup bucket yet (env/postgres.env): see postgres below
+#
+# apps/aws/test/ikorexCompose.test.ts checks the sum and that every isolation rule still holds.
+services:
+  web:
+    environment:
+      # Node's heap under the container's limit, so it collects garbage before the limit stops it.
+      NODE_OPTIONS: --max-old-space-size=256
+    mem_limit: 384m
+
+  worker:
+    environment:
+      NODE_OPTIONS: --max-old-space-size=448
+    mem_limit: 576m
+
+  admin:
+    environment:
+      NODE_OPTIONS: --max-old-space-size=256
+    mem_limit: 384m
+
+  postgres:
+    # postgresql.conf is sized for 2 GB; a setting on the command line wins over the file.
+    # archive_mode: "on" sends the write-ahead log to the backup bucket. With no bucket yet it must
+    # be "off", or the log that can't be sent piles up on the disk until it is full.
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - shared_buffers=192MB
+      - -c
+      - effective_cache_size=448MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - archive_mode=${ARCHIVE_MODE:-on}
+    shm_size: 128m
+    mem_limit: 768m
+
+  backup:
+    mem_limit: 192m
+
+  evolution:
+    mem_limit: 448m
+
+  cloudflared:
+    mem_limit: 64m

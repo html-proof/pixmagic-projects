@@ -6,7 +6,7 @@ import { hasFullAccess } from "@app/shared/access";
 import type { AdProvider } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
-import { comparedWith, CompareDates, CompareSelect, CustomDates, DateRangeSelect, type DateRangeState, type Shown } from "@/components/dashboard/DateRange";
+import { comparedWith, CustomDates, DateRangeSelect, type DateRangeState, type Shown } from "@/components/dashboard/DateRange";
 import { fmtDateTime, fmtRange } from "@/components/dashboard/format";
 import type { Overview } from "@/components/dashboard/types";
 import { StoreMetaDiscovery } from "@/components/integrations/MetaDiscovery";
@@ -64,7 +64,7 @@ export function DownloadCsv({ section, query, label = "Download CSV" }: { sectio
 }
 
 /**
- * The page's title and its question: the dates, what they're compared with, and (`actions`) the
+ * The page's title and its question: the dates and (`actions`) the
  * account and a download. Printing (or saving as PDF, from the browser's print dialog) leaves the
  * menus out and says the store and the dates in words instead, as the Shopping Funnel does.
  * `badge` follows the title (the demo's DEMO DATA), `note` the line under it (the demo's disclaimer).
@@ -77,7 +77,6 @@ export function AdvertisingHeader({
   note,
   r,
   shown,
-  current,
   actions,
 }: {
   title: string;
@@ -87,7 +86,6 @@ export function AdvertisingHeader({
   note?: ReactNode;
   r: DateRangeState;
   shown: Shown;
-  current: boolean;
   actions?: ReactNode;
 }) {
   const { store, access, allowed } = useApp();
@@ -109,7 +107,6 @@ export function AdvertisingHeader({
       )}
       <div className="mt-3 flex flex-wrap items-center gap-2 print:hidden">
         <DateRangeSelect r={r} shown={shown} id="ad-dates" label="Dates" size="sm" />
-        <CompareSelect r={r} shown={shown} current={current} id="ad-compare" label="Compare with" size="sm" />
         {actions}
         {(allowed("reports.export") || hasFullAccess(access.role)) && (
           <button type="button" className="btn-secondary h-9 gap-2 px-3 text-sm" onClick={() => window.print()} data-testid="ad-print">
@@ -120,7 +117,6 @@ export function AdvertisingHeader({
       </div>
       <div className="mt-2 flex flex-wrap gap-2 empty:hidden print:hidden">
         <CustomDates r={r} />
-        <CompareDates r={r} />
       </div>
     </div>
   );
