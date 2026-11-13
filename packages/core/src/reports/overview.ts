@@ -21,7 +21,7 @@ import { adsConfigured } from "../adConnections.js";
 import { expensesModule } from "../expenses.js";
 import { latestReconciliation } from "../reconcile.js";
 import { storeSalesCalculation } from "../salesCalculation.js";
-import { declaredScopes, optionalScopesFor } from "../scopes.js";
+import { requiredScopesFor, optionalScopesFor } from "../scopes.js";
 import { shopifyMarketingModule } from "../shopifyMarketing.js";
 import { adsenseModule, adsModule, type AdsFigures } from "./ads.js";
 import { adSourceFacts, adsFromShopifyModule } from "./adsFromShopify.js";
@@ -110,7 +110,7 @@ export async function storeOverview(
   const capabilities = resolveCapabilities(store.grantedScopes, {
     pixelInstalled: store.pixelInstalled,
     optionalScopes: optionalScopesFor(store),
-    declaredScopes: declaredScopes(),
+    declaredScopes: requiredScopesFor(store),
   });
   const enabled = new Set(capabilities.filter((c) => c.enabled && sees(c.id)).map((c) => c.id));
   const modules: Record<string, unknown> = {};

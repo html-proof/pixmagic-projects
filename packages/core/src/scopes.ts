@@ -82,24 +82,41 @@ export function revocableOptionalScopesFor(store: Pick<StoreApp, "shopifyAppKey"
  * typo offers a scope to no app rather than to every app.
  */
 export function appOptionalScopes(): Record<string, string[]> {
-  const raw = env().SHOPIFY_APP_OPTIONAL_SCOPES.trim();
-  if (parsedAppScopes?.raw !== raw) parsedAppScopes = { raw, byApp: parseAppScopes(raw) };
-  return parsedAppScopes.byApp;
+  return appScopesSetting("SHOPIFY_APP_OPTIONAL_SCOPES");
 }
 
+/**
+ * `SHOPIFY_APP_SCOPES` ("pixmagic:read_all_orders") as app key → scopes: the *required* scopes only
+ * some apps declare, on top of `SHOPIFY_SCOPES`. A scope Shopify approves app by app
+ * (`read_all_orders`) reaches each app's stores when that app's toml is released with it, not when
+ * the last app's is. Read as `appOptionalScopes` is, and failing closed the same way.
+ */
+export function appRequiredScopes(): Record<string, string[]> {
+  return appScopesSetting("SHOPIFY_APP_SCOPES");
+}
+
+type AppScopesSetting = "SHOPIFY_APP_OPTIONAL_SCOPES" | "SHOPIFY_APP_SCOPES";
+
 /** Parsed once per value: every request reads it, and a bad entry should be logged once. */
-let parsedAppScopes: { raw: string; byApp: Record<string, string[]> } | undefined;
+const parsedAppScopes: Partial<Record<AppScopesSetting, { raw: string; byApp: Record<string, string[]> }>> = {};
+
+function appScopesSetting(name: AppScopesSetting): Record<string, string[]> {
+  const raw = env()[name].trim();
+  let parsed = parsedAppScopes[name];
+  if (parsed?.raw !== raw) parsed = parsedAppScopes[name] = { raw, byApp: parseAppScopes(raw, name) };
+  return parsed.byApp;
+}
 
 const APP_SCOPES_ENTRY = /^([a-z0-9_]{1,32})\s*:\s*([a-z_]{1,64}(?:\s*,\s*[a-z_]{1,64})*)$/;
 
-function parseAppScopes(raw: string): Record<string, string[]> {
+function parseAppScopes(raw: string, name: AppScopesSetting): Record<string, string[]> {
   const byApp: Record<string, string[]> = {};
   for (const part of raw.split(";")) {
     const entry = part.trim();
     if (!entry) continue;
     const m = APP_SCOPES_ENTRY.exec(entry);
     if (!m) {
-      logger.error({ entry }, "SHOPIFY_APP_OPTIONAL_SCOPES entry is not appKey:scope,scope; ignored");
+      logger.error({ entry }, `${name} entry is not appKey:scope,scope; ignored`);
       continue;
     }
     byApp[m[1]!] = [...new Set([...(byApp[m[1]!] ?? []), ...splitScopes(m[2]!)])];
@@ -108,15 +125,27 @@ function parseAppScopes(raw: string): Record<string, string[]> {
 }
 
 /**
- * The app's declared *required* scopes (`SHOPIFY_SCOPES`, mirroring `scopes` in the toml).
+ * An app's declared *required* scopes, mirroring `scopes` in its toml: `SHOPIFY_SCOPES`, which
+ * every app declares, plus what `appKey`'s own toml adds (`appRequiredScopes`). No key: the common
+ * list.
  *
  * A store can be missing one of these — its install predates the scope, or the grant is stale —
  * and that is the one case reconnecting the store actually fixes, since managed installation then
  * asks for the current declared set. Telling those merchants to wait for Shopify instead would
  * strand them, which is why the dashboard distinguishes the two (`resolveCapabilities`).
  */
-export function declaredScopes(): string[] {
-  return splitScopes(env().SHOPIFY_SCOPES);
+export function declaredScopes(appKey?: string | null): string[] {
+  const common = splitScopes(env().SHOPIFY_SCOPES);
+  const extra = appKey ? (appRequiredScopes()[appKey] ?? []) : [];
+  return [...new Set([...common, ...extra])];
+}
+
+/**
+ * The required scopes one store's app declares: what reconnecting it would grant. The App Store
+ * reviewer's preview store is read as the App Store app, as in `optionalScopesFor`.
+ */
+export function requiredScopesFor(store: StoreApp): string[] {
+  return declaredScopes(previewShops().has(store.shopDomain) ? APP_STORE_APP : store.shopifyAppKey);
 }
 
 const splitScopes = (raw: string): string[] =>

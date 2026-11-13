@@ -5,6 +5,7 @@ import {
   audit,
   buildAuthorizeUrl,
   connectApp,
+  declaredScopes,
   DEFAULT_APP,
   env,
   exchangeCodeForToken,
@@ -385,7 +386,7 @@ export function shopifyConfig(app: ShopifyApp = shopifyApp(DEFAULT_APP)): Shopif
   return {
     apiKey: app.clientId,
     apiSecret: app.clientSecret,
-    scopes: [e.SHOPIFY_SCOPES, e.SHOPIFY_OPTIONAL_SCOPES].filter(Boolean).join(","),
+    scopes: [declaredScopes(app.key).join(","), e.SHOPIFY_OPTIONAL_SCOPES].filter(Boolean).join(","),
     apiVersion: e.SHOPIFY_API_VERSION,
     // Browser-facing callback goes through the web app's /api proxy (same-origin cookies).
     redirectUri: `${e.APP_URL}/api/shopify/callback`,

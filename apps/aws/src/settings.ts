@@ -11,12 +11,18 @@
  */
 export const APP_SETTINGS = {
   "SHOPIFY_API_KEY": "57e9ef75435db908617fdd46099afe0e",
+  "SHOPIFY_SCOPES": "read_orders,read_products",
+  // Required scopes only some apps declare, on top of the line above: "appKey:scope;appKey:scope"
+  // (packages/core/src/scopes.ts appRequiredScopes), each in that app's toml `scopes` too
+  // (appConfig.test.ts), and only once `shopify app deploy` has released that toml.
   // read_all_orders: a store's whole order history, where Shopify otherwise shares the last 60 days.
-  // A store that granted it has its first import read every year back to its first order
-  // (packages/core/src/orderHistory.ts); one connected before keeps its 60 days until someone
-  // reconnects it, which its dashboard offers ("Reconnect to import full history"). Opening the app
-  // from Shopify doesn't ask: the app isn't embedded, and /shopify/launch opens a working store as it is.
-  "SHOPIFY_SCOPES": "read_orders,read_all_orders,read_products",
+  // Shopify approves it app by app (docs/shopify-setup.md, "Full order history"): PixMagic's app since
+  // 2026-11-13 (pixmagic-11); the App Store app's request is under review. A store that granted it has
+  // its first import read every year back to its first order (packages/core/src/orderHistory.ts);
+  // one connected before keeps its 60 days until someone reconnects it, which its dashboard offers
+  // ("Reconnect to import full history"). Opening the app from Shopify doesn't ask: the app isn't
+  // embedded, and /shopify/launch opens a working store as it is.
+  "SHOPIFY_APP_SCOPES": "pixmagic:read_all_orders",
   // NOTE: under Shopify managed installation (use_legacy_install_flow = false) these two settings do
   // NOT decide what merchants are asked to grant - shopify-app/shopify.app.toml does, and only
   // `shopify app deploy` changes it. Clearing this one does not stop Shopify requesting a scope;

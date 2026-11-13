@@ -41,10 +41,10 @@ export default function SupportPage() {
           </Faq>
 
           <Faq q="Why does my dashboard only go back 60 days?">
-            Shopify shares only the last 60 days of orders with an app until the store also grants it full order history. A store
-            connected today grants that as it installs, and its orders are imported back to its first one, newest year first. A store
-            connected earlier keeps its 60 days until you use <em>Reconnect to import full history</em> under the dates on your
-            dashboard: Shopify then asks you to approve the new permission, and the earlier orders are imported.
+            Shopify shares only the last 60 days of orders with an app until the store also grants it full order history, a
+            permission Shopify approves for each app first. The line under the dates on your dashboard says where your store stands.
+            When it shows <em>Reconnect to import full history</em>, use it: Shopify asks you to approve the new permission, and your
+            orders are then imported back to your first one, newest year first.
           </Faq>
 
           <Faq q="My figures don't match another analytics app. Which one is wrong?">
