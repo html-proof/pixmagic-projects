@@ -13,7 +13,6 @@
     "@app/core": "workspace:*",
     "@app/db": "workspace:*",
     "@app/shared": "workspace:*",
-    "aws4fetch": "^1.0.20",
     "hono": "^4.9.0",
     "jose": "^6.1.0",
     "zod": "^4.6.6"

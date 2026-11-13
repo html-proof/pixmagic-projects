@@ -159,12 +159,12 @@ describe("settings", () => {
     expect(() => selfHostSettings(env, tmpdir())).not.toThrow(/secret/);
   });
 
-  it("derives the API address, the commit and Cognito's admin keys", () => {
+  it("derives the API address and the commit", () => {
     const dir = mkdtempSync(join(tmpdir(), "build-"));
     writeFileSync(join(dir, "build.json"), JSON.stringify({ commit: "abc123", builtAt: "2026-11-06T00:00:00Z" }));
-    const env: NodeJS.ProcessEnv = { DATABASE_URL: "a", APP_DATABASE_URL: "b", APP_URL: "https://bizinsights.io/", AWS_ACCESS_KEY_ID: "AKIA1", AWS_SECRET_ACCESS_KEY: "s" };
+    const env: NodeJS.ProcessEnv = { DATABASE_URL: "a", APP_DATABASE_URL: "b", APP_URL: "https://bizinsights.io/" };
     selfHostSettings(env, dir);
-    expect(env).toMatchObject({ APP_URL: "https://bizinsights.io", API_URL: "https://bizinsights.io/api", APP_COMMIT: "abc123", NODE_ENV: "production", COGNITO_ADMIN_ACCESS_KEY_ID: "AKIA1", COGNITO_ADMIN_SECRET_ACCESS_KEY: "s" });
+    expect(env).toMatchObject({ APP_URL: "https://bizinsights.io", API_URL: "https://bizinsights.io/api", APP_COMMIT: "abc123", NODE_ENV: "production" });
   });
 });
 

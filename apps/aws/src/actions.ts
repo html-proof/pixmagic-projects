@@ -8,7 +8,7 @@ import { ensureEvolutionDb } from "./evolutionDb.js";
 import { migrate, tableCounts } from "./migrate.js";
 
 /**
- * The maintenance actions, shared by the AWS cron function (index.ts: { "action": ... } invocations
+ * The maintenance actions, once shared with the AWS cron function ({ "action": ... } invocations
  * from the deploy scripts) and the self-hosted admin command (admin.ts: `admin <action>`). Each
  * deployment supplies its own way to get the jobs' dependencies and to have its settings ready.
  */
@@ -116,10 +116,10 @@ export async function runAction(e: Action, ctx: ActionContext): Promise<unknown>
       await ctx.ready();
       // The owner's login: migrations change tables, which the system role can't.
       const ownerUrl = process.env.OWNER_DATABASE_URL;
-      if (!ownerUrl) throw new Error("OWNER_DATABASE_URL is not set (on AWS: DB_SECRET_ARN / DB_HOST / DB_NAME)");
+      if (!ownerUrl) throw new Error("OWNER_DATABASE_URL is not set (the server's env/owner.env)");
       if (e.action === "counts") return tableCounts(ownerUrl);
       // Without it init.sql would make the system role with its development password.
-      if (process.env.NODE_ENV === "production" && !process.env.SYSTEM_DB_PASSWORD) throw new Error("SYSTEM_DB_PASSWORD is not set (on AWS: SYSTEM_DB_SECRET_ARN, insights/<env>/db-system)");
+      if (process.env.NODE_ENV === "production" && !process.env.SYSTEM_DB_PASSWORD) throw new Error("SYSTEM_DB_PASSWORD is not set (the server's env/owner.env)");
       const result = await migrate({
         databaseUrl: ownerUrl,
         migrationsDir: join(ctx.dir, "migrations"),

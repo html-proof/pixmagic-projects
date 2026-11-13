@@ -216,14 +216,15 @@ the pool until part 2. What still names AWS in the code is in
 
 **Part 2, done 2026-11-13 in AWS:** the Auth stack (the user pool, `auth.bizinsights.io` and its
 record at Cloudflare, the `cognito-email` function and its KMS key) and the IAM user
-`bizinsights-ikorex`. Still to follow in the repository, as its own pull request: `cognito.ts`,
-`migratingAuth.ts`, `infra/aws/cognito.yaml`, the Cognito stand-in of the tests, the SES mailer
-and the copy tools ([AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md#stage-f-removing-the-code)).
+`bizinsights-ikorex`. The repository followed the same day: Cognito's calls (`cognito.ts`),
+`migratingAuth.ts`, `infra/aws/cognito.yaml`, the Cognito emulator of the tests, the SES mailer,
+the copy tools and every `COGNITO_*` and `AWS_*` setting are removed
+([AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md)).
 
 **Part 3, done 2026-11-13** (the backups went to the server's own disk, not to R2): the bucket
 `bizinsights-backups-605411278365`, its IAM user and the passphrase's parameter.
 
-**Last:** both `CDKToolkit` stacks and GuardDuty are deleted (2026-11-13). Open: `node
-scripts/aws-dependency-scan.mjs --none-left` passes once the code above is gone; and the owner
-closes the account in the AWS console as its root user (Account → Close account), which nothing
-in the account now stands in the way of.
+**Last:** both `CDKToolkit` stacks and GuardDuty are deleted (2026-11-13), and `node
+scripts/aws-dependency-scan.mjs --none-left` passes: no file in the repository runs, calls or
+configures AWS, and `pnpm lint` keeps it so. Open: the owner closes the account in the AWS console
+as its root user (Account → Close account), which nothing in the account now stands in the way of.

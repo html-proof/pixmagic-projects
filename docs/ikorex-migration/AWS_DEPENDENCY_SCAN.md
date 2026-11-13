@@ -21,6 +21,23 @@ What counts: AWS's libraries (`aws4fetch`, `@aws-crypto/*`, `aws-cdk-lib`), its 
 settings (`AWS_*`, `COGNITO_*`, `SES_REGION`, `SES_CONFIGURATION_SET`, `*_SECRET_ARN`). A line that is
 only a comment doesn't count. Markdown and `docs/` don't count: they describe AWS, they run nothing.
 
+## Result: none left (2026-11-13)
+
+**0 files, 0 lines.** `node scripts/aws-dependency-scan.mjs --none-left` passes and is part of
+`pnpm lint`, so CI fails a change that brings AWS back. The last group to go was Cognito's:
+
+- `apps/api/src/cognito.ts` kept only the sign-in contract and its errors, as
+  `authContract.ts` (the type names `CognitoAuth`, `CognitoError` and the error names are Cognito's,
+  kept because every route and the app's own sign-in are written in those terms; they call nothing).
+  Its calls to Cognito, `migratingAuth.ts`, their tests and `aws4fetch` are gone.
+- The settings `COGNITO_*` and `AUTH_MODE` are gone: sign-in is always the app's own. The emailed
+  sign-in code's switch is `AUTH_EMAIL_OTP` (was `COGNITO_EMAIL_OTP`); "Continue with Google" is on
+  when `GOOGLE_SIGNIN_CLIENT_ID` and its secret are set.
+- Local development and the browser tests no longer start a Cognito emulator
+  (`infra/cognito-local`, the `cognito` service of `docker-compose.yml`). The browser tests' "Google"
+  is `apps/web/e2e/fake-google.mjs`, which the app reaches through `GOOGLE_SIGNIN_ENDPOINT`, a
+  development-only setting production refuses to start with.
+
 ## Result after the SES mailer and the copy tools were removed (2026-11-13, later)
 
 **28 files, 134 lines**, all of them Cognito: its code in `apps/api`, its settings (`COGNITO_*`), its

@@ -32,10 +32,8 @@ import { staticSite } from "./staticSite.js";
  * Each also answers GET /metrics on METRICS_PORT (9464) for Prometheus, on the internal network only.
  * In place of the AWS services: PostgreSQL holds the jobs, the schedule ticks and the coordinator;
  * large webhook bodies and WhatsApp media are files under BLOB_DIR (a volume both roles mount);
- * settings and secrets come from the environment (Compose's env file), not Secrets Manager. Email
- * goes through Resend; sign-in is the app's own (AUTH_MODE), with Cognito behind it until the AWS
- * account closes. What still reaches AWS uses keys from the environment where AWS used the
- * function's role.
+ * settings and secrets come from the environment (Compose's env file). Email goes through Resend;
+ * sign-in is the app's own (apps/api/src/localAuth.ts). Nothing reaches AWS.
  */
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -58,12 +56,6 @@ export function selfHostSettings(env: NodeJS.ProcessEnv = process.env, dir = her
   const appUrl = env.APP_URL!.replace(/\/+$/, "");
   env.APP_URL = appUrl;
   env.API_URL ??= `${appUrl}/api`;
-  // Cognito's admin calls: on AWS the function's own role makes them (index.ts); here an IAM user's keys.
-  if (!env.COGNITO_ADMIN_ACCESS_KEY_ID && env.AWS_ACCESS_KEY_ID) {
-    env.COGNITO_ADMIN_ACCESS_KEY_ID = env.AWS_ACCESS_KEY_ID;
-    env.COGNITO_ADMIN_SECRET_ACCESS_KEY = env.AWS_SECRET_ACCESS_KEY;
-    env.COGNITO_ADMIN_SESSION_TOKEN = env.AWS_SESSION_TOKEN ?? "";
-  }
 }
 
 /** The pool for the queue, the schedules and the coordinator: the system login, outside @app/db's row scopes. */

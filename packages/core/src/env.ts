@@ -22,7 +22,6 @@ const schema = z.object({
   APP_COMMIT: z.string().optional().default(""),
   APP_BUILT_AT: z.string().optional().default(""),
   APP_ENVIRONMENT: z.string().optional().default(""),
-  AWS_LAMBDA_FUNCTION_VERSION: z.string().optional().default(""),
   SESSION_SECRET: z.string().min(16),
   TOKEN_ENCRYPTION_KEYS: z.string(),
   OTP_PEPPER: z.string().min(8),
@@ -33,21 +32,8 @@ const schema = z.object({
    * before rotating OTP_PEPPER, and the rotation no longer touches them (docs/RUNBOOK.md).
    */
   CUSTOMER_HASH_KEY: z.string().optional().default(""),
-  /**
-   * Sign-in: an Amazon Cognito user pool (docs/cognito-setup.md, infra/aws/cognito.yaml). Empty pool
-   * or client id: every sign-in answers "unavailable". The region defaults to the pool id's prefix.
-   */
-  COGNITO_REGION: z.string().optional().default(""),
-  COGNITO_USER_POOL_ID: z.string().optional().default(""),
-  COGNITO_CLIENT_ID: z.string().optional().default(""),
-  /** The confidential app client's secret (a secret). */
-  COGNITO_CLIENT_SECRET: z.string().optional().default(""),
-  /** The user pool's OAuth domain, https://... (managed login). Needed for Google. */
-  COGNITO_DOMAIN: z.string().optional().default(""),
-  /** Which "Continue with ..." buttons work: Cognito provider names, comma separated (Google). */
-  COGNITO_IDENTITY_PROVIDERS: z.string().optional().default(""),
-  /** "1": passwordless sign-in with a code Cognito emails (needs the Essentials plan and SES email). */
-  COGNITO_EMAIL_OTP: z.string().optional().default(""),
+  /** "1": passwordless sign-in with a code the app emails (the sign-in page then offers it). */
+  AUTH_EMAIL_OTP: z.string().optional().default(""),
   /**
    * "1": a password sign-in also asks for a 6-digit code emailed by the app (apps/api/src/emailCode.ts),
    * for accounts without an authenticator app. Anything else: the password alone signs in.
@@ -65,32 +51,18 @@ const schema = z.object({
    */
   AUTH_CODE_LIMIT_HOURLY: z.string().optional().default(""),
   AUTH_CODE_LIMIT_DAILY: z.string().optional().default(""),
-  /** "1" when the app client has refresh-token rotation on. */
-  COGNITO_REFRESH_ROTATION: z.string().optional().default(""),
-  /** Credentials for the user pool's admin calls (on AWS: the function's own role, set at cold start). */
-  COGNITO_ADMIN_ACCESS_KEY_ID: z.string().optional().default(""),
-  COGNITO_ADMIN_SECRET_ACCESS_KEY: z.string().optional().default(""),
-  /** With temporary credentials (an AWS role, e.g. the Lambda function's on AWS hosting). */
-  COGNITO_ADMIN_SESSION_TOKEN: z.string().optional().default(""),
   /**
-   * Local development only: a Cognito emulator (cognito-local) at this address. Its tokens are
-   * signed with a key published on GitHub, so production refuses to start with it set.
-   */
-  COGNITO_ENDPOINT: z.string().optional().default(""),
-  /**
-   * Who checks sign-ins (docs/ikorex-migration: leaving AWS). "cognito": Amazon Cognito, as before.
-   * "migrating": the app's own sign-in (apps/api/src/localAuth.ts), which moves each Cognito user
-   * over at their next sign-in (migratingAuth.ts) while Cognito still runs. "local": the app's own
-   * only, once Cognito is gone; who never moved signs in again through "Forgot password?" or Google.
-   */
-  AUTH_MODE: z.enum(["cognito", "migrating", "local"]).optional().default("cognito"),
-  /**
-   * Google sign-in on the app's own OAuth client (AUTH_MODE "migrating" or "local"; with "cognito"
-   * Cognito holds Google). Its redirect URI is APP_URL + /auth/callback. Empty: no Google there.
+   * Google sign-in on the app's own OAuth client (apps/api/src/localAuth.ts). Its redirect URI is
+   * APP_URL + /auth/callback. Empty: no "Continue with Google".
    */
   GOOGLE_SIGNIN_CLIENT_ID: z.string().optional().default(""),
-  /** That client's secret (a secret: insights/<env>/app on AWS, where Cognito's Google already reads it). */
+  /** That client's secret (a secret: the server's env/app.env). */
   GOOGLE_SIGNIN_CLIENT_SECRET: z.string().optional().default(""),
+  /**
+   * Development and tests only: a stand-in for Google at this address (apps/web/e2e/fake-google.mjs).
+   * Whoever runs it decides who "signed in", so production refuses to start with it set.
+   */
+  GOOGLE_SIGNIN_ENDPOINT: z.string().optional().default(""),
   SHOPIFY_API_KEY: z.string().default(""),
   SHOPIFY_API_SECRET: z.string().default(""),
   SHOPIFY_SCOPES: z.string().default("read_orders,read_products"),
@@ -279,7 +251,7 @@ const PUBLIC_SECRET_MARKERS = [
 ];
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
 /** Secrets that may be left empty (then another one is used), but never set to a public value. */
-const OPTIONAL_SECRET_VARS = ["COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "GOOGLE_SIGNIN_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS"] as const;
+const OPTIONAL_SECRET_VARS = ["GOOGLE_SIGNIN_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
 export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, "CUSTOMER_HASH_KEY" | (typeof OPTIONAL_SECRET_VARS)[number]>>): string[] {
@@ -300,13 +272,13 @@ const isLocalUrl = (url: string) => {
 
 /**
  * Names (and why) of development-only settings present in a production configuration: each one
- * quietly turns a safeguard off. A Cognito emulator signs tokens with a published key; a Mailpit
- * relay reroutes every email, sign-in codes included; a local APP_URL breaks OAuth callbacks and
- * the Origin check, and is what the emulator bypass keys on.
+ * quietly turns a safeguard off. A stand-in for Google signs in whoever its operator says; a
+ * Mailpit relay reroutes every email, sign-in codes included; a local APP_URL breaks OAuth
+ * callbacks and the Origin check.
  */
-export function developmentSettings(e: Pick<Env, "APP_URL" | "API_URL" | "COGNITO_ENDPOINT" | "MAILPIT_URL">): string[] {
+export function developmentSettings(e: Pick<Env, "APP_URL" | "API_URL" | "GOOGLE_SIGNIN_ENDPOINT" | "MAILPIT_URL">): string[] {
   const found: string[] = [];
-  if (e.COGNITO_ENDPOINT) found.push("COGNITO_ENDPOINT (a local Cognito emulator)");
+  if (e.GOOGLE_SIGNIN_ENDPOINT) found.push("GOOGLE_SIGNIN_ENDPOINT (a stand-in for Google)");
   if (e.MAILPIT_URL) found.push("MAILPIT_URL (a local mail relay)");
   if (isLocalUrl(e.APP_URL)) found.push("APP_URL (a local address)");
   if (isLocalUrl(e.API_URL)) found.push("API_URL (a local address)");

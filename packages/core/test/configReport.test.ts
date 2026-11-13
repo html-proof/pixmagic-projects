@@ -29,12 +29,9 @@ const KEYS = [
   "EVOLUTION_API_URL",
   "EVOLUTION_API_KEY",
   "RESEND_API_KEY",
-  "COGNITO_USER_POOL_ID",
-  "COGNITO_CLIENT_ID",
-  "COGNITO_CLIENT_SECRET",
-  "COGNITO_DOMAIN",
-  "COGNITO_IDENTITY_PROVIDERS",
-  "COGNITO_EMAIL_OTP",
+  "GOOGLE_SIGNIN_CLIENT_ID",
+  "GOOGLE_SIGNIN_CLIENT_SECRET",
+  "AUTH_EMAIL_OTP",
   "ZAPIER_CLIENT_ID",
   "ZAPIER_CLIENT_SECRET",
   "ZAPIER_REDIRECT_URI",
@@ -86,11 +83,8 @@ const EVERYTHING = {
   EVOLUTION_API_URL: "http://evolution-a.internal-test:8080",
   EVOLUTION_API_KEY: "secret-evolution-4545454545",
   RESEND_API_KEY: "re_secret_resend_7878",
-  COGNITO_USER_POOL_ID: "ap-southeast-2_public9090",
-  COGNITO_CLIENT_ID: "public-cognito-client-1313",
-  COGNITO_CLIENT_SECRET: "secret-cognito-2424",
-  COGNITO_DOMAIN: "https://auth.example.test",
-  COGNITO_IDENTITY_PROVIDERS: "Google",
+  GOOGLE_SIGNIN_CLIENT_ID: "public-google-signin-1313.apps.googleusercontent.com",
+  GOOGLE_SIGNIN_CLIENT_SECRET: "secret-google-signin-2424",
   ZAPIER_CLIENT_ID: "public-zapier-client-6767",
   ZAPIER_CLIENT_SECRET: "secret-zapier-client-8989",
   ZAPIER_REDIRECT_URI: "https://zapier.com/dashboard/auth/oauth/return/App4242CLIAPI/",
@@ -181,12 +175,12 @@ describe("which provider has its public id but not its secret", () => {
 
 describe("the configuration report", () => {
   it("says what is set up, as booleans", () => {
-    setEnv({ ...EVERYTHING, META_ADS_ADVANCED_ACCESS: "", GOOGLE_ADS_OAUTH_VERIFIED: "1", COGNITO_EMAIL_OTP: "" });
+    setEnv({ ...EVERYTHING, META_ADS_ADVANCED_ACCESS: "", GOOGLE_ADS_OAUTH_VERIFIED: "1", AUTH_EMAIL_OTP: "" });
     const r = configReport();
     expect(r.ads).toEqual({ configured: { meta: true, google: true, adsense: true }, restricted: { meta: true, google: false, adsense: false } });
     expect(r.whatsapp).toEqual({ evolution: true, evolutionNeeds: [], embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
     expect(r.email).toEqual({ resend: true });
-    expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
+    expect(r.auth).toEqual({ google: true, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
     expect(r.zapier).toEqual({ configured: true, inviteUrl: false });
     expect(r.halfConfigured).toEqual([]);
   });
@@ -195,7 +189,7 @@ describe("the configuration report", () => {
     setEnv(EVERYTHING);
     const text = JSON.stringify(configReport());
     for (const [name, value] of Object.entries(EVERYTHING)) {
-      if (name === "SHOPIFY_EXTRA_APPS" || name === "GOOGLE_ADS_ENABLED" || name === "COGNITO_IDENTITY_PROVIDERS") continue;
+      if (name === "SHOPIFY_EXTRA_APPS" || name === "GOOGLE_ADS_ENABLED") continue;
       expect(text, name).not.toContain(value);
     }
     for (const id of ["bb0ea9e4ad8939a6a1513e4dbf8cbbf1", "cf5c717dba9317707e0cd5f5d3408fd0"]) expect(text).not.toContain(id);
@@ -242,13 +236,13 @@ describe("the configuration report", () => {
     }
   });
 
-  it("counts Google sign-in only with the pool's domain and Google among its providers", () => {
-    setEnv({ COGNITO_IDENTITY_PROVIDERS: "Google" });
+  it("counts Google sign-in only with the app's own client and its secret", () => {
+    setEnv({ GOOGLE_SIGNIN_CLIENT_ID: "public-google-signin-1313.apps.googleusercontent.com" });
     expect(configReport().auth.google).toBe(false);
-    setEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: " Google ,Facebook" });
+    setEnv({ GOOGLE_SIGNIN_CLIENT_ID: "public-google-signin-1313.apps.googleusercontent.com", GOOGLE_SIGNIN_CLIENT_SECRET: "secret-google-signin-2424" });
     expect(configReport().auth.google).toBe(true);
-    setEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "" });
-    expect(configReport().auth).toEqual({ cognito: false, google: false, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
+    setEnv({});
+    expect(configReport().auth).toEqual({ google: false, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
   });
 });
 

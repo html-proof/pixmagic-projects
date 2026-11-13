@@ -1,31 +1,27 @@
-import { resolve } from "node:path";
 import { defineConfig } from "@playwright/test";
 
 /**
  * E2E runs the real app on the local server (apps/aws/src/local.ts: static UI + API + jobs)
- * against its own Cognito emulator (started here, empty every run), a stand-in for the user pool's
- * managed login (e2e/fake-managed-login.mjs: "Continue with Google"), a stand-in for Evolution API
+ * with the app's own sign-in, a stand-in for Google (e2e/fake-google.mjs: "Continue with Google",
+ * started here), a stand-in for Evolution API
  * (e2e/evolution-stub.mjs: WhatsApp Automation's provider), Mailpit and a dedicated app_e2e database
  * (docker compose up -d postgres mailpit first).
  *
  * Ports default to the docker compose stack. Override them to run e2e beside a local demo, which
  * uses the same server port and Mailpit: global setup wipes every Mailpit message.
- *   E2E_PORT (8789), E2E_COGNITO_PORT (9249), E2E_LOGIN_PORT (9259), E2E_EVOLUTION_PORT (9269),
+ *   E2E_PORT (8789), E2E_LOGIN_PORT (9259), E2E_EVOLUTION_PORT (9269),
  *   E2E_MAILPIT_URL (http://localhost:8025)
  */
 export const E2E_PORT = Number(process.env.E2E_PORT ?? 8789);
 export const E2E_BASE_URL = `http://localhost:${E2E_PORT}`;
-export const E2E_COGNITO_PORT = Number(process.env.E2E_COGNITO_PORT ?? 9249);
 export const E2E_LOGIN_PORT = Number(process.env.E2E_LOGIN_PORT ?? 9259);
 /** The Evolution API stand-in; e2e/whatsapp.spec.ts plays the phone and WhatsApp through its /__control. */
 export const E2E_EVOLUTION_PORT = Number(process.env.E2E_EVOLUTION_PORT ?? 9269);
 export const E2E_EVOLUTION_URL = `http://127.0.0.1:${E2E_EVOLUTION_PORT}`;
-/** The emulator's working directory (its database: codes it "emails" are read from there). */
-export const E2E_COGNITO_DATA = resolve(import.meta.dirname, ".e2e/cognito");
 export const E2E_MAILPIT_URL = process.env.E2E_MAILPIT_URL ?? "http://localhost:8025";
-const COGNITO_ENDPOINT = `http://127.0.0.1:${E2E_COGNITO_PORT}`;
-/** The emulator's app client (infra/cognito-local/seed, test-only secret). */
-export const CLIENT = { id: "insightslocalwebclient00", secret: "insights-local-client-secret" };
+/** The stand-in for Google, and the OAuth client the app's own sign-in uses with it (test-only secret). */
+const GOOGLE_ENDPOINT = `http://127.0.0.1:${E2E_LOGIN_PORT}`;
+const GOOGLE_CLIENT = { id: "e2e-google-client.apps.googleusercontent.com", secret: "e2e-google-client-secret" };
 
 // TEST_PG_PORT points e2e at another Postgres server (e.g. a throwaway container); default 5434.
 const PG_PORT = process.env.TEST_PG_PORT ?? "5434";
@@ -77,15 +73,8 @@ export default defineConfig({
   use: { baseURL: E2E_BASE_URL, trace: "retain-on-failure" },
   webServer: [
     {
-      // The Cognito emulator, from the seed (no users) every run.
-      command: `node ../../infra/cognito-local/start.mjs --port ${E2E_COGNITO_PORT} --data "${E2E_COGNITO_DATA}" --fresh`,
-      port: E2E_COGNITO_PORT,
-      reuseExistingServer: false,
-      timeout: 180_000,
-    },
-    {
-      // Google, as far as the app can tell (the user pool's managed login domain).
-      command: `node e2e/fake-managed-login.mjs ${E2E_LOGIN_PORT} ${COGNITO_ENDPOINT}/local_insights ${CLIENT.id} ${CLIENT.secret}`,
+      // Google, as far as the app can tell (GOOGLE_SIGNIN_ENDPOINT below).
+      command: `node e2e/fake-google.mjs ${E2E_LOGIN_PORT} ${GOOGLE_CLIENT.id} ${GOOGLE_CLIENT.secret}`,
       port: E2E_LOGIN_PORT,
       reuseExistingServer: false,
       timeout: 30_000,
@@ -111,9 +100,9 @@ export default defineConfig({
         APP_URL: E2E_BASE_URL,
         API_URL: `${E2E_BASE_URL}/api`,
         MAILPIT_URL: E2E_MAILPIT_URL,
-        COGNITO_ENDPOINT,
-        COGNITO_DOMAIN: `http://127.0.0.1:${E2E_LOGIN_PORT}`,
-        COGNITO_IDENTITY_PROVIDERS: "Google",
+        GOOGLE_SIGNIN_CLIENT_ID: GOOGLE_CLIENT.id,
+        GOOGLE_SIGNIN_CLIENT_SECRET: GOOGLE_CLIENT.secret,
+        GOOGLE_SIGNIN_ENDPOINT: GOOGLE_ENDPOINT,
         EVOLUTION_API_URL: E2E_EVOLUTION_URL,
       },
       reuseExistingServer: false,

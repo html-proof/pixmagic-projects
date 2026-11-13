@@ -3,7 +3,7 @@ import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { env, keyring } from "@app/core";
 import { decrypt, encrypt, safeEqual } from "@app/shared";
-import type { SignInMethod } from "./cognito.js";
+import type { SignInMethod } from "./authContract.js";
 
 /**
  * Our session: an httpOnly cookie we sign ourselves, issued once Cognito's tokens have been

@@ -1,9 +1,7 @@
 import { createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import type pg from "pg";
-import { E2E_BASE_URL, E2E_COGNITO_DATA, E2E_COGNITO_PORT, E2E_MAILPIT_URL } from "../playwright.config";
+import { E2E_BASE_URL, E2E_MAILPIT_URL } from "../playwright.config";
 
 export const uniqueEmail = (p: string) => `${p}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
 
@@ -15,23 +13,12 @@ const CODE_SUBJECT = { confirm: /verification code/i, verify: /verification code
 
 /**
  * The newest code emailed to an address: a sign-up's ("confirm"), an address check's ("verify") or a
- * password reset's ("reset"). Who sends it follows AUTH_MODE (apps/aws/src/settings.ts, which the
- * e2e server starts from): the app's own sign-in emails it through the mailer, read here from the
- * mail stand-in; the Cognito emulator keeps it in its database instead, written a moment after it
- * answers. `after`: the id of a code email that came before (newestMailId), never the one wanted.
+ * password reset's ("reset"). The app's own sign-in emails it through the mailer, read here from
+ * the mail stand-in. `after`: the id of a code email that came before (newestMailId), never the
+ * one wanted.
  */
 export async function latestCode(email: string, kind: keyof typeof CODE_SUBJECT = "confirm", after: string | null = null): Promise<string> {
   for (let i = 0; i < 150; i++) {
-    try {
-      const pool = JSON.parse(readFileSync(join(E2E_COGNITO_DATA, ".cognito/db/local_insights.json"), "utf8")) as {
-        Users: Record<string, { Attributes: Array<{ Name: string; Value: string }>; ConfirmationCode?: string; AttributeVerificationCode?: string }>;
-      };
-      const u = Object.values(pool.Users).find((x) => x.Attributes.some((a) => a.Name === "email" && a.Value === email.toLowerCase()));
-      const code = kind === "verify" ? u?.AttributeVerificationCode : u?.ConfirmationCode;
-      if (code) return code;
-    } catch {
-      /* mid-write: try again */
-    }
     const newest = (await mailTo(email)).find((m) => CODE_SUBJECT[kind].test(m.Subject));
     if (newest && newest.ID !== after) {
       const full = (await (await fetch(`${E2E_MAILPIT_URL}/api/v1/message/${newest.ID}`)).json()) as { Text?: string };
@@ -41,36 +28,6 @@ export async function latestCode(email: string, kind: keyof typeof CODE_SUBJECT 
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error(`no ${kind} code for ${email}`);
-}
-
-/**
- * Cognito marks a sign-up's address verified when its emailed code is confirmed; the emulator
- * doesn't. Mark it verified in the emulator first, so confirming leaves the account as Cognito would.
- * An account of the app's own sign-in isn't in the emulator, and its code verifies the address.
- */
-export async function verifiedOnConfirm(email: string) {
-  const res = await fetch(`http://127.0.0.1:${E2E_COGNITO_PORT}/`, {
-    method: "POST",
-    headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AWSCognitoIdentityProviderService.AdminUpdateUserAttributes" },
-    body: JSON.stringify({ UserPoolId: "local_insights", Username: email, UserAttributes: [{ Name: "email", Value: email.toLowerCase() }, { Name: "email_verified", Value: "true" }] }),
-  });
-  const text = await res.text();
-  // The emulator answers an address it doesn't have with "User not authorized".
-  if (!res.ok && /UserNotFoundException|User not authorized/.test(text)) return;
-  expect(res.ok, text).toBe(true);
-}
-
-/**
- * Two-step verification (an authenticator app) in the emulator's pool: optional, as in
- * production, so accounts without it sign in as before. The seed has it off.
- */
-export async function poolMfa(on: boolean) {
-  const res = await fetch(`http://127.0.0.1:${E2E_COGNITO_PORT}/`, {
-    method: "POST",
-    headers: { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AWSCognitoIdentityProviderService.SetUserPoolMfaConfig" },
-    body: JSON.stringify({ UserPoolId: "local_insights", MfaConfiguration: on ? "OPTIONAL" : "OFF", SoftwareTokenMfaConfiguration: { Enabled: on } }),
-  });
-  expect(res.ok, await res.text()).toBe(true);
 }
 
 /** What an authenticator app shows now for a base32 key (RFC 6238: HMAC-SHA1, 6 digits, 30 seconds). */
@@ -113,7 +70,7 @@ export async function newestMailId(email: string, subject = /verification code/i
 
 /**
  * The 6-digit code in the newest email the app itself sent to `email` (the code after the
- * password: the app's own, through the mailer, unlike Cognito's sign-up codes in the emulator).
+ * password: the app's own, through the mailer).
  * `after`: wait for one newer than this id (newestMailId before the action that sends it).
  */
 export async function latestMailCode(email: string, after: string | null = null, subject = /verification code/i): Promise<string> {
@@ -198,16 +155,15 @@ export async function fillSignUp(page: Page, email: string, password = PASSWORD,
   await page.getByLabel(/I agree to the Terms/).check();
 }
 
-/** Send the create-account form already filled in, and confirm the code Cognito "emailed". */
+/** Send the create-account form already filled in, and confirm the emailed code. */
 export async function confirmSignUp(page: Page, email: string) {
   await page.getByRole("button", { name: "Create Account" }).click();
   await expect(page.getByRole("heading", { name: "Verify your email" })).toBeVisible();
-  await verifiedOnConfirm(email);
   await fillCode(page, await latestCode(email));
 }
 
 /**
- * Create an account with email and password and confirm the code Cognito sent, which signs it in:
+ * Create an account with email and password and confirm the emailed code, which signs it in:
  * a new account lands on onboarding (connect a store), verified.
  */
 export async function signUp(page: Page, email: string) {

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEnvCache } from "@app/core";
 import { systemDb } from "@app/db";
-import { CognitoError } from "../src/cognito.js";
+import { CognitoError } from "../src/authContract.js";
 import { newLinkSession, signSession } from "../src/session.js";
 import { clean, cookiesFrom, createWorkspace, deletionCode, ORIGIN, setup, signIn, teardown, testBrowser, type TestCtx } from "./helpers.js";
 
@@ -16,7 +16,7 @@ beforeAll(async () => (ctx = await setup()));
 afterAll(async () => teardown(ctx));
 beforeEach(async () => {
   await clean(ctx);
-  restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "Google" });
+  restore = withEnv({ GOOGLE_SIGNIN_CLIENT_ID: "test-google-client", GOOGLE_SIGNIN_CLIENT_SECRET: "test-google-secret" });
 });
 afterEach(() => {
   restore();
@@ -77,7 +77,7 @@ describe("GET /auth/account", () => {
     expect((await browser.get("/auth/account")).json()).toMatchObject({ canLinkGoogle: false, methods: [{ method: "password" }, { method: "google", email: "a.other@gmail.com" }] });
     // Google switched off for the deployment: nothing to link.
     restore();
-    restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "" });
+    restore = withEnv({ GOOGLE_SIGNIN_CLIENT_ID: "", GOOGLE_SIGNIN_CLIENT_SECRET: "" });
     const other = testBrowser(ctx);
     await other.signIn("u2", "b@x.com");
     expect((await other.get("/auth/account")).json().canLinkGoogle).toBe(false);
@@ -318,7 +318,7 @@ describe("linking Google from Settings", () => {
 
   it("refuses a start while Google is off", async () => {
     restore();
-    restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "" });
+    restore = withEnv({ GOOGLE_SIGNIN_CLIENT_ID: "", GOOGLE_SIGNIN_CLIENT_SECRET: "" });
     const browser = testBrowser(ctx);
     await browser.signIn("u1", "owner@shop.com");
     const res = await startLink(browser);

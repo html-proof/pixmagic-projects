@@ -1,6 +1,6 @@
 // Local advertising demo: the real app (UI + API + jobs, on the local server) on http://localhost:8789,
 // on its own database `ads_demo` in a throwaway Postgres (127.0.0.1:5451), never `app` or `app_demo`.
-// Uses the Cognito emulator (docker compose up -d cognito) and Mailpit from docker compose. Build its UI first:
+// Sign-in is the app's own; codes go to Mailpit from docker compose. Build its UI first:
 //   NEXT_EXPORT_DIR=out-adsdemo pnpm --filter @app/web build   (the UI needs no sign-in settings)
 // Google Ads, AdSense and Meta Ads are switched on with bizinsights' real PUBLIC ids (the Google client
 // "Insights web" and the Meta Ads app, as in apps/aws/src/settings.ts) and placeholder secrets, so the
@@ -16,7 +16,6 @@ startLocalServer({
   assets: "apps/web/out-adsdemo",
   db: process.env.ADS_DEMO_PG ?? "localhost:5451/ads_demo",
   env: {
-    COGNITO_ENDPOINT: "http://127.0.0.1:9229",
     GOOGLE_ADS_CLIENT_ID: "534794119904-9esdp8dhskcupf6ekbb0iej2dr10gomf.apps.googleusercontent.com",
     GOOGLE_ADS_CLIENT_SECRET: "placeholder-not-a-secret",
     // The Meta Ads app "Insights" (its Facebook Login for Business configuration, META_CONFIG_ID, is in

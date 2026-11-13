@@ -2,7 +2,7 @@ import { systemDb, type AuthIdentity, type Tx, type User } from "@app/db";
 import { env, logger, type Mailer } from "@app/core";
 import { revokeZapierGrants } from "@app/core/zapier";
 import { maskEmail } from "@app/shared/email";
-import type { CognitoAuth, IdentityClaims, SignInMethod } from "./cognito.js";
+import type { CognitoAuth, IdentityClaims, SignInMethod } from "./authContract.js";
 import { HttpError } from "./context.js";
 
 /** Account-level security events (auth_events). Best effort: never fails what it records. */
