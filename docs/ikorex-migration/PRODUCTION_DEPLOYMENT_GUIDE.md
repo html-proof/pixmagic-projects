@@ -342,26 +342,12 @@ Then `docker compose up -d`, and check with `admin counts` and `/api/readyz`.
 
 ## Copying the database from RDS
 
-From the owner's PC, signed in to AWS (`aws login`), with the SSH key ([DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md)
-says what each step does and checks):
-
-```powershell
-node infra/ikorex/scripts/copy-db.mjs --rehearsal
-```
-
-The rehearsal (stage B) restores both databases into throwaway ones on the staging project's
-PostgreSQL, compares them table by table with the snapshot it dumped, and drops them; AWS is only
-read. In the cutover window, after cutover step 2 (schedules off, webhooks answered 503, queues
-drained), the real copy replaces the server's `app` and `evolution`:
-
-```powershell
-node infra/ikorex/scripts/copy-db.mjs --cutover --replace
-```
-
-It refuses while any AWS queue but the dead-letter queue holds a message, stops `web`, `worker` and
-`evolution` on the server, and ends with `admin migrate` and the comparison again. Exit 1 means a
-difference: the cutover stops there (ROLLBACK_PLAN.md). The report (counts only) is saved in
-`C:\Users\Seban\insights-backups`; the dumps are deleted from the bucket.
+Done once, at the cutover on 2026-11-13, and not possible again: RDS is deleted
+([LEAVING_AWS.md](LEAVING_AWS.md)). The tools that did it (`copy-db.mjs`, `copy-db-back.mjs`,
+`copy-db.sh`, `export-env.mjs`) left the repository afterwards and are in Git's history (last
+commit: `b0f7e7bf`); how the copy was made and checked is in
+[DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md). The last dump of RDS is on the
+server, `~/bizinsights-archive/rds-final-20261113/`.
 
 ## The cutover and the rollback period
 

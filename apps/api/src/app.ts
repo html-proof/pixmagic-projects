@@ -172,8 +172,8 @@ export function buildApp(deps: Deps): App {
 
   app.get("/healthz", (c) => c.json({ ok: true }));
   /**
-   * Which release answers at this address, so a deploy can be checked from outside (smoke.mjs):
-   * the package's commit and build time, the environment, and the Lambda version serving it.
+   * Which release answers at this address, so a deploy can be checked from outside (deploy.sh,
+   * the Deploy to iKorex workflow): the build's commit and time, and the environment.
    * Nothing secret: no settings, hosts or account details.
    */
   app.get("/version", (c) => {
@@ -183,7 +183,6 @@ export function buildApp(deps: Deps): App {
       environment: e.APP_ENVIRONMENT || e.NODE_ENV,
       commit: e.APP_COMMIT || null,
       builtAt: e.APP_BUILT_AT || null,
-      release: e.AWS_LAMBDA_FUNCTION_VERSION || null,
     });
   });
   /**

@@ -1,6 +1,6 @@
 # Shell scripts run on Linux (CI): never CRLF.
 *.sh text eol=lf
-# Read by OpenSSH (ship.sh, copy-db.mjs): one key per line, never CRLF.
+# Read by OpenSSH (ship.sh): one key per line, never CRLF.
 infra/ikorex/known_hosts text eol=lf
 # Everything under infra/ikorex runs on the Linux server, and ship.sh sends the working copy as it
 # is: a CRLF from a Windows checkout would end up inside env files, PostgreSQL's and pgBackRest's

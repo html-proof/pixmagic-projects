@@ -62,7 +62,7 @@ pack() {
 }
 
 # Only to the pinned host key (infra/ikorex/known_hosts: the fingerprint in the administrator's
-# guide, which copy-db-lib.test.mjs checks).
+# guide, which host-key.test.mjs checks).
 remote() {
   local ssh="${SHIP_SSH:-ssh}" known config=()
   known="$(cd "$here/.." && pwd)/known_hosts"
