@@ -305,10 +305,9 @@ its own, by name (default name "Custom business revenue").
   breakdown" below), in the overview report's key figures and as its own column in the Sales
   download, each time named. Without `finance.breakdown` a member gets neither the lines (for the
   range, each day or each month of the year) nor the calculation.
-- **Comparisons**: the answer carries the lines for the period before too (`previous`; `null` when
-  it isn't imported, as every sales figure), and the pages show no change on it. Each month of the
-  year carries its lines and those of the dates it is compared with (`comparedLines`), so the answer
-  can give a month's Custom sales its own change on the month before; the pages show none.
+- **No comparison with the period before**: the answer carries the lines for the dates and for each
+  month of the year, and nothing for the period before them (removed 2026-11-13: neither read from
+  the database nor sent).
 
 ## Sales breakdown (Sales section)
 
@@ -324,7 +323,7 @@ Reference implementation: `packages/shared/src/sales.ts`.
 **Month by month** (this calendar year in the store's time zone, whatever dates are picked):
 
 - Net sales, orders and average order value per month, January to the current month.
-- **Change** (in the answer only; the pages show no change on a month since 2026-11-13, removed at the owner's request): on the month before (January on December). The current month is compared with the same days of the month before (1–9 Oct with 1–9 Sep), never with the whole month.
+- **No change on the month before**: a month carries its own figures only (the change, the dates it was compared with and their lines were removed on 2026-11-13, at the owner's request).
 - **Average month**: over finished months that were fully imported.
 
 **Custom sales.** While the store shows its Custom sales on the dashboard, both cards measure it
@@ -362,9 +361,7 @@ breakdown, the check against Shopify, gross profit, returns, sales by day and by
     discounts − net where an older answer lacks it.
   - **Sales by day** (`SalesByDay.tsx`): total sales (net without the breakdown) each day of the
     dates as dark green bars, today's paler with "today so far" over it. No axis: hovering, the
-    arrow keys and a table for screen readers give each day's figure. The answer also carries the
-    period before day by day (`sales_overview.previousSeries`: each day's net and total sales, null
-    when those dates weren't imported), which the chart doesn't draw. Under it:
+    arrow keys and a table for screen readers give each day's figure. Under it:
     - **Best day**: the day with the highest total sales (net without the breakdown).
     - **Best weekday**: the weekday whose days add up to the most, in the store's time zone.
     - **Average day**: the dates' total ÷ their days, today included (so far).
@@ -982,9 +979,8 @@ The owner's own profit and loss workbook (EEq.xlsx, a "Dashboard" sheet with a c
 "Add Cost" sheet) as a page: any dates (the dashboard's dates menu:
 today, yesterday, this week, this month, last month, this year, last year, custom), a column per day, week, month or year (at most `MAX_STATEMENT_COLUMNS`, 62;
 coarser when the dates need more). Every figure is `profitAndLoss`'s
-(`packages/shared/src/profit.ts`), worked out on the server; the page formats it. The answer also
-carries the statement of the period before the dates (`compare`, with its dates in `previous`),
-which the page doesn't show.
+(`packages/shared/src/profit.ts`), worked out on the server; the page formats it. The answer is the
+dates' own statement: nothing of the period before them is read or sent.
 
 **Layout (the owner's design, 2026-11-13).** One page for the profit and loss and the Profit sheet.
 The header has the dates, Daily / Weekly / Monthly / Yearly (`?grain=`: the charts' periods, the
@@ -1118,7 +1114,7 @@ amount). Saved with `PUT …/expenses/settings` `{ operatingWeekdays }` (audited
 | Figure | Formula | Notes |
 | --- | --- | --- |
 | A cost over the dates | once: the amount, on its day; daily, weekly, fortnightly: each payment spread over the days it pays for (a weekly one a seventh a day); monthly, quarterly, six-monthly, yearly: per calendar month (quarter, half year, year), the payment due in it × its days in the dates ÷ the period's days (366 days in a leap year); a percentage or an amount per order or item: each day's own, from its sales. With open days: the open days in the dates ÷ the period's open days | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length; a payment recorded with another amount counts in its own period, a skipped one (or one due while paused) counts nothing. Rounded to the cent once per cost and run of consecutive days |
-| Your costs | Σ of every cost over the dates, by category | The answer carries their total over the period before too (`previous`; whole days: a cost has no time of day) |
+| Your costs | Σ of every cost over the dates, by category | Whole days: a cost has no time of day |
 | Revenue (for net profit) | net sales + shipping + additional fees: total sales less taxes and duties | What the store kept from its sales; taxes and duties are collected for governments |
 | **Net profit** | revenue − product costs (Shopify's cost of goods sold, or the items sold at their cost per item) − the connected ad accounts' spend − your costs | Given only when every input is known (below) |
 
@@ -1156,16 +1152,16 @@ customer data approval, docs/shopify-setup.md) instead of estimating:
 | Gross profit | `FROM sales SHOW gross_profit` | Net sales − cost of goods sold, from the cost Shopify recorded with each sale. Sales with no cost recorded count at no cost in Shopify's figure, so the card shows how much (`net_sales_without_cost_recorded`) and the margin on the sales whose cost is known; with none recorded, cost of goods sold reads "Not recorded in Shopify". Not net profit: beside it the card gives Business profit overview's net profit for the same dates, or why there is none in its words |
 | The check | `FROM sales SHOW gross_sales, discounts, sales_reversals, net_sales, shipping_charges, duties, additional_fees, taxes, total_sales, orders` | Our figures for exactly the same window, line by line, to the cent: both add up Shopify's sales records. Shopify's sign for discounts and reversals is read off its own identity (net = gross − discounts − reversals) |
 
-- **Windows**: the dashboard's range and its comparison, in the store's time zone. While the range
-  runs both stop at the last 5-minute mark (today up to 4:40 pm against yesterday up to 4:40 pm),
-  so one answer serves every poll until the next mark.
+- **Window**: the dashboard's range, in the store's time zone. While the range runs it stops at the
+  last 5-minute mark (today up to 4:40 pm), so one answer serves every poll until the next mark.
+  Shopify isn't asked about the period before the dates.
 - **Kept, not waited for**: answers are kept per store, dataset and window (`shopify_reports`); the
   dashboard asks the worker for missing or stale ones and fills in on a later poll. Stale: running
   windows after 10 minutes, the last two days after 30, older ones after 6 hours; a failed call
   after 10 minutes (the last figures stay shown), a refusal after 6 hours. Kept 14 days.
 - **No figures, no numbers**: when Shopify refuses (no access, a report this plan can't run) or
-  hasn't answered yet, the card says so. A period before bizinsights' imported history still has
-  its figures in the answer's `previous`: Shopify's reports have the whole history.
+  hasn't answered yet, the card says so. Dates from before bizinsights' imported history still have
+  their figures: Shopify's reports have the whole history.
 - **The check's states**: match; differs; catching up (changes from Shopify are still being
   counted here, or our data is older than Shopify's answer); not reported.
 - **Reconciliation report**: the same check for today, yesterday, the last 7/30/90 days, this month
@@ -1201,8 +1197,7 @@ Limits, each shown in words, never as 0:
   in the last 60 days ("For older orders, add `read_all_orders`", shopify.dev access scopes).
   Without `read_all_orders` (no bizinsights app asks for it yet) a window starting before the
   store's today − 59 days is never asked for: the card says Shopify shares the last 60 days of
-  checkouts and from which day, and a period before that old has no figures in the answer
-  (`previousStatus` `beyond_history`). With `read_all_orders`
+  checkouts and from which day (`status` `beyond_history`). With `read_all_orders`
   older windows are asked for; how long Shopify keeps abandoned checkouts isn't documented
   (community posts say about three months), so figures for old dates deserve care.
 - **Approval.** Abandoned checkouts are protected customer data (Shopify's "Orders" category);
@@ -1214,8 +1209,8 @@ Limits, each shown in words, never as 0:
   than that, prices in more than one currency, or a price Shopify withheld, the card says why
   instead of a value, and the day-by-day chart is left out.
 - **Kept, not waited for.** Kept in `shopify_reports` (dataset `abandoned_checkouts`) like the
-  reports above: the same windows (5-minute marks while the range runs, the range and its
-  comparison cut at the same one), the same staleness and 14 days' keep. The worker asks only
+  reports above: the same window (5-minute marks while the range runs), the same staleness and
+  14 days' keep. The worker asks only
   stores that granted `read_orders` (`REPORT_SCOPE`).
 - **Search lag.** Shopify's search can lag a moment behind a checkout; the chart is added up from
   the list, the totals are Shopify's counts.

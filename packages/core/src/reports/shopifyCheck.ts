@@ -134,8 +134,7 @@ export async function shopifyCheckReport(
 
   const out: CheckReportPeriod[] = [];
   for (const preset of periods) {
-    const { range, previous } = resolvePreset(preset, now, store.timezone);
-    const until = previous.until ?? null;
+    const { range, until = null } = resolvePreset(preset, now, store.timezone);
     const window: ReportWindow = { from: range.from, to: range.to, ...(until ? { until } : {}) };
     const { ourRows, tracked } = await reads(async (tx) => ({
       ourRows: until ? await comparisonRows(tx, store.workspaceId, store.id, { ...range, until }, store.timezone) : await dailyRows(tx, store.workspaceId, store.id, range),

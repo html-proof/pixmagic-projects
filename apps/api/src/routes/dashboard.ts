@@ -174,7 +174,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       const now = new Date();
       const limits = await storeLimits(tx, { ws, storeId }, store);
       const dates = resolveQueryDates(q.dateFrom && q.dateTo ? { ...q, preset: "custom", from: q.dateFrom, to: q.dateTo } : q, now, store.timezone, limits);
-      return productPerformance(tx, { ws, storeId }, store, dates.range, q, now);
+      return productPerformance(tx, { ws, storeId }, store, dates.range, q);
     }));
   });
   app.get("/workspaces/:ws/stores", async (c) => {
@@ -236,8 +236,8 @@ export function dashboardRoutes(app: App, deps: Deps) {
         // of the week before, which the same days picked by hand are not.
         preset: q.preset,
         range: dates.range,
-        // What the range is compared with (the period just before), and whether the imported orders reach back to it.
-        previous: { ...dates.previous, imported: report.previousImported },
+        // What the range is compared with (the period just before).
+        previous: dates.previous,
         today: report.today,
         // When the numbers last matched Shopify, and any changes still waiting (dataFreshness in core).
         freshness: report.freshness,

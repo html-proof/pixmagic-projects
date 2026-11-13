@@ -10,7 +10,7 @@ import { datesQuery, resolveQueryDates } from "./dashboard.js";
 const query = z.object(datesQuery);
 
 /**
- * Shopify's own abandoned checkouts for the dashboard's dates and what they are compared with
+ * Shopify's own abandoned checkouts for the dashboard's dates
  * (core reports/abandonedCheckouts.ts): how many, their value, how many were recovered. The
  * Shopping Funnel page polls it.
  *
@@ -35,7 +35,7 @@ export function checkoutRoutes(app: App, deps: Deps) {
       const answer = await abandonedCheckoutsModule(tx, store, dates, { today: localDay(now, store.timezone), now });
       polled = store;
       refresh = answer.refresh;
-      return { range: dates.range, previous: dates.previous, module: answer.module };
+      return { range: dates.range, module: answer.module };
     });
     // What Shopify hasn't answered yet, or answered a while ago: the worker asks, a later poll shows it.
     if (polled && refresh.length) await requestShopifyReports(deps, polled, refresh).catch((err) => logger.warn({ err, storeId }, "abandoned checkouts request failed"));

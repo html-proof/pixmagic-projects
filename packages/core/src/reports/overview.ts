@@ -3,7 +3,6 @@ import {
   adPlatformSources,
   comparisonImported,
   marketingReports,
-  delta,
   localDay,
   pastYearBreakdown,
   resolveCapabilities,
@@ -14,7 +13,7 @@ import {
   type AdProvider,
   type Comparison,
   type DailyMetricsRow,
-  type DateRange,
+  type ReportDates,
   type ShopifyMarketing,
 } from "@app/shared";
 import { adsConfigured } from "../adConnections.js";
@@ -29,7 +28,7 @@ import { catalog, importedData, inventory } from "./catalog.js";
 import type { Scope } from "./common.js";
 import { checkoutsLeft, funnel, funnelDetail, visitsByDay, type FunnelView } from "./funnel.js";
 import { channels, discountCodes, fulfillment, orderOutcomes, orderTiming, recentOrders, traffic } from "./orders.js";
-import { comparisonRows, customerCounts, dailyRows, dailySeries } from "./sales.js";
+import { customerCounts, dailyRows, dailySeries } from "./sales.js";
 import { productCosts, productCostsByDay, productPerformance } from "./products.js";
 import { shopifyModules } from "./shopify.js";
 
@@ -91,7 +90,7 @@ export interface AdsView {
 export async function storeOverview(
   tx: Tx,
   store: Store,
-  dates: { range: DateRange; previous: Comparison },
+  dates: ReportDates & { previous: Comparison },
   now = new Date(),
   sees: (module: string) => boolean = () => true,
   adsView: AdsView = {},
@@ -115,28 +114,20 @@ export async function storeOverview(
   const enabled = new Set(capabilities.filter((c) => c.enabled && sees(c.id)).map((c) => c.id));
   const modules: Record<string, unknown> = {};
   const data = await importedData(tx, scope, store);
-  // A comparison reaching back before the imported history (Shopify shares 60 days without
-  // read_all_orders) would count a period mostly missing: its order figures and changes are left
-  // out (null), and the page says there is no earlier data, rather than show a fake drop or 0%.
-  const previousImported = comparisonImported(previous, data.historyFrom);
-  const change = (now: number | null, before: number | null) => (previousImported ? delta(now, before) : null);
 
   let hasData = false;
   let rangeRows: DailyMetricsRow[] | null = null;
   if (enabled.has("sales_overview") || enabled.has("refunds") || enabled.has("customers")) {
-    // While the range is still running, the comparison stops at the same time of day (Shopify's like-for-like).
-    const [cur, prev] = await Promise.all([dailyRows(tx, ws, storeId, range), previousImported ? comparisonRows(tx, ws, storeId, previous, store.timezone) : []]);
+    const cur = await dailyRows(tx, ws, storeId, range);
     rangeRows = cur;
     // This calendar year and the two before it, month by month, whatever the dates picked: one read
-    // from the January two years back (this year's January compares with the December before).
+    // from the January two years back.
     const yearRows = enabled.has("sales_overview") ? await dailyRows(tx, ws, storeId, { from: `${Number(today.slice(0, 4)) - 2}-01-01`, to: today }) : [];
     const c = summarize(cur);
-    const p = summarize(prev);
     hasData = cur.some((r) => r.orders > 0 || r.refunds > 0);
     if (enabled.has("sales_overview")) {
       // Shopify's "Total sales breakdown", line for line: gross − discounts − returns = net sales,
-      // + additional fees + duties + shipping + taxes = total sales. The lines come for the dates
-      // compared with too, so the store's own calculation from them (Custom sales) compares as well.
+      // + additional fees + duties + shipping + taxes = total sales.
       // totalRefunded: what refunds took off that total sales, tax and shipping in (under the tile).
       modules.sales_overview = {
         current: {
@@ -154,32 +145,7 @@ export async function storeOverview(
           duties: c.duties,
           additionalFees: c.additionalFees,
         },
-        previous: previousImported
-          ? {
-              grossSales: p.grossSales,
-              netSales: p.netSales,
-              totalSales: p.totalSales,
-              tax: p.taxes,
-              shipping: p.shipping,
-              duties: p.duties,
-              additionalFees: p.additionalFees,
-              orders: p.orders,
-              units: p.units,
-              averageOrderValue: p.averageOrderValue,
-            }
-          : null,
-        deltas: {
-          netSales: change(c.netSales, p.netSales),
-          totalSales: change(c.totalSales, p.totalSales),
-          orders: change(c.orders, p.orders),
-          averageOrderValue: change(c.averageOrderValue, p.averageOrderValue),
-          grossSales: change(c.grossSales, p.grossSales),
-          units: change(c.units, p.units),
-        },
         series: dailySeries(cur, range),
-        // The dates compared with, day by day, for the Home's "Previous 30 days" line under the
-        // bars: day i beside day i of the range. Null when they weren't imported, as `previous`.
-        previousSeries: previousImported ? dailySeries(prev, previous).map((d) => ({ day: d.day, netSales: d.netSales, totalSales: d.totalSales })) : null,
         // This calendar year month by month, and the same months of the two years before, whole
         // (the dashboard's monthly comparison): each month not imported is said to be so.
         year: { ...yearBreakdown(yearRows, today, data.historyFrom), past: [1, 2].map((back) => pastYearBreakdown(yearRows, today, back, data.historyFrom)) },
@@ -191,29 +157,21 @@ export async function storeOverview(
     if (enabled.has("refunds")) {
       modules.refunds = {
         current: { refunds: c.refunds, refundRate: c.refundRate, refundedOrders: cur.reduce((a, r) => a + r.refundedOrders, 0) },
-        deltas: { refunds: change(c.refunds, p.refunds) },
       };
     }
     if (enabled.has("customers")) {
       // Shopify's returning customer rate: customers who had bought before ÷ customers, each counted once.
-      const [now, before] = await Promise.all([
-        customerCounts(tx, scope, range, store.timezone),
-        previousImported ? customerCounts(tx, scope, previous, store.timezone) : null,
-      ]);
-      modules.customers = {
-        current: now,
-        previous: before ?? { customers: null, returningCustomers: null, newCustomers: null, returningCustomerRate: null },
-      };
+      modules.customers = { current: await customerCounts(tx, scope, range) };
     }
   }
 
   // The owner's own costs (Settings → Costs), set against the sales above: only beside them.
   if (modules.sales_overview && sees("expenses")) {
-    const expenses = await expensesModule(tx, scope, store.currency, range, previous, { withTerms: sheet.profitByDay });
+    const expenses = await expensesModule(tx, scope, store.currency, range, { withTerms: sheet.profitByDay });
     if (expenses) modules.expenses = expenses;
   }
 
-  if (enabled.has("top_products")) modules.top_products = await productPerformance(tx, scope, store, range, {}, now);
+  if (enabled.has("top_products")) modules.top_products = await productPerformance(tx, scope, store, range);
 
   if (enabled.has("funnel")) {
     const f = funnelView ? await funnelDetail(tx, scope, range, previous, store, funnelView) : await funnel(tx, scope, range, previous, store);
@@ -223,11 +181,11 @@ export async function storeOverview(
 
   // Not a Shopify capability: present once an ad account is connected to the store.
   type SalesFigures = { netSales?: number; orders?: number };
-  const salesModule = modules.sales_overview as { current?: SalesFigures; previous?: SalesFigures | null } | undefined;
+  const salesModule = modules.sales_overview as { current?: SalesFigures } | undefined;
   const netSales = salesModule?.current?.netSales ?? null;
   // The store's own time zone and this answer's now: the same "today" as the dates above, with no
-  // second look-up. Its orders and the dates compared with go with the net sales (the ads module sets
-  // them against the spend); which orders Shopify credits to each platform's ads is read when the
+  // second look-up. Its orders go with the net sales (the ads module sets them against the spend);
+  // which orders Shopify credits to each platform's ads is read when the
   // store's traffic sources are read at all (the channels capability, and the member sees them).
   // Some of the spend (one platform, one account) is never set against the whole store's sales; one
   // AdSense account's earnings neither.
@@ -237,7 +195,6 @@ export async function storeOverview(
     timeZone: store.timezone,
     now,
     orders: someSpend ? null : (salesModule?.current?.orders ?? null),
-    before: !someSpend && salesModule?.previous ? { netSales: salesModule.previous.netSales ?? null, orders: salesModule.previous.orders ?? null } : null,
     attribution: !account && enabled.has("channels"),
     connections: account ? [account] : undefined,
     allCampaigns: adsView.allCampaigns,
@@ -293,7 +250,7 @@ export async function storeOverview(
     modules.ads_from_shopify = await adsFromShopifyModule(tx, scope, dates, {
       currency: store.currency,
       timeZone: store.timezone,
-      compare: previousImported,
+      compare: comparisonImported(previous, data.historyFrom),
       historyFrom: data.historyFrom,
       provider: platform,
       // The storefront pixel's visits from each platform's sites, while it records them.
@@ -357,8 +314,6 @@ export async function storeOverview(
     check,
     // The store's today, so the page can tell a finished day from one still running.
     today,
-    // False: the imported orders don't reach back to the comparison, so no order figure is compared.
-    previousImported,
     capabilities,
     modules,
     hasData,

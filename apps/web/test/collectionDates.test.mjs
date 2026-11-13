@@ -33,7 +33,8 @@ const dashboard = (preset, now, custom) => ({ preset, ...shared.resolvePreset(pr
 
 const same = (ov, now) => {
   const asked = collectionSalesParams(ov);
-  assert.deepEqual(routeDates(asked, now), { range: ov.range, previous: ov.previous });
+  const { range, previous } = routeDates(asked, now);
+  assert.deepEqual({ range, previous }, { range: ov.range, previous: ov.previous });
   return asked;
 };
 

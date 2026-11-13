@@ -29,8 +29,8 @@ function overview(profit, { expenses: costs = { total: 300, complete: true } } =
   return {
     modules: {
       sales_overview: { current: { netSales: 2000, shipping: 50, additionalFees: 0 } },
-      profit: profit && { status: "ready", asOf: null, until: null, current: profit, previous: null, deltas: { grossProfit: null } },
-      expenses: costs && { currency: "AUD", count: 1, current: { total: costs.total, byCategory: [{ category: "staff", amount: costs.total }], counted: 1 }, previous: null, delta: null, completeFrom: null, complete: costs.complete },
+      profit: profit && { status: "ready", asOf: null, until: null, current: profit },
+      expenses: costs && { currency: "AUD", count: 1, current: { total: costs.total, byCategory: [{ category: "staff", amount: costs.total }], counted: 1 }, completeFrom: null, complete: costs.complete },
     },
   };
 }
@@ -114,7 +114,7 @@ test("a member not shown Shopify's product costs gets no net profit, and isn't t
 test("without Shopify's profit report, the product costs are the items sold at their cost per item", () => {
   const own = (current) => ({ current });
   // Not granted (no profit module), or Shopify refused: the cost per item stands in, with the same rules.
-  for (const report of [undefined, { status: "access_denied", asOf: null, until: null, current: null, previous: null, deltas: { grossProfit: null } }]) {
+  for (const report of [undefined, { status: "access_denied", asOf: null, until: null, current: null }]) {
     const ov = overview(null);
     ov.modules.profit = report;
     ov.modules.product_costs = own({ costOfGoodsSold: 700, netSalesWithCost: 2000, netSalesWithoutCost: 0 });

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, withTenant, type Store } from "@app/db";
 import { queryAs } from "@app/db/testing";
 import { encryptTokenFields, type FetchLike } from "@app/core";
-import { reportWindows, shopifyCheckReport } from "@app/core/reports";
+import { reportWindow, shopifyCheckReport } from "@app/core/reports";
 import { resolvePreset } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -41,19 +41,19 @@ describe("Shopify's own figures on the dashboard", () => {
   it("shows the kept answers: sessions, gross profit, and our sales checked against Shopify's", async () => {
     const { a, ws, store } = await owner();
     await systemDb.dailyStoreMetrics.create({ data: { workspaceId: ws, storeId: store.id, ...ourDay, ordersWithCustomer: 5, returningCustomerOrders: 0, refundedOrders: 1 } });
-    const w = reportWindows(...(Object.values(resolvePreset("custom", new Date(), "UTC", { from: "2026-09-21", to: "2026-09-21" })) as [never, never]));
-    await keep(store, "sales", w.current, shopifySales);
-    await keep(store, "sessions", w.current, { sessions: 200, visitors: 150, cartSessions: 20, checkoutSessions: 10, completedSessions: 5, pageviews: 600 });
-    await keep(store, "sessions", w.previous, { sessions: 100, visitors: 90, cartSessions: 10, checkoutSessions: 5, completedSessions: 2, pageviews: 300 });
-    await keep(store, "profit", w.current, { grossProfit: 900, costOfGoodsSold: -650, netSalesWithCost: 1500, netSalesWithoutCost: 99.05 });
-    await keep(store, "profit", w.previous, { grossProfit: 450, costOfGoodsSold: -300, netSalesWithCost: 700, netSalesWithoutCost: 0 });
+    const w = reportWindow(resolvePreset("custom", new Date(), "UTC", { from: "2026-09-21", to: "2026-09-21" }).range);
+    await keep(store, "sales", w, shopifySales);
+    await keep(store, "sessions", w, { sessions: 200, visitors: 150, cartSessions: 20, checkoutSessions: 10, completedSessions: 5, pageviews: 600 });
+    await keep(store, "profit", w, { grossProfit: 900, costOfGoodsSold: -650, netSalesWithCost: 1500, netSalesWithoutCost: 99.05 });
+    // The day before, kept by an earlier release: no longer read, shown or asked for.
+    await keep(store, "sessions", { from: "2026-09-20", to: "2026-09-20" }, { sessions: 100, visitors: 90, cartSessions: 10, checkoutSessions: 5, completedSessions: 2, pageviews: 300 });
 
     const res = await overview(a.headers, ws, store.id);
     expect(res.statusCode).toBe(200);
     const m = res.json().modules;
-    expect(m.shopify_sessions).toMatchObject({ status: "ready", until: null, current: { sessions: 200, visitors: 150, conversionRate: 0.025 }, deltas: { sessions: 1 } });
-    expect(m.shopify_sessions.deltas.conversionRate).toBeCloseTo(0.25, 9);
-    expect(m.profit).toMatchObject({ status: "ready", current: { grossProfit: 900, costOfGoodsSold: 650, profitOnCosted: 850, netSalesWithoutCost: 99.05 }, deltas: { grossProfit: 1 } });
+    expect(m.shopify_sessions).toMatchObject({ status: "ready", until: null, current: { sessions: 200, visitors: 150, conversionRate: 0.025 } });
+    expect(m.profit).toMatchObject({ status: "ready", current: { grossProfit: 900, costOfGoodsSold: 650, profitOnCosted: 850, netSalesWithoutCost: 99.05 } });
+    for (const k of ["previous", "deltas"]) for (const mod of [m.shopify_sessions, m.profit]) expect(mod).not.toHaveProperty(k);
     expect(m.profit.current.marginOnCosted).toBeCloseTo(850 / 1500, 6);
     expect(m.shopify_check).toMatchObject({ status: "ready", matches: true, window: { from: "2026-09-21", to: "2026-09-21" } });
     expect(m.shopify_check.rows.find((r: { metric: string }) => r.metric === "discounts")).toMatchObject({ shopify: 54.53, ours: 54.53, state: "match" });
@@ -72,7 +72,8 @@ describe("Shopify's own figures on the dashboard", () => {
     // Not while Shopify's answer is on its way either, so the product costs don't change source.
     expect(first.product_costs).toBeUndefined();
     expect(reportJobs()).toHaveLength(1);
-    expect(reportJobs()[0]!.requests.map((r) => r.dataset).sort()).toEqual(["profit", "profit", "sales", "sessions", "sessions"]);
+    // One window each, the dates': Shopify isn't asked about the period before.
+    expect(reportJobs()[0]!.requests.map((r) => r.dataset).sort()).toEqual(["profit", "sales", "sessions"]);
     // Another poll (another tab) within the minute doesn't queue it twice.
     await overview(a.headers, ws, store.id);
     expect(reportJobs()).toHaveLength(1);
@@ -80,9 +81,9 @@ describe("Shopify's own figures on the dashboard", () => {
 
   it("shows why Shopify gave no figures, without making any up", async () => {
     const { a, ws, store } = await owner();
-    const w = reportWindows(...(Object.values(resolvePreset("custom", new Date(), "UTC", { from: "2026-09-21", to: "2026-09-21" })) as [never, never]));
-    await keep(store, "sessions", w.current, null, "access_denied");
-    await keep(store, "profit", w.current, null, "unsupported");
+    const w = reportWindow(resolvePreset("custom", new Date(), "UTC", { from: "2026-09-21", to: "2026-09-21" }).range);
+    await keep(store, "sessions", w, null, "access_denied");
+    await keep(store, "profit", w, null, "unsupported");
     const m = (await overview(a.headers, ws, store.id)).json().modules;
     expect(m.shopify_sessions).toMatchObject({ status: "access_denied", current: null });
     expect(m.profit).toMatchObject({ status: "unsupported", current: null });

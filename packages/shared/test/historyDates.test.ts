@@ -54,8 +54,8 @@ describe("ranges of up to 12 months, however far back", () => {
     // 24 Oct 2026, 2 pm in Melbourne.
     const now = new Date("2026-10-24T03:00:00Z");
     const tz = "Australia/Melbourne";
-    expect(resolvePreset("6m", now, tz)).toEqual({ range: { from: "2026-04-25", to: "2026-10-24" }, previous: { from: "2025-10-24", to: "2026-04-24", until: "14:00:00" } });
-    expect(resolvePreset("12m", now, tz)).toEqual({ range: { from: "2025-10-25", to: "2026-10-24" }, previous: { from: "2024-10-25", to: "2025-10-24", until: "14:00:00" } });
+    expect(resolvePreset("6m", now, tz)).toEqual({ range: { from: "2026-04-25", to: "2026-10-24" }, until: "14:00:00", previous: { from: "2025-10-24", to: "2026-04-24", until: "14:00:00" } });
+    expect(resolvePreset("12m", now, tz)).toEqual({ range: { from: "2025-10-25", to: "2026-10-24" }, until: "14:00:00", previous: { from: "2024-10-25", to: "2025-10-24", until: "14:00:00" } });
     // Both stay within 12 months, on a leap day and at a month's end too.
     for (const at of ["2028-02-29T12:00:00Z", "2026-08-31T12:00:00Z", "2026-03-31T12:00:00Z"]) {
       for (const p of ["6m", "12m"] as const) {

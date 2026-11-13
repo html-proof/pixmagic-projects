@@ -26,12 +26,12 @@ export function breakdownOf(c: SalesOverview["current"]) {
 }
 
 /**
- * The lines of total sales for a period (`current` or `previous`), when the member may see them
+ * The lines of total sales for the dates (`current`), when the member may see them
  * (the same permission as the breakdown). Duties and additional fees are 0 in an answer that
  * predates them: total sales then holds them, and `splitTotal` reports them as not split.
  */
-export function salesLinesOf(c: SalesOverview["current"] | SalesOverview["previous"]): SalesLines | null {
-  if (!c || c.totalSales === undefined || c.tax === undefined || c.shipping === undefined) return null;
+export function salesLinesOf(c: SalesOverview["current"]): SalesLines | null {
+  if (c.totalSales === undefined || c.tax === undefined || c.shipping === undefined) return null;
   return { netSales: c.netSales, additionalFees: c.additionalFees ?? 0, duties: c.duties ?? 0, shipping: c.shipping, taxes: c.tax, totalSales: c.totalSales };
 }
 

@@ -8,7 +8,7 @@
  * wait on Shopify, and the page fills in on a later poll.
  */
 import type { Store, Tx } from "@app/db";
-import { addDays, delta, summarize, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
+import { addDays, summarize, type DailyMetricsRow, type DateRange, type ReportDates } from "@app/shared";
 import { keptReports, REPORT_METRICS, windowKey, type KeptReport, type ReportDataset, type ReportError, type ReportRequest, type ReportValues, type ReportWindow } from "../shopifyReports.js";
 import { comparisonRows } from "./sales.js";
 
@@ -22,17 +22,12 @@ export function quantizeUntil(until: string): string {
 }
 
 /**
- * The windows to ask Shopify for: the range and what it is compared with. While the range is still
- * running both stop at the same time of day, as everything else on the dashboard does (like for
- * like), here at the last 5-minute mark: the range up to 4:40 pm today against yesterday up to
- * 4:40 pm.
+ * The window to ask Shopify for: the range. While it is still running it stops at a time of day, the
+ * last 5-minute mark: the range up to 4:40 pm today.
  */
-export function reportWindows(range: DateRange, previous: Comparison): { current: ReportWindow; previous: ReportWindow } {
-  const until = previous.until ? quantizeUntil(previous.until) : undefined;
-  return {
-    current: { from: range.from, to: range.to, ...(until ? { until } : {}) },
-    previous: { from: previous.from, to: previous.to, ...(until ? { until } : {}) },
-  };
+export function reportWindow(range: DateRange, runningUntil?: string): ReportWindow {
+  const until = runningUntil ? quantizeUntil(runningUntil) : undefined;
+  return { from: range.from, to: range.to, ...(until ? { until } : {}) };
 }
 
 /**
@@ -74,7 +69,7 @@ export function keptAnswers(kept: KeptReport[], dataset: ReportDataset, wins: Re
 /**
  * The answers to show for one dataset: the windows' own when all are kept, otherwise, while the
  * range runs, the latest earlier mark at which every window has one, so the cards keep showing
- * figures (a few minutes older) while the new mark is fetched, and the range and its comparison
+ * figures (a few minutes older) while the new mark is fetched, and windows asked about together
  * always stop at the same time of day.
  */
 export function pickAnswers(kept: KeptReport[], dataset: ReportDataset, wins: ReportWindow[]): { reports: Array<KeptReport | undefined>; until: string | null } {
@@ -191,14 +186,14 @@ export function reconcileSales(ours: ReturnType<typeof summarize>, shopify: Repo
 export async function shopifyModules(
   tx: Tx,
   store: Pick<Store, "id" | "workspaceId" | "timezone">,
-  dates: { range: DateRange; previous: Comparison },
+  dates: ReportDates,
   ctx: { today: string; now: Date; rangeRows: DailyMetricsRow[]; dataAsOf: string | null; waiting: number },
   want: { sessions: boolean; profit: boolean; check: boolean },
 ): Promise<{ modules: Record<string, unknown>; refresh: ReportRequest[] }> {
   const modules: Record<string, unknown> = {};
   if (!want.sessions && !want.profit && !want.check) return { modules, refresh: [] };
-  const w = reportWindows(dates.range, dates.previous);
-  const kept = await keptReports(tx, store, [w.current, w.previous]);
+  const w = reportWindow(dates.range, dates.until);
+  const kept = await keptReports(tx, store, [w]);
   const refresh: ReportRequest[] = [];
   const need = (dataset: ReportDataset, wins: ReportWindow[]) =>
     keptAnswers(kept, dataset, wins).forEach((k, i) => {
@@ -207,54 +202,28 @@ export async function shopifyModules(
   const asOf = (a: Answer) => (a.fetchedAt ? a.fetchedAt.toISOString() : null);
 
   if (want.sessions) {
-    need("sessions", [w.current, w.previous]);
-    const picked = pickAnswers(kept, "sessions", [w.current, w.previous]);
-    const until = picked.until;
+    need("sessions", [w]);
+    const picked = pickAnswers(kept, "sessions", [w]);
     const now = answerOf(picked.reports[0]);
-    const before = answerOf(picked.reports[1]);
-    const cur = sessionsFigures(now.values);
-    const prev = sessionsFigures(before.values);
-    modules.shopify_sessions = {
-      status: now.status,
-      asOf: asOf(now),
-      until,
-      current: cur,
-      previous: prev,
-      deltas: {
-        sessions: delta(cur?.sessions ?? null, prev?.sessions ?? null),
-        visitors: delta(cur?.visitors ?? null, prev?.visitors ?? null),
-        conversionRate: delta(cur?.conversionRate ?? null, prev?.conversionRate ?? null),
-      },
-    };
+    modules.shopify_sessions = { status: now.status, asOf: asOf(now), until: picked.until, current: sessionsFigures(now.values) };
   }
 
   if (want.profit) {
-    need("profit", [w.current, w.previous]);
-    const picked = pickAnswers(kept, "profit", [w.current, w.previous]);
-    const until = picked.until;
+    need("profit", [w]);
+    const picked = pickAnswers(kept, "profit", [w]);
     const now = answerOf(picked.reports[0]);
-    const before = answerOf(picked.reports[1]);
-    const cur = profitFigures(now.values);
-    const prev = profitFigures(before.values);
-    modules.profit = {
-      status: now.status,
-      asOf: asOf(now),
-      until,
-      current: cur,
-      previous: prev ? { grossProfit: prev.grossProfit } : null,
-      deltas: { grossProfit: delta(cur?.grossProfit ?? null, prev?.grossProfit ?? null) },
-    };
+    modules.profit = { status: now.status, asOf: asOf(now), until: picked.until, current: profitFigures(now.values) };
   }
 
   if (want.check) {
-    need("sales", [w.current]);
-    const picked = pickAnswers(kept, "sales", [w.current]);
+    need("sales", [w]);
+    const picked = pickAnswers(kept, "sales", [w]);
     const until = picked.until;
     const now = answerOf(picked.reports[0]);
     let rows: CheckRow[] | null = null;
     if (now.values) {
       // Ours for exactly the same window: up to the same mark while it runs.
-      const ourRows = until ? await comparisonRows(tx, store.workspaceId, store.id, { from: w.current.from, to: w.current.to, until }, store.timezone) : ctx.rangeRows;
+      const ourRows = until ? await comparisonRows(tx, store.workspaceId, store.id, { from: w.from, to: w.to, until }, store.timezone) : ctx.rangeRows;
       const behind = ctx.waiting > 0 || (!!ctx.dataAsOf && !!now.fetchedAt && Date.parse(ctx.dataAsOf) < now.fetchedAt.getTime() - 15 * 60_000);
       rows = reconcileSales(summarize(ourRows), now.values, { behind });
     }
@@ -262,7 +231,7 @@ export async function shopifyModules(
       status: now.status,
       asOf: asOf(now),
       until,
-      window: { from: w.current.from, to: w.current.to },
+      window: { from: w.from, to: w.to },
       rows,
       matches: rows ? rows.every((r) => r.state === "match") : null,
     };

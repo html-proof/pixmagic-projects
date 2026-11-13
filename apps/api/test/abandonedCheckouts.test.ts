@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, type Store } from "@app/db";
-import { reportWindows } from "@app/core/reports";
+import { reportWindow } from "@app/core/reports";
 import { addDays, localDay, resolvePreset } from "@app/shared";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -14,12 +14,13 @@ beforeAll(async () => (ctx = await setup()));
 afterAll(async () => teardown(ctx));
 beforeEach(async () => clean(ctx));
 
-// Whole days within the 60 days Shopify shares, compared with the 7 days before.
+// Whole days within the 60 days Shopify shares.
 const today = localDay(new Date(), "UTC");
 const FROM = addDays(today, -20);
 const TO = addDays(today, -14);
 const RANGE = `preset=custom&from=${FROM}&to=${TO}`;
-const windows = (from = FROM) => reportWindows(...(Object.values(resolvePreset("custom", new Date(), "UTC", { from, to: TO })) as [never, never]));
+const dates = resolvePreset("custom", new Date(), "UTC", { from: FROM, to: TO });
+const window = () => reportWindow(dates.range, dates.until);
 
 async function owner(scopes = ["read_orders", "read_products"]) {
   const a = await signIn(ctx, "ua", "a@x.com");
@@ -57,49 +58,46 @@ describe("Shopify's abandoned checkouts (GET .../abandoned-checkouts)", () => {
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json();
     expect(body.range).toEqual({ from: FROM, to: TO });
-    expect(body.module).toMatchObject({ status: "loading", previousStatus: "loading", current: null, previous: null, visibleFrom: addDays(today, -59) });
+    expect(body.module).toMatchObject({ status: "loading", current: null, visibleFrom: addDays(today, -59) });
+    // The dates alone: the answer names no period before, and none is asked of Shopify.
+    expect(body).not.toHaveProperty("previous");
     expect(jobs()).toHaveLength(1);
-    expect(jobs()[0]!.requests).toEqual([
-      { dataset: "abandoned_checkouts", window: windows().current },
-      { dataset: "abandoned_checkouts", window: windows().previous },
-    ]);
+    expect(jobs()[0]!.requests).toEqual([{ dataset: "abandoned_checkouts", window: window() }]);
     // Another poll (another tab) within the minute doesn't queue it twice.
     await get(a.headers, ws, store.id);
     expect(jobs()).toHaveLength(1);
   });
 
-  it("shows the kept answers with the recovered rate and the changes, and asks nothing while they're fresh", async () => {
+  it("shows the kept answer with the recovered rate, and asks nothing while it's fresh", async () => {
     const { a, ws, store } = await owner();
-    const w = windows();
-    await keep(store, w.current, values(40, 10, 2000));
-    await keep(store, w.previous, values(20, 4, 1000));
+    await keep(store, window(), values(40, 10, 2000));
+    // The 7 days before, kept by an earlier release: neither read nor asked for again.
+    await keep(store, { from: addDays(FROM, -7), to: addDays(TO, -7) }, values(20, 4, 1000));
     const m = (await get(a.headers, ws, store.id)).json().module;
-    expect(m).toMatchObject({ status: "ready", previousStatus: "ready", current: { abandoned: 40, recovered: 10, recoveredRate: 0.25, value: 2000, recoveredValue: 400, currency: "AUD" }, previous: { abandoned: 20, recoveredRate: 0.2 } });
-    expect(m.deltas.abandoned).toBe(1);
-    expect(m.deltas.value).toBe(1);
-    expect(m.deltas.recoveredRate).toBeCloseTo(0.25, 9);
+    expect(m).toMatchObject({ status: "ready", current: { abandoned: 40, recovered: 10, recoveredRate: 0.25, value: 2000, recoveredValue: 400, currency: "AUD" } });
+    for (const k of ["previous", "deltas", "previousStatus"]) expect(m).not.toHaveProperty(k);
     expect(jobs()).toEqual([]);
   });
 
   it("says why Shopify gave no figures, never 0", async () => {
     const { a, ws, store } = await owner();
-    const w = windows();
-    await keep(store, w.current, null, "access_denied");
-    await keep(store, w.previous, null, "access_denied");
+    await keep(store, window(), null, "access_denied");
     const m = (await get(a.headers, ws, store.id)).json().module;
-    expect(m).toMatchObject({ status: "access_denied", current: null, deltas: { abandoned: null, value: null, recoveredRate: null } });
+    expect(m).toMatchObject({ status: "access_denied", current: null });
     expect(jobs()).toEqual([]);
   });
 
-  it("never asks Shopify for a comparison older than the 60 days it shares", async () => {
+  it("never asks Shopify for dates older than the 60 days it shares", async () => {
     const { a, ws, store } = await owner();
-    // 27 days ending 14 days ago: the 27 days before them start 67 days ago.
+    // 27 days ending 14 days ago are within the 60 days: asked. Dates starting 67 days ago are not.
     const from = addDays(today, -40);
     const res = await get(a.headers, ws, store.id, `preset=custom&from=${from}&to=${TO}`);
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json().previous).toEqual({ from: addDays(today, -67), to: addDays(today, -41) });
-    expect(res.json().module).toMatchObject({ status: "loading", previousStatus: "beyond_history", previous: null });
-    expect(jobs()[0]!.requests.map((r) => r.window)).toEqual([windows(from).current]);
+    expect(res.json().module).toMatchObject({ status: "loading" });
+    expect(jobs()[0]!.requests.map((r) => r.window)).toEqual([{ from, to: TO }]);
+    const old = await get(a.headers, ws, store.id, `preset=custom&from=${addDays(today, -67)}&to=${addDays(today, -41)}`);
+    expect(old.json().module).toMatchObject({ status: "beyond_history", current: null });
+    expect(jobs()).toHaveLength(1);
   });
 
   it("needs View checkout abandonment, and the store's orders", async () => {
@@ -125,7 +123,7 @@ describe("Shopify's abandoned checkouts (GET .../abandoned-checkouts)", () => {
     const b = await signIn(ctx, "ub", "b@x.com");
     const wsB = await createWorkspace(ctx, b.headers, "B");
     const storeB = await createStore(wsB, "b.myshopify.com", ["read_orders"]);
-    await keep(storeB, windows().current, values(99, 9, 999));
+    await keep(storeB, window(), values(99, 9, 999));
     // Through one's own workspace, or the other's: nothing of it, whatever the question.
     for (const qs of [RANGE, "preset=nonsense"]) {
       expect((await get(a.headers, ws, storeB.id, qs)).statusCode).toBe(404);

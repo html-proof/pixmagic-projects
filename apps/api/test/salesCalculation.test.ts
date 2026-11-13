@@ -101,14 +101,15 @@ const url = (ws: string, storeId: string) => `/workspaces/${ws}/stores/${storeId
 const excludingTax = { components: { ...SHOPIFY_STANDARD, taxes: false }, label: null, applyToDashboard: true, presets: [{ name: "Wholesale", components: { ...SHOPIFY_STANDARD, taxes: false, shipping: false } }] };
 
 describe("total sales line by line", () => {
-  it("gives each line of Shopify's total sales, and they add up to it, for the dates and the dates compared with", async () => {
+  it("gives each line of Shopify's total sales, and they add up to it", async () => {
     const { a, ws, store } = await owner();
     const ov = ok(await call("GET", `/workspaces/${ws}/stores/${store.id}/overview?${RANGE}`, a.headers));
     const c = ov.modules.sales_overview.current;
     // Net 1000 − 200 = 800; shipping 50; duties 40 − 20 = 20; fees 10; taxes 100 + 5 + 4 + 1 − 20 − 2 = 88.
     expect(c).toMatchObject({ netSales: 800, shipping: 50, duties: 20, additionalFees: 10, tax: 88, totalSales: 968 });
     expect(Math.round((c.netSales + c.additionalFees + c.duties + c.shipping + c.tax) * 100)).toBe(Math.round(c.totalSales * 100));
-    expect(ov.modules.sales_overview.previous).toMatchObject({ netSales: 800, shipping: 50, duties: 20, additionalFees: 10, tax: 88, totalSales: 968 });
+    // The dates' own lines only: nothing for the period before.
+    for (const k of ["previous", "deltas", "previousSeries"]) expect(ov.modules.sales_overview).not.toHaveProperty(k);
     // Every day of the series carries its lines too (Custom sales is drawn day by day from them).
     expect(ov.modules.sales_overview.series).toEqual([expect.objectContaining({ day: DAY, totalSales: 968, shipping: 50, tax: 88, duties: 20, additionalFees: 10 })]);
     // Until something is saved, the store uses Shopify's own total sales and shows nothing else.
@@ -133,7 +134,7 @@ describe("the store's sales calculation", () => {
     const after = ok(await call("GET", `/workspaces/${ws}/stores/${store.id}/overview?${RANGE}`, a.headers)).modules.sales_overview;
     expect(after.calculation).toEqual(saved);
     expect(after.current).toEqual(before.current);
-    expect(after.deltas).toEqual(before.deltas);
+    expect(after.series).toEqual(before.series);
     const c = after.current;
     expect(customSales({ netSales: c.netSales, additionalFees: c.additionalFees, duties: c.duties, shipping: c.shipping, taxes: c.tax }, saved.components)).toBe(880);
 

@@ -13,16 +13,14 @@
 // Without the ".js" the rest of the package uses: the web app imports this file directly
 // (@app/shared/sales), and its bundler doesn't map "./dates.js" to dates.ts.
 import { addDays, daysBetweenInclusive, eachDay, periodsOf } from "./dates";
-import { delta, type DailyMetricsRow } from "./kpi";
+import type { DailyMetricsRow } from "./kpi";
 import { customSales, type ComponentSelection, type SalesLines } from "./salesCalculation";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 /** The lines of total sales besides net sales, as daily rows hold them. */
 const LINE_KEYS = ["additionalFees", "duties", "shipping", "taxes", "totalSales"] as const;
 const NOTHING = { netSales: 0, refunds: 0, orders: 0, additionalFees: 0, duties: 0, shipping: 0, taxes: 0, totalSales: 0 };
-const linesOf = (x: SalesLines): SalesLines => ({ netSales: x.netSales, additionalFees: x.additionalFees, duties: x.duties, shipping: x.shipping, taxes: x.taxes, totalSales: x.totalSales });
 const nextMonth = (month: string) => addDays(`${month}-28`, 7).slice(0, 7);
-const prevMonth = (month: string) => addDays(`${month}-01`, -1).slice(0, 7);
 const monthEnd = (month: string) => addDays(`${nextMonth(month)}-01`, -1);
 
 /** One day of the dashboard's net sales series (see `dailySeries` in the API). */
@@ -249,18 +247,10 @@ export interface SalesMonth {
   shipping: number;
   taxes: number;
   totalSales: number;
-  /**
-   * Net sales' change on the month before. The current month is compared with the same days of the
-   * month before (1–9 Oct with 1–9 Sep), not with all of it. Null when either side isn't fully imported.
-   */
-  change: number | null;
-  comparedWith: { from: string; to: string } | null;
-  /** The lines of total sales for `comparedWith`, so Custom sales has a change of its own; null with it. */
-  comparedLines: SalesLines | null;
 }
 
 /** A month's fields that hold the lines of total sales (Team & Access: `finance.breakdown`). */
-export const MONTH_LINES = ["additionalFees", "duties", "shipping", "taxes", "totalSales", "comparedLines"] as const;
+export const MONTH_LINES = ["additionalFees", "duties", "shipping", "taxes", "totalSales"] as const;
 export type MonthLine = (typeof MONTH_LINES)[number];
 
 export interface YearBreakdown {
@@ -270,10 +260,7 @@ export interface YearBreakdown {
   orders: number;
 }
 
-/**
- * January to the current month of the store's year, from daily rows that reach back to the
- * December before (for January's change).
- */
+/** January to the current month of the store's year, from its daily rows. */
 export function yearBreakdown(rows: DailyMetricsRow[], today: string, historyFrom: string | null): YearBreakdown {
   const sum = (from: string, to: string) => {
     let gross = 0;
@@ -308,15 +295,6 @@ export function yearBreakdown(rows: DailyMetricsRow[], today: string, historyFro
     const to = current ? today : monthEnd(m);
     const cov = coverage(from, to);
     const own = sum(from, to);
-
-    // The month before, whole, or only as many days as this month has had so far.
-    const pm = prevMonth(m);
-    const pFrom = `${pm}-01`;
-    const pEnd = monthEnd(pm);
-    const sameDays = addDays(pFrom, daysBetweenInclusive(from, to) - 1);
-    const pTo = current && sameDays < pEnd ? sameDays : pEnd;
-    const comparable = cov === "full" && coverage(pFrom, pTo) === "full";
-    const before = comparable ? sum(pFrom, pTo) : null;
     months.push({
       month: m,
       from,
@@ -325,9 +303,6 @@ export function yearBreakdown(rows: DailyMetricsRow[], today: string, historyFro
       coverage: cov,
       // A month not imported holds nothing, and the cards draw it as such, never as $0.
       ...(cov === "none" ? { ...NOTHING, averageOrderValue: null } : own),
-      change: before ? delta(own.netSales, before.netSales) : null,
-      comparedWith: before ? { from: pFrom, to: pTo } : null,
-      comparedLines: before ? linesOf(before) : null,
     });
   }
   return {
@@ -352,33 +327,25 @@ export function pastYearBreakdown(rows: DailyMetricsRow[], today: string, yearsB
 /** What a month card measures: net sales, or the store's Custom sales from the month's lines. */
 export interface MonthMeasure<M> {
   value: (m: M) => number;
-  /** Change on the dates the month is compared with (`comparedWith`); null without them. */
-  change: (m: M) => number | null;
 }
 
 /** Shopify's net sales, as the months carry it. */
-export const NET_SALES_MONTHS: MonthMeasure<Pick<SalesMonth, "netSales" | "change">> = { value: (m) => m.netSales, change: (m) => m.change };
+export const NET_SALES_MONTHS: MonthMeasure<Pick<SalesMonth, "netSales">> = { value: (m) => m.netSales };
 
-/** Shopify's total sales, compared on the total sales of the dates the month is compared with. */
-export const TOTAL_SALES_MONTHS: MonthMeasure<Pick<SalesMonth, "totalSales" | "comparedLines">> = {
-  value: (m) => m.totalSales,
-  change: (m) => (m.comparedLines ? delta(m.totalSales, m.comparedLines.totalSales) : null),
-};
+/** Shopify's total sales. */
+export const TOTAL_SALES_MONTHS: MonthMeasure<Pick<SalesMonth, "totalSales">> = { value: (m) => m.totalSales };
 
 /**
  * The store's Custom sales month by month: the lines its calculation counts, added up in cents
- * (`customSales`), and compared on the same lines of the dates the month is compared with.
+ * (`customSales`).
  */
-export function customSalesMonths(selection: ComponentSelection): MonthMeasure<Omit<SalesLines, "totalSales"> & Pick<SalesMonth, "comparedLines">> {
-  return {
-    value: (m) => customSales(m, selection),
-    change: (m) => (m.comparedLines ? delta(customSales(m, selection), customSales(m.comparedLines, selection)) : null),
-  };
+export function customSalesMonths(selection: ComponentSelection): MonthMeasure<Omit<SalesLines, "totalSales">> {
+  return { value: (m) => customSales(m, selection) };
 }
 
 export interface YearFigures {
   /** Each month under the measure, with the year's running total to its end (null while not imported). */
-  months: Array<{ month: string; value: number; change: number | null; cumulative: number | null }>;
+  months: Array<{ month: string; value: number; cumulative: number | null }>;
   total: number;
   /** Per finished, fully imported month; null with none. */
   average: number | null;
@@ -393,7 +360,7 @@ export function yearFigures<M extends Pick<SalesMonth, "month" | "current" | "co
     const imported = m.coverage !== "none";
     const value = imported ? measure.value(m) : 0;
     if (imported) running = r2(running + value);
-    return { month: m.month, value, change: imported ? measure.change(m) : null, cumulative: imported ? running : null };
+    return { month: m.month, value, cumulative: imported ? running : null };
   });
   const finished = out.filter((_, i) => !months[i]!.current && months[i]!.coverage === "full");
   let best: YearFigures["best"] = null;

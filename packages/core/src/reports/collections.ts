@@ -1,7 +1,7 @@
 import { Prisma, type Store, type Tx } from "@app/db";
-import { delta, type Comparison, type DateRange } from "@app/shared";
+import type { DateRange } from "@app/shared";
 import { importedData } from "./catalog.js";
-import { localMoment, num, r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js";
+import { num, r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js";
 import { productSalesCoverage } from "./products.js";
 
 /** Collections listed at most, the best-selling first; `total` says how many there are. */
@@ -24,9 +24,6 @@ export interface CollectionFigures {
   productsSold: number;
   /** Of the store's product net sales (`totals.netSales`, each sale once); null when those aren't above 0. */
   share: number | null;
-  /** The dates compared with; null when their sales aren't all in (`baseline` false). */
-  previous: { netSales: number; units: number; orders: number } | null;
-  deltas: { netSales: number | null; units: number | null; orders: number | null };
 }
 
 export interface CollectionSalesRow extends CollectionFigures {
@@ -40,7 +37,6 @@ type Raw = {
   title: string | null;
   unknown: boolean;
   total: boolean;
-  events: number;
   units: bigint;
   net_sales: string;
   gross_sales: string;
@@ -48,17 +44,12 @@ type Raw = {
   returns: string;
   orders: number;
   products_sold: number;
-  previous_units: bigint;
-  previous_net_sales: string;
-  previous_orders: number;
 };
 
 /**
- * Sales by collection: each Shopify collection's product sales in `dates.range`, against
- * `dates.previous` (the dashboard's comparison, adjacent or not), from Shopify's sales records
- * (order_sales). Nothing is grouped until the dates' product sales are all in and tied to their
- * products (`complete`, the check Top products makes), and no change is worked out until the dates
- * compared with are too (`baseline`).
+ * Sales by collection: each Shopify collection's product sales in `range`, from Shopify's sales
+ * records (order_sales). Nothing is grouped until the dates' product sales are all in and tied to
+ * their products (`complete`, the check Top products makes).
  *
  * A product's collections are products.collections, as the last catalog read found them (the
  * nightly read, "Refresh data", a new product's own read; `membershipAsOf`): sales are grouped by
@@ -68,11 +59,10 @@ type Raw = {
  * no collection are `none`; those of products whose collections aren't known (not read yet, or no
  * longer in the catalog) `unknown`: never put in a collection, nor said to be in none.
  */
-export async function collectionSales(tx: Tx, scope: Scope, store: Store, dates: { range: DateRange; previous: Comparison }) {
+export async function collectionSales(tx: Tx, scope: Scope, store: Store, range: DateRange) {
   const { ws, storeId } = scope;
-  const { range, previous } = dates;
   const data = await importedData(tx, scope, store);
-  const coverage = await productSalesCoverage(tx, scope, store, range, previous, data.historyFrom);
+  const coverage = await productSalesCoverage(tx, scope, store, range, data.historyFrom);
   const read = await tx.syncJob.findFirst({
     where: { workspaceId: ws, storeId, kind: "products", status: "succeeded", finishedAt: { not: null } },
     orderBy: { finishedAt: "desc" },
@@ -82,29 +72,21 @@ export async function collectionSales(tx: Tx, scope: Scope, store: Store, dates:
   if (!coverage.complete) return { ...about, total: 0, items: [] as CollectionSalesRow[], none: null, unknown: null, totals: null };
 
   const current = Prisma.sql`s.local_day BETWEEN ${range.from} AND ${range.to}`;
-  const beforeDays = Prisma.sql`s.local_day BETWEEN ${previous.from} AND ${previous.to}`;
-  // While the dates run, the last day compared with stops at the same time of day (as Top products).
-  const before = previous.until ? Prisma.sql`${beforeDays} AND s.happened_at < ${localMoment(previous.to, previous.until, store.timezone)}` : beforeDays;
   const aggregates = Prisma.sql`
-    COUNT(*) FILTER (WHERE x.cur OR x.prev)::int AS events,
-    COALESCE(SUM(x.units) FILTER (WHERE x.cur), 0)::bigint AS units,
-    COALESCE(SUM(x.value) FILTER (WHERE x.cur), 0)::text AS net_sales,
-    COALESCE(SUM(x.value + x.discount) FILTER (WHERE x.cur AND x.action_type = 'order'), 0)::text AS gross_sales,
-    COALESCE(SUM(x.discount) FILTER (WHERE x.cur AND x.action_type = 'order'), 0)::text AS discounts,
-    (-COALESCE(SUM(x.value) FILTER (WHERE x.cur AND x.action_type <> 'order'), 0))::text AS returns,
-    COUNT(DISTINCT x.order_id) FILTER (WHERE x.cur AND x.action_type = 'order')::int AS orders,
-    COUNT(DISTINCT x.product_id) FILTER (WHERE x.cur AND x.action_type = 'order')::int AS products_sold,
-    COALESCE(SUM(x.units) FILTER (WHERE x.prev), 0)::bigint AS previous_units,
-    COALESCE(SUM(x.value) FILTER (WHERE x.prev), 0)::text AS previous_net_sales,
-    COUNT(DISTINCT x.order_id) FILTER (WHERE x.prev AND x.action_type = 'order')::int AS previous_orders`;
+    COALESCE(SUM(x.units), 0)::bigint AS units,
+    COALESCE(SUM(x.value), 0)::text AS net_sales,
+    COALESCE(SUM(x.value + x.discount) FILTER (WHERE x.action_type = 'order'), 0)::text AS gross_sales,
+    COALESCE(SUM(x.discount) FILTER (WHERE x.action_type = 'order'), 0)::text AS discounts,
+    (-COALESCE(SUM(x.value) FILTER (WHERE x.action_type <> 'order'), 0))::text AS returns,
+    COUNT(DISTINCT x.order_id) FILTER (WHERE x.action_type = 'order')::int AS orders,
+    COUNT(DISTINCT x.product_id) FILTER (WHERE x.action_type = 'order')::int AS products_sold`;
   // One pass over the dates' product sales: grouped by collection (a sale once per collection of
   // its product), then all of them once (the totals the shares are of).
   const rows = await tx.$queryRaw<Raw[]>`
     WITH sold AS MATERIALIZED (
       -- The bounded line-item lookup Top products makes (products.ts).
       SELECT s.order_id, s.action_type, li.product_shopify_id AS product_id,
-        ${SALE_UNITS} AS units, ${SALE_VALUE} AS value, s.discount,
-        (${current}) AS cur, (${before}) AS prev
+        ${SALE_UNITS} AS units, ${SALE_VALUE} AS value, s.discount
       FROM order_sales s
       JOIN LATERAL (
         SELECT li.product_shopify_id FROM order_line_items li
@@ -112,7 +94,7 @@ export async function collectionSales(tx: Tx, scope: Scope, store: Store, dates:
           AND li.shopify_id = s.line_item_shopify_id AND li.order_id = s.order_id LIMIT 1
       ) li ON TRUE
       WHERE s.workspace_id = ${ws} AND s.store_id = ${storeId} AND s.line_type = 'product'
-        AND ((${current}) OR (${beforeDays}))
+        AND ${current}
     ),
     -- The collections each product sold is in now: a row per collection, a single row without one
     -- for a product in none, and no row for a product whose collections aren't known.
@@ -141,7 +123,6 @@ export async function collectionSales(tx: Tx, scope: Scope, store: Store, dates:
     const netSales = r2(num(r.net_sales));
     const units = num(r.units);
     const orders = num(r.orders);
-    const prior = coverage.baseline ? { netSales: r2(num(r.previous_net_sales)), units: num(r.previous_units), orders: num(r.previous_orders) } : null;
     return {
       netSales,
       grossSales: r2(num(r.gross_sales)),
@@ -151,16 +132,9 @@ export async function collectionSales(tx: Tx, scope: Scope, store: Store, dates:
       orders,
       productsSold: num(r.products_sold),
       share: productSales > 0 ? netSales / productSales : null,
-      previous: prior,
-      deltas: {
-        netSales: prior ? delta(netSales, prior.netSales) : null,
-        units: prior ? delta(units, prior.units) : null,
-        orders: prior ? delta(orders, prior.orders) : null,
-      },
     };
   };
-  // A group whose only sales are after the time of day the comparison stops at has nothing to show.
-  const groups = rows.filter((r) => !r.total && r.events > 0);
+  const groups = rows.filter((r) => !r.total);
   const items: CollectionSalesRow[] = groups
     .filter((r) => r.collection_id !== null)
     .map((r) => ({ collectionId: r.collection_id!, title: r.title ?? "", ...figures(r) }))

@@ -116,6 +116,16 @@ export interface Comparison extends DateRange {
   until?: string;
 }
 
+/**
+ * The dates asked about. `until`: while they still run (they end on the store's today), the
+ * store-local "HH:MM:SS" it is now. Shopify's own report figures for the dates, and ours checked
+ * against them, are counted up to that moment of the last day; absent: whole days.
+ */
+export interface ReportDates {
+  range: DateRange;
+  until?: string;
+}
+
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A real calendar day written YYYY-MM-DD: "2026-02-31" and "2026-13-01" match the shape but aren't. */
@@ -341,12 +351,14 @@ export function resolvePreset(
   timeZone: string,
   custom?: DateRange,
   limits: RangeLimits = {},
-): { range: DateRange; previous: Comparison } {
+): ReportDates & { previous: Comparison } {
   const today = localDay(now, timeZone);
   const range = presetRange(preset, today, custom, limits);
   const previous = comparisonDays(range, preset);
-  // Today isn't over: whatever it is compared with is counted up to this moment of its own last day.
-  return { range, previous: range.to === today ? { ...previous, until: localTime(now, timeZone) } : previous };
+  if (range.to !== today) return { range, previous };
+  // Today isn't over: whatever is set against it is counted up to this moment of its own last day.
+  const until = localTime(now, timeZone);
+  return { range, until, previous: { ...previous, until } };
 }
 
 /** `historyStart` for a store whose whole order history was imported (read_all_orders). */

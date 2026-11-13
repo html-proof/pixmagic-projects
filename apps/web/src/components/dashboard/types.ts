@@ -82,31 +82,6 @@ export interface SalesOverview {
     additionalFees?: number;
   };
   /**
-   * The same figures for the dates compared with (`Overview.previous`); null when the imported
-   * orders don't reach back to them (`previous.imported` false), and every delta is then null too.
-   */
-  previous: {
-    grossSales?: number;
-    netSales: number;
-    totalSales?: number;
-    /** The lines of total sales, as in `current` (Team & Access as grossSales). */
-    tax?: number;
-    shipping?: number;
-    duties?: number;
-    additionalFees?: number;
-    orders: number;
-    units: number;
-    averageOrderValue: number | null;
-  } | null;
-  deltas: {
-    netSales: number | null;
-    totalSales?: number | null;
-    orders: number | null;
-    averageOrderValue: number | null;
-    grossSales?: number | null;
-    units: number | null;
-  };
-  /**
    * Every day of the range, quiet days as zero. Each day's `refunds`: Team & Access "View refunds";
    * its `totalSales`: "View gross sales, discounts, tax and shipping"; its `newCustomerOrders` (orders
    * that were a customer's first): "View returning vs new customers". `units`: net items sold that day;
@@ -129,12 +104,6 @@ export interface SalesOverview {
       newCustomerOrders?: number;
     }
   >;
-  /**
-   * The dates compared with (`Overview.previous`), day by day: the Sales page's Sales by day draws them as a
-   * line over the bars, day i beside day i of the range. Null when they weren't imported; `totalSales`
-   * as `series`' (Team & Access); absent from answers of older releases.
-   */
-  previousSeries?: Array<{ day: string; netSales: number; totalSales?: number }> | null;
   /**
    * This calendar year by month, whatever the range. Team & Access: "View financial reports"; each
    * month's lines of total sales as `totalSales`.
@@ -615,11 +584,11 @@ export interface ProductPerformance {
   items: Array<{
     key: string; rank: number; productId: string | null; title: string; imageUrl: string | null; sku: string | null;
     units: number; grossUnits: number; returnedUnits: number; revenue: number; grossSales: number; discounts: number; returns: number;
-    orders: number; growth: number | null; trend: string; trendScore: number | null; lastSold: string | null;
+    orders: number; lastSold: string | null;
     variants: Array<{ variantId: string | null; sku: string | null; units: number; revenue: number }>;
   }>;
-  total: number; complete: boolean; baseline: boolean; lastSyncedAt: string | null; unknownIdentitySales?: number;
-  historyFrom: string | null; previous: { from: string; to: string };
+  total: number; complete: boolean; lastSyncedAt: string | null; unknownIdentitySales?: number;
+  historyFrom: string | null;
 }
 
 export interface Overview {
@@ -630,11 +599,10 @@ export interface Overview {
   preset?: DatePreset;
   range: { from: string; to: string };
   /**
-   * What the range is compared with, the period just before it (`Comparison` in @app/shared):
-   * `until` while the range is still running; `imported` false when the store's imported orders
-   * don't reach back to it, so the order figures aren't compared ("No earlier data").
+   * The period just before the range (`Comparison` in @app/shared): `until` while the range is
+   * still running.
    */
-  previous: { from: string; to: string; until?: string; imported?: boolean };
+  previous: { from: string; to: string; until?: string };
   /** The store's today (YYYY-MM-DD). */
   today: string;
   /**
@@ -650,9 +618,9 @@ export interface Overview {
   data?: ImportedData;
   modules: {
     sales_overview?: SalesOverview;
-    refunds?: { current: { refunds: number; refundRate: number | null; refundedOrders: number }; deltas: { refunds: number | null } };
+    refunds?: { current: { refunds: number; refundRate: number | null; refundedOrders: number } };
     /** Customers counted once each, as Shopify's reports count them; rate = returning ÷ customers. */
-    customers?: { current: CustomerCounts; previous: { [K in keyof CustomerCounts]: CustomerCounts[K] | null } };
+    customers?: { current: CustomerCounts };
     top_products?: ProductPerformance;
     funnel?: FunnelModule;
     channels?: ChannelsModule;
@@ -712,8 +680,6 @@ export interface ExpensesModule {
   /** Every cost the store keeps, whether or not it falls in the dates. */
   count: number;
   current: ExpenseTotals;
-  previous: { total: number } | null;
-  delta: number | null;
   /** From which day the owner says the list holds every cost; null: not said. */
   completeFrom: string | null;
   /** The list holds every cost for all of the dates. */
@@ -785,7 +751,7 @@ interface ReportAnswer {
   status: ReportStatus;
   /** When Shopify was asked. */
   asOf: string | null;
-  /** While the range runs: the store-local time both windows stop at (a 5-minute mark). */
+  /** While the range runs: the store-local time the figures stop at (a 5-minute mark). */
   until: string | null;
 }
 
@@ -801,8 +767,6 @@ export interface SessionFigures {
 
 export interface ShopifySessionsModule extends ReportAnswer {
   current: SessionFigures | null;
-  previous: SessionFigures | null;
-  deltas: { sessions: number | null; visitors: number | null; conversionRate: number | null };
 }
 
 export interface ProfitModule extends ReportAnswer {
@@ -814,8 +778,6 @@ export interface ProfitModule extends ReportAnswer {
     profitOnCosted: number | null;
     marginOnCosted: number | null;
   } | null;
-  previous: { grossProfit: number | null } | null;
-  deltas: { grossProfit: number | null };
 }
 
 /** The items sold in the dates at their cost per item in Shopify now, and the net sales of items with and without one. */

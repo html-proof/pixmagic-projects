@@ -253,7 +253,7 @@ describe("dates & time zones", () => {
     const tz = "Australia/Melbourne";
     expect(localTime(now, tz)).toBe("16:44:12");
     // Today so far against yesterday until the same moment, not the whole of yesterday.
-    expect(resolvePreset("today", now, tz)).toEqual({ range: { from: "2026-10-17", to: "2026-10-17" }, previous: { from: "2026-10-16", to: "2026-10-16", until: "16:44:12" } });
+    expect(resolvePreset("today", now, tz)).toEqual({ range: { from: "2026-10-17", to: "2026-10-17" }, until: "16:44:12", previous: { from: "2026-10-16", to: "2026-10-16", until: "16:44:12" } });
     expect(resolvePreset("7d", now, tz).previous).toEqual({ from: "2026-10-04", to: "2026-10-10", until: "16:44:12" });
     // A custom range ending today runs too; one that ended earlier doesn't.
     expect(resolvePreset("custom", now, tz, { from: "2026-10-15", to: "2026-10-31" }).previous.until).toBe("16:44:12");
@@ -285,12 +285,12 @@ describe("dates & time zones", () => {
     const tz = "Australia/Melbourne";
     expect(WEEK_STARTS_ON).toBe(1);
     // This week so far, against the same weekdays of the week before, up to the same time of day.
-    expect(resolvePreset("wtd", now, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-29" }, previous: { from: "2026-10-19", to: "2026-10-22", until: "16:44:12" } });
+    expect(resolvePreset("wtd", now, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-29" }, until: "16:44:12", previous: { from: "2026-10-19", to: "2026-10-22", until: "16:44:12" } });
     // Last week is over: the whole week, against the whole week before it.
     expect(resolvePreset("lastweek", now, tz)).toEqual({ range: { from: "2026-10-19", to: "2026-10-25" }, previous: { from: "2026-10-12", to: "2026-10-18" } });
     // On a Monday, this week is that one day, and last week is the Monday-to-Sunday just ended.
     const monday = new Date("2026-10-26T01:00:00Z");
-    expect(resolvePreset("wtd", monday, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-26" }, previous: { from: "2026-10-19", to: "2026-10-19", until: "12:00:00" } });
+    expect(resolvePreset("wtd", monday, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-26" }, until: "12:00:00", previous: { from: "2026-10-19", to: "2026-10-19", until: "12:00:00" } });
     expect(resolvePreset("lastweek", monday, tz).range).toEqual({ from: "2026-10-19", to: "2026-10-25" });
     // On a Sunday, still the week that began on the Monday before; across a year's end too.
     expect(resolvePreset("wtd", new Date("2026-11-01T01:00:00Z"), tz).range).toEqual({ from: "2026-10-26", to: "2026-11-01" });
@@ -303,7 +303,7 @@ describe("dates & time zones", () => {
   it("resolves this year from 1 January, and last year as the whole calendar year against the year before it", () => {
     const now = new Date("2026-10-22T12:00:00Z");
     // This year so far, against as many days just before it, up to the same time of day.
-    expect(resolvePreset("ytd", now, "UTC")).toEqual({ range: { from: "2026-01-01", to: "2026-10-22" }, previous: { from: "2025-03-12", to: "2025-12-31", until: "12:00:00" } });
+    expect(resolvePreset("ytd", now, "UTC")).toEqual({ range: { from: "2026-01-01", to: "2026-10-22" }, until: "12:00:00", previous: { from: "2025-03-12", to: "2025-12-31", until: "12:00:00" } });
     // A whole year is over: compared whole, with the whole year before, leap years included.
     expect(resolvePreset("lastyear", now, "UTC")).toEqual({ range: { from: "2025-01-01", to: "2025-12-31" }, previous: { from: "2024-01-01", to: "2024-12-31" } });
     expect(resolvePreset("lastyear", new Date("2029-02-01T12:00:00Z"), "UTC").range).toEqual({ from: "2028-01-01", to: "2028-12-31" });
@@ -357,6 +357,7 @@ describe("dates & time zones", () => {
     // The 9th is still running (01:00), so the 30th counts up to 01:00.
     expect(resolvePreset("custom", now, sydney, { from: "2026-10-01", to: "2026-10-31" })).toEqual({
       range: { from: "2026-10-01", to: "2026-10-09" },
+      until: "01:00:00",
       previous: { from: "2026-09-22", to: "2026-09-30", until: "01:00:00" },
     });
     expect(clampCustomRange({ from: "2026-10-01", to: "2026-10-05" }, today)).toEqual({ from: "2026-10-01", to: "2026-10-05" });
