@@ -25,15 +25,6 @@ export const BILLING_PAGE: boolean = BILLING_ENABLED || process.env.NEXT_PUBLIC_
 export const API_KEYS_ENABLED: boolean = false;
 
 /**
- * The simpler Home (2026-11-05, the owner's approved prototype): what needs you, four numbers,
- * sales by day and what changed
- * (components/dashboard/SimpleHome.tsx). "Show the full dashboard" under the greeting brings back
- * every panel on that device, and "Back to the simple Home" returns. Flip to `false` to make the
- * full dashboard everyone's Home again, with no way to the simple one.
- */
-export const SIMPLE_HOME: boolean = true;
-
-/**
  * The short menu (2026-11-11): the sidebar lists the everyday pages and folds the rest into groups
  * that open with a click (lib/menu.ts, components/AppShell.tsx). Every page keeps its name and its
  * address. "Show every page" at the foot of the menu brings back the whole list on that device, and

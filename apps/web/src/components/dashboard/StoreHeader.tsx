@@ -88,8 +88,8 @@ export function StoreStatus({ store, live, freshness, check, now }: { store: Ove
 }
 
 /**
- * The simple Home's line under the greeting (the Stitch design): "Updated 3 min ago · Matches
- * Shopify". The same words as the full dashboard's pills (freshnessPill, checkPill) with their
+ * A topic page's status, in words (the Stitch design, SalesFrame.tsx StatusPill): "Updated 3 min ago ·
+ * Matches Shopify". The same words as the Home's pills (freshnessPill, checkPill) with their
  * tooltips; the store's connection only when it isn't simply connected ("Importing your data…").
  */
 export function StatusWords({ store, live, freshness, check, now }: { store: OverviewStore; live: LiveState; freshness: Freshness | undefined; check?: CheckSummary; now: number }) {
@@ -144,7 +144,7 @@ export function AboutThisData({
   ws?: string;
   seesFigures?: boolean;
   canCheck?: boolean;
-  /** The simple Home: its header already says how current the numbers are, so only the fold. */
+  /** A topic's page: its header already says how current the numbers are, so only the fold. */
   brief?: boolean;
 }) {
   const synced = fmtRelative(freshness?.asOf ?? store.lastSyncedAt);

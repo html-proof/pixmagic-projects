@@ -130,8 +130,8 @@ export interface SalesOverview {
     }
   >;
   /**
-   * The dates compared with (`Overview.previous`), day by day: the simple Home draws them as a line
-   * under the bars, day i beside day i of the range. Null when they weren't imported; `totalSales`
+   * The dates compared with (`Overview.previous`), day by day: the Sales page's Sales by day draws them as a
+   * line over the bars, day i beside day i of the range. Null when they weren't imported; `totalSales`
    * as `series`' (Team & Access); absent from answers of older releases.
    */
   previousSeries?: Array<{ day: string; netSales: number; totalSales?: number }> | null;

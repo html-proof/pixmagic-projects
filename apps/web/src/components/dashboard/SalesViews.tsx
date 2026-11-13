@@ -23,7 +23,7 @@ import { FIGURE_HELP, visitsThatBoughtHelp } from "./figureHelp";
 import { fmtDateTime, fmtDuration, fmtLongDay, fmtSpan, hourRange, plural, weekdayName } from "./format";
 import { CatalogCard, FulfillmentBadge, OrderName, PaymentBadge } from "./Modules";
 import { breakdownOf, salesLinesOf } from "./redacted";
-import { SalesByDay } from "./SimpleHome";
+import { SalesByDay } from "./SalesByDay";
 import { TopProducts } from "./TopProducts";
 import type { Topic } from "./topics";
 import type { Overview, RecentOrder } from "./types";

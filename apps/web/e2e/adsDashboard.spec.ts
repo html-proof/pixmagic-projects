@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { createWorkspace, fullDashboard, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
+import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
  * The Advertising area with a Meta ad account whose days are stored: the dashboard's old ads panel
@@ -45,8 +45,6 @@ async function seedOrder(ws: string, storeId: string, id: string, on: string, pr
 }
 
 test("the Advertising area sets the store's sales against the spend and shows each platform, campaign and report", async ({ page }) => {
-  // Its panels are the full dashboard's (lib/features.ts SIMPLE_HOME).
-  await fullDashboard(page);
   const email = uniqueEmail("ads-panel");
   await signUp(page, email);
   const ws = await createWorkspace(page, "Ads Panel Co");
@@ -223,8 +221,6 @@ test("a real Google Ads account's campaigns show Google's type, delivery and bud
 });
 
 test("trend charts group by week and month, the week presets run Monday to Sunday, and the Advertising pages print", async ({ page }) => {
-  // Its panels are the full dashboard's (lib/features.ts SIMPLE_HOME).
-  await fullDashboard(page);
   const email = uniqueEmail("ads-periods");
   await signUp(page, email);
   const ws = await createWorkspace(page, "Ads Periods Co");

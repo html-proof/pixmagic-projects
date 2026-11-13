@@ -34,9 +34,6 @@ export function removeLocal(key: string): void {
 export const WORKSPACE_KEY = "ws";
 export const storeKey = (workspaceId: string) => `store:${workspaceId}`;
 
-/** Which Home this device shows: "simple" or "full" (lib/features.ts SIMPLE_HOME); nothing saved is the simple one. */
-export const HOME_LAYOUT_KEY = "home-layout";
-
 /** Which menu this device shows: "full" once "Show every page" was chosen (lib/menu.ts); nothing saved is the short one. */
 export const MENU_LAYOUT_KEY = "menu-layout";
 /** The short menu's groups left open on this device, e.g. "store,settings". */

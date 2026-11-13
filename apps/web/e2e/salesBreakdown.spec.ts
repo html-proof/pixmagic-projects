@@ -110,8 +110,7 @@ test("total sales line by line, Custom sales from it, saved and shown across the
   await expect(page.getByTestId("tile-custom-sales")).toContainText("Custom sales $1,060.00");
   await expect(page.getByTestId("tile-custom-sales")).toContainText("Sales excluding tax and duties");
   await expect(page.getByTestId("metric-Total sales")).toContainText("$1,210.00");
-  // The full dashboard's sales chart measures it too (lib/features.ts SIMPLE_HOME: one click away).
-  await page.getByTestId("home-layout-switch").click();
+  // The Home's sales chart measures it too.
   await expect(page.getByLabel("Sales chart shows")).toHaveValue("custom");
 
   // Restored on the next visit, from the store's saved calculation.

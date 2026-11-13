@@ -190,7 +190,7 @@ while rendering is caught by `app/(app)/error.tsx` inside the shell, or `app/err
 pages. Unknown paths get `app/not-found.tsx`.
 
 **The signed-in look (the owner's Stitch design, 2026-11-06).** Every signed-in page follows the
-approved Stitch prototypes (docs/kpis.md "The simple Home"), through the shared pieces rather than
+approved Stitch prototypes (docs/kpis.md "The Sales pages"), through the shared pieces rather than
 page by page:
 - `globals.css` tokens: a cool off-white page, navy ink, slate secondary text, cool hairlines and a
   faint shadow.

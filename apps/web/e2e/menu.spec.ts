@@ -115,18 +115,18 @@ test("a new device is offered a look around: it can be taken, left at any step, 
 
   await offer.getByRole("button", { name: "Show me around" }).click();
   const tour = page.getByRole("dialog");
-  await expect(tour.getByRole("heading")).toHaveText("Start here each day");
+  await expect(tour.getByRole("heading")).toHaveText("Your numbers at a glance");
   await expect(tour.getByTestId("tour-count")).toHaveText(/^1 of \d$/);
   await expect(page.getByTestId("tour-spotlight")).toBeVisible();
   await expect(offer).toHaveCount(0);
   await tour.getByRole("button", { name: "Next" }).click();
-  await expect(tour.getByRole("heading")).toHaveText("Your numbers at a glance");
+  await expect(tour.getByRole("heading")).toHaveText("Choose the dates");
   await tour.getByRole("button", { name: "Back" }).click();
-  await expect(tour.getByRole("heading")).toHaveText("Start here each day");
+  await expect(tour.getByRole("heading")).toHaveText("Your numbers at a glance");
   // The keyboard works it too, and Escape leaves at any step.
   await page.keyboard.press("ArrowRight");
   await page.keyboard.press("ArrowRight");
-  await expect(tour.getByRole("heading")).toHaveText("Choose the dates");
+  await expect(tour.getByRole("heading")).toHaveText("Everything else is in the menu");
   await page.keyboard.press("Escape");
   await expect(tour).toHaveCount(0);
 
@@ -138,7 +138,7 @@ test("a new device is offered a look around: it can be taken, left at any step, 
   // …but always there under the help button, through to its last step.
   await page.getByRole("button", { name: "Help and support" }).click();
   await page.getByRole("button", { name: "Show me around" }).click();
-  await expect(tour.getByRole("heading")).toHaveText("Start here each day");
+  await expect(tour.getByRole("heading")).toHaveText("Your numbers at a glance");
   const steps = Number((await tour.getByTestId("tour-count").innerText()).split(" of ")[1]);
   expect(steps).toBeGreaterThanOrEqual(6);
   for (let i = 1; i < steps; i++) await tour.getByRole("button", { name: "Next" }).click();
@@ -159,33 +159,26 @@ test("a new device is offered a look around: it can be taken, left at any step, 
   await expect(offer).toHaveCount(0);
 });
 
-test("the i beside a figure says what it measures, without opening the figure's page", async ({ page }) => {
+test("the i beside a figure on the Sales page says what it measures", async ({ page }) => {
   await ownerWithSales(page, "help");
   await page.goto("/dashboard");
   await expect(page.getByTestId("metric-Total sales")).toContainText("$500.00");
+  await page.getByTestId("metric-Total sales").click();
+  await expect(page).toHaveURL(/view=sales/);
 
-  const i = page.getByRole("button", { name: "What is Total sales?" });
-  const note = page.getByRole("tooltip").filter({ hasText: "Everything customers were charged" });
+  const figure = page.getByTestId("sales-figure-Total sales");
+  const i = figure.getByRole("button", { name: "What is Total sales?" });
+  const note = figure.getByRole("tooltip").filter({ hasText: "Everything customers were charged" });
   await expect(note).toBeHidden();
   await i.click();
   await expect(note).toBeVisible();
   await expect(note).toContainText("The same figure as Shopify's Total sales.");
-  // The tile itself wasn't clicked: still the Home.
-  await expect(page).toHaveURL(/\/dashboard\/?$/);
   await page.keyboard.press("Escape");
   await expect(note).toBeHidden();
-  // By keyboard: it is the next stop after its tile, focus shows it, and leaving hides it.
-  await page.getByTestId("metric-Total sales").focus();
-  await page.keyboard.press("Tab");
-  await expect(i).toBeFocused();
+  // By keyboard: focus shows it, and leaving hides it.
+  await i.blur();
+  await i.focus();
   await expect(note).toBeVisible();
   await page.keyboard.press("Tab");
   await expect(note).toBeHidden();
-
-  // The same words on the Sales page's figure.
-  await page.getByTestId("metric-Total sales").click();
-  await expect(page).toHaveURL(/view=sales/);
-  const figure = page.getByTestId("sales-figure-Total sales");
-  await figure.getByRole("button", { name: "What is Total sales?" }).hover();
-  await expect(figure.getByRole("tooltip")).toContainText("Everything customers were charged");
 });

@@ -17,16 +17,10 @@ export interface TourStep {
 
 export const TOUR_STEPS: TourStep[] = [
   {
-    id: "needs",
-    targets: ["needs"],
-    title: "Start here each day",
-    body: "Anything that needs you is listed first, worst first, each with one button. When nothing does, it says so.",
-  },
-  {
     id: "numbers",
     targets: ["numbers"],
     title: "Your numbers at a glance",
-    body: "Four figures for the dates you picked. Click one for the detail behind it; the small i says what it measures.",
+    body: "Four figures for the dates you picked. Click one for the detail behind it.",
   },
   {
     id: "dates",

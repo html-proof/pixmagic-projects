@@ -56,7 +56,7 @@
      green that keeps white text at 4.5:1. */
   --nav-bg: #0f1c2e;
   --nav-active: #198754;
-  /* The simple Home, as the Stitch design draws it (docs/kpis.md): its soft rows and buttons, their
+  /* The app's pages, as the Stitch design draws them (docs/kpis.md): its soft rows and buttons, their
      hover, and the hairlines between rows. */
   --home-soft: #eff4ff;
   --home-soft-hover: #e5eeff;
@@ -215,7 +215,7 @@ body::before {
 @utility card-title {
   @apply text-2xl leading-8 font-semibold tracking-[-0.015em];
 }
-/* The simple Home's panels (Stitch design): white, a small radius, a faint shadow, no border. */
+/* The pages' panels (Stitch design): white, a small radius, a faint shadow, no border. */
 @utility home-card {
   @apply rounded-lg bg-surface;
   box-shadow: var(--shadow);
