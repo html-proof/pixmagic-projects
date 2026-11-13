@@ -10,7 +10,6 @@ import { BEING_READ, timeZoneNote, UNAVAILABLE } from "@/components/dashboard/Ad
 import { shownFigures, upToWords } from "@/components/dashboard/adFigures";
 import { DemoChip } from "@/components/dashboard/Advertising";
 import { fmtRelative, fmtTimes, plural } from "@/components/dashboard/format";
-import { ChangeText } from "@/components/dashboard/HomeCards";
 import type { AdsModule, AdsProviderFigures, Overview } from "@/components/dashboard/types";
 import { AdCard, CardLink, EmptyNote, MiniFigure } from "./AdCard";
 import { PLATFORM_COLOR } from "./AdvertisingUi";
@@ -102,20 +101,7 @@ function OwnFigures({ a, p, ov, manage, lost }: { a: AdsModule; p: AdsProviderFi
           <EmptyNote>{UNAVAILABLE}: some days of these dates haven&apos;t been read from {NAME[p.provider]} yet.</EmptyNote>
         )}
       </div>
-      {t && (
-        <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
-          <span className="inline-flex items-center gap-1">
-            Spend <ChangeText value={p.deltas.spend} neutral />
-          </span>
-          <span className="inline-flex items-center gap-1">
-            Purchases <ChangeText value={p.deltas.purchases} />
-          </span>
-          <span className="inline-flex items-center gap-1">
-            ROAS <ChangeText value={p.deltas.roas} />
-          </span>
-          {through && <span>Figures {upToWords(through)}.</span>}
-        </p>
-      )}
+      {t && through && <p className="mt-3 text-xs text-muted">Figures {upToWords(through)}.</p>}
       {p.provider === "google" && t && <p className="mt-1 text-xs text-muted">Conversions, every conversion action: {fmtNum(t.conversions)}.</p>}
       {sourced && (
         <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted" data-testid={`ads-card-${p.provider}-sourced`}>

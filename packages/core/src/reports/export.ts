@@ -9,7 +9,6 @@ import {
   TRAFFIC_LABEL,
   VISITOR_KIND_LABEL,
   type AccessKey,
-  type Comparison,
   type DateRange,
   type FunnelDevice,
   type FunnelStep,
@@ -68,7 +67,7 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
  * One section of a (redacted) dashboard answer as a CSV table. Built from what this member's copy
  * of the data holds, so a field they can't see is not a column.
  */
-export function exportTable(section: ExportSection, modules: Obj, dates?: { range: DateRange; previous: Comparison }): { header: string[]; rows: Cell[][] } {
+export function exportTable(section: ExportSection, modules: Obj, dates?: { range: DateRange }): { header: string[]; rows: Cell[][] } {
   switch (section) {
     case "funnel":
       return funnelTable(isObj(modules.funnel) ? modules.funnel : null, dates);
@@ -194,34 +193,21 @@ export function exportTable(section: ExportSection, modules: Obj, dates?: { rang
         "Budget",
         "Budget period",
         ...AD_COLUMNS.slice(2).map(([label]) => label),
-        "Spend before",
-        "Spend change (%)",
-        "ROAS before",
-        "ROAS change (%)",
         "Complete",
       ];
-      const rows = campaigns.map((c): Cell[] => {
-        const change = isObj(c.change) ? c.change : null;
-        const before = change && isObj(change.previous) ? change.previous : {};
-        const deltas = change && isObj(change.deltas) ? change.deltas : {};
-        return [
-          platformName(c.provider, c.accountId === DEMO_ACCOUNT_ID),
-          val(c, "accountId"),
-          val(c, "name"),
-          val(c, "status"),
-          val(c, "primaryStatus"),
-          Array.isArray(c.primaryStatusReasons) && c.primaryStatusReasons.length ? c.primaryStatusReasons.join(" ") : null,
-          val(c, "channelType"),
-          val(c, "budgetAmount"),
-          val(c, "budgetPeriod"),
-          ...AD_COLUMNS.slice(2).map(([, k]) => val(c, k)),
-          change ? val(before, "spend") : null,
-          change ? pct(deltas.spend) : null,
-          change ? val(before, "roas") : null,
-          change ? pct(deltas.roas) : null,
-          c.complete === false ? "no" : "yes",
-        ];
-      });
+      const rows = campaigns.map((c): Cell[] => [
+        platformName(c.provider, c.accountId === DEMO_ACCOUNT_ID),
+        val(c, "accountId"),
+        val(c, "name"),
+        val(c, "status"),
+        val(c, "primaryStatus"),
+        Array.isArray(c.primaryStatusReasons) && c.primaryStatusReasons.length ? c.primaryStatusReasons.join(" ") : null,
+        val(c, "channelType"),
+        val(c, "budgetAmount"),
+        val(c, "budgetPeriod"),
+        ...AD_COLUMNS.slice(2).map(([, k]) => val(c, k)),
+        c.complete === false ? "no" : "yes",
+      ]);
       return { header, rows };
     }
     case "adsense_daily": {
@@ -232,7 +218,7 @@ export function exportTable(section: ExportSection, modules: Obj, dates?: { rang
   }
 }
 
-/** A change (a fraction) as a percentage with one decimal; null when there is none. */
+/** A rate (a fraction) as a percentage with one decimal; null when there is none. */
 const pct = (v: unknown): Cell => (typeof v === "number" ? Math.round(v * 1000) / 10 : null);
 
 const FUNNEL_HEADER = [
@@ -253,12 +239,12 @@ function segmentName(dimension: string, key: string): string {
 }
 
 /**
- * The Shopping Funnel page as one table: the dates and filter, the funnel now and in the dates
- * compared with (one row each, visits reached per step), each step to the next, every day, every
+ * The Shopping Funnel page as one table: the dates and filter, the funnel (visits reached per
+ * step), each step to the next, every day, every
  * segment, then the products. Columns a row has no figure for are empty, as are a product's quick
  * adds, checkouts and purchases in dates they weren't recorded.
  */
-function funnelTable(f: Obj | null, dates?: { range: DateRange; previous: Comparison }) {
+function funnelTable(f: Obj | null, dates?: { range: DateRange }) {
   const blank = (n: number) => Array<Cell>(n).fill(null);
   // A row's figures, then empty cells to the header's width.
   const fill = (...cells: Cell[]): Cell[] => [...cells, ...blank(FUNNEL_HEADER.length - cells.length)];
@@ -268,7 +254,7 @@ function funnelTable(f: Obj | null, dates?: { range: DateRange; previous: Compar
     const conv = r && r[0] ? r[4]! / r[0] : null;
     return fill(section, name, ...(r ? r.slice(0, 5) : blank(5)), pct(conv));
   };
-  if (dates) rows.push(fill("Dates", `${dates.range.from} to ${dates.range.to}, compared with ${dates.previous.from} to ${dates.previous.to}${dates.previous.until ? ` up to ${dates.previous.until}` : ""}`));
+  if (dates) rows.push(fill("Dates", `${dates.range.from} to ${dates.range.to}`));
   if (!f) return { header: FUNNEL_HEADER, rows };
   const filter = isObj(f.filter) ? f.filter : {};
   const parts = [
@@ -280,8 +266,6 @@ function funnelTable(f: Obj | null, dates?: { range: DateRange; previous: Compar
   ].filter(Boolean);
   rows.push(fill("Filter", parts.length ? parts.join("; ") : "All tracked visits"));
   rows.push(funnelRow("Funnel", "These dates", list(f.steps).map((s) => num(s, "reached"))));
-  const previous = isObj(f.previous) ? f.previous : {};
-  rows.push(Array.isArray(previous.reached) ? funnelRow("Funnel", "Dates compared with", previous.reached) : fill("Funnel", "Dates compared with: no earlier data"));
   for (const t of list(f.transitions)) {
     rows.push(fill("Step to step", `${FUNNEL_STEP_LABEL[t.from as FunnelStep]} → ${FUNNEL_STEP_LABEL[t.to as FunnelStep]}`, val(t, "fromCount"), ...blank(5), val(t, "lost"), pct(t.progression), pct(t.dropOff)));
   }
@@ -303,17 +287,8 @@ function shownTotals(fig: Obj): { totals: Obj | null; through: string | null } {
   return soFar ? { totals: soFar.totals as Obj, through: String(soFar.to) } : { totals: null, through: null };
 }
 
-const NOT_COMPARED: Record<string, string> = {
-  running: "Not compared: the dates are still running.",
-  no_history: "Not compared: no earlier data.",
-  incomplete: "Not compared: some days are missing.",
-};
-
 /**
- * The Advertising overview's figures, one per row: each with the figure compared with and the change,
- * on the same whole days as the page (an ad module's `compared`: while the dates include a day not
- * over yet, both sides stop at the last whole day, so the figure for the days compared is a column of
- * its own beside the whole dates'), or the reason there is none. Spend
+ * The Advertising overview's figures, one per row. Spend
  * and the platforms' own counts first, then the store's own sales set against the spend (Shopify's,
  * never the platforms'), then AdSense's estimated earnings, money in, never added to the spend. With
  * Meta and Google both counted (`claimsAddUp` false), their purchases, purchase value, ROAS and
@@ -324,78 +299,63 @@ const NOT_COMPARED: Record<string, string> = {
 function summaryTable(ads: Obj | null, adsense: Obj | null) {
   const rows: Cell[][] = [];
   const unavailable = (fig: Obj) => (isObj(fig.partial) ? `Figures are stored for ${String(fig.partial.from)} to ${String(fig.partial.to)} only.` : "No figures are stored for these dates yet.");
-  const add = (fig: Obj, measures: Array<[label: string, key: string, compared: boolean]>) => {
+  const add = (fig: Obj, measures: Array<[label: string, key: string]>) => {
     const { totals, through } = shownTotals(fig);
-    const before = isObj(fig.previous) ? fig.previous : {};
-    const deltas = isObj(fig.deltas) ? fig.deltas : {};
-    const why = typeof fig.notCompared === "string" ? (NOT_COMPARED[fig.notCompared] ?? null) : null;
-    const c = isObj(fig.compared) && isObj(fig.compared.current) && isObj(fig.compared.current.totals) ? fig.compared : null;
-    const now = c ? (c.current as Obj).totals as Obj : {};
-    const days = c && Number(c.trimmed) > 0 ? `Compared through ${String((c.current as Obj).to)}: whole days only.` : null;
-    for (const [label, key, compared] of measures) {
-      if (!totals) {
-        rows.push([label, "Unavailable", null, null, null, unavailable(fig)]);
-        continue;
-      }
-      const on = compared && c;
-      const note = [through ? `Up to ${through}: the days after it aren't over yet.` : null, compared ? why : null, on ? days : null].filter(Boolean).join(" ") || null;
-      rows.push([label, val(totals, key), on ? val(now, key) : null, on ? val(before, key) : null, on ? pct(deltas[key]) : null, note]);
+    for (const [label, key] of measures) {
+      if (!totals) rows.push([label, "Unavailable", unavailable(fig)]);
+      else rows.push([label, val(totals, key), through ? `Up to ${through}: the days after it aren't over yet.` : null]);
     }
   };
   if (ads) {
-    if (ads.demo === true) rows.push(["Simulated figures", "Includes the Google Ads demo", null, null, null, "Generated by bizinsights, not read from Google, and never set against the store's sales."]);
+    if (ads.demo === true) rows.push(["Simulated figures", "Includes the Google Ads demo", "Generated by bizinsights, not read from Google, and never set against the store's sales."]);
     add(ads, [
-      ["Ad spend", "spend", true],
-      ["Impressions", "impressions", false],
-      ["Link clicks", "linkClicks", true],
+      ["Ad spend", "spend"],
+      ["Impressions", "impressions"],
+      ["Link clicks", "linkClicks"],
     ]);
     // Accounts in another currency: their spend is in none of the figures, nothing being converted.
     const leftOut = list(ads.leftOut);
     if (leftOut.length) {
-      rows.push(["Left out", leftOut.map((acc) => `${String(acc.name ?? acc.accountId)} (${String(acc.currency ?? "currency not known yet")})`).join("; "), null, null, null, "In another currency: their spend and purchases are in none of these figures."]);
+      rows.push(["Left out", leftOut.map((acc) => `${String(acc.name ?? acc.accountId)} (${String(acc.currency ?? "currency not known yet")})`).join("; "), "In another currency: their spend and purchases are in none of these figures."]);
     }
     const platforms = list(ads.byProvider);
     // An answer without `claimsAddUp` (older): one platform's claims add up, more than one's don't.
     const apart = ads.claimsAddUp === false || (ads.claimsAddUp === undefined && new Set(platforms.map((p) => p.provider)).size > 1);
     if (!apart) {
       add(ads, [
-        ["Purchases (platforms' count)", "purchases", true],
-        ["Purchase value (platforms' count)", "purchaseValue", true],
-        ["Return on ad spend (platforms' own)", "roas", true],
-        ["Conversions (all conversion actions)", "conversions", true],
+        ["Purchases (platforms' count)", "purchases"],
+        ["Purchase value (platforms' count)", "purchaseValue"],
+        ["Return on ad spend (platforms' own)", "roas"],
+        ["Conversions (all conversion actions)", "conversions"],
       ]);
     } else {
       const names = platforms.map((p) => platformName(p.provider)).join(" and ");
-      rows.push(["Purchases", "Each platform's own", null, null, null, `${names} can both claim the same order, so their purchases, purchase value, ROAS and conversions are given per platform, never added up.`]);
+      rows.push(["Purchases", "Each platform's own", `${names} can both claim the same order, so their purchases, purchase value, ROAS and conversions are given per platform, never added up.`]);
       for (const p of platforms) {
         const name = platformName(p.provider, p.demo === true);
         add(p, [
-          [`${name} purchases (its own count)`, "purchases", true],
-          [`${name} purchase value (its own count)`, "purchaseValue", true],
-          [`${name} return on ad spend (its own)`, "roas", true],
-          [`${name} conversions (all conversion actions)`, "conversions", true],
+          [`${name} purchases (its own count)`, "purchases"],
+          [`${name} purchase value (its own count)`, "purchaseValue"],
+          [`${name} return on ad spend (its own)`, "roas"],
+          [`${name} conversions (all conversion actions)`, "conversions"],
         ]);
       }
     }
     const s = isObj(ads.sales) ? ads.sales : null;
     if (s) {
-      const before = isObj(s.previous) ? s.previous : null;
-      const deltas = isObj(s.deltas) ? s.deltas : {};
-      const why = before ? null : "Not compared: needs whole dates on both sides, with the store's orders imported for them.";
       for (const [label, key] of [
         ["Net sales (Shopify)", "netSales"],
         ["Orders (Shopify)", "orders"],
         ["Sales per unit of ad spend (MER)", "salesPerSpend"],
         ["Cost per Shopify order", "costPerOrder"],
+        ["Ads as share of sales", "shareOfSales"],
       ] as const) {
-        // Compared only on whole dates, so the days compared are the dates themselves.
-        rows.push([label, val(s, key), before ? val(s, key) : null, before ? val(before, key) : null, before ? pct(deltas[key]) : null, why]);
+        rows.push([label, val(s, key), null]);
       }
-      rows.push(["Ads as share of sales", val(s, "shareOfSales"), null, null, null, null]);
     }
   }
-  if (adsense) add(adsense, [["AdSense estimated earnings (money in, not ad spend)", "earnings", true], ["AdSense page views", "pageViews", true]]);
-  return { header: ["Measure", "Value", "Value on the days compared", "Before", "Change (%)", "Note"], rows };
+  if (adsense) add(adsense, [["AdSense estimated earnings (money in, not ad spend)", "earnings"], ["AdSense page views", "pageViews"]]);
+  return { header: ["Measure", "Value", "Note"], rows };
 }
 
 /**

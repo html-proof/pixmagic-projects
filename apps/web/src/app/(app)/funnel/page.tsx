@@ -5,7 +5,6 @@ import { X } from "lucide-react";
 import type { FunnelFilter } from "@app/shared/funnel";
 import type { FunnelStep } from "@app/shared/journey";
 import { canManage, StoresPending, useApp } from "@/components/AppContext";
-import { comparedWith, versusWords } from "@/components/dashboard/DateRange";
 import { fmtRange } from "@/components/dashboard/format";
 import { JourneyCard } from "@/components/dashboard/Funnel";
 import { ShopifySessionsCard } from "@/components/dashboard/ShopifyReports";
@@ -63,9 +62,7 @@ function FunnelView() {
   const s = useFunnel();
   const [stage, setStage] = useState<FunnelStep | null>(null);
   const { ov, funnel: f } = s;
-  const versus = versusWords(s.shown);
-  const compared = comparedWith(s.shown);
-  const period = ov ? `${fmtRange(ov.range.from, ov.range.to)}${compared ? ` (${compared.charAt(0).toLowerCase()}${compared.slice(1)})` : ""}` : "";
+  const period = ov ? fmtRange(ov.range.from, ov.range.to) : "";
   const narrow = (dim: SegmentDimension, key: string) => {
     s.setFilter(dim, key);
     setStage(null);
@@ -103,8 +100,8 @@ function FunnelView() {
       {ov && !f && (
         <>
           {ov.capabilities.some((c) => c.id === "funnel" && !c.enabled) && <LockedFunnel ov={ov} />}
-          {ov.modules.shopify_sessions && <ShopifySessionsCard m={ov.modules.shopify_sessions} versus={versus} />}
-          <AbandonedCheckoutsCard qs={s.dates.asking?.qs ?? null} currency={ov.store.currency} versus={versus} />
+          {ov.modules.shopify_sessions && <ShopifySessionsCard m={ov.modules.shopify_sessions} />}
+          <AbandonedCheckoutsCard qs={s.dates.asking?.qs ?? null} currency={ov.store.currency} />
           <AboutFunnelData f={null} ov={ov} />
         </>
       )}
@@ -133,8 +130,8 @@ function FunnelView() {
                   How these numbers work
                 </a>
               </p>
-              <FunnelKpis f={f} ov={ov} versus={versus} onOpen={setStage} />
-              <FunnelChart f={f} versus={versus} onOpen={setStage} />
+              <FunnelKpis f={f} ov={ov} onOpen={setStage} />
+              <FunnelChart f={f} onOpen={setStage} />
               <FunnelInsights f={f} period={period} onOpen={setStage} />
               <DropOffs f={f} />
               <Breakdown f={f} ov={ov} onFilter={narrow} />
@@ -144,8 +141,8 @@ function FunnelView() {
             </>
           )}
           <ActionChecklist f={f} />
-          {ov.modules.shopify_sessions && <ShopifySessionsCard m={ov.modules.shopify_sessions} versus={versus} />}
-          <AbandonedCheckoutsCard qs={s.dates.asking?.qs ?? null} currency={ov.store.currency} versus={versus} />
+          {ov.modules.shopify_sessions && <ShopifySessionsCard m={ov.modules.shopify_sessions} />}
+          <AbandonedCheckoutsCard qs={s.dates.asking?.qs ?? null} currency={ov.store.currency} />
           <AboutFunnelData f={f} ov={ov} />
         </>
       )}

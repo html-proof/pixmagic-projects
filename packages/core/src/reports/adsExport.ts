@@ -357,15 +357,12 @@ export function googleAnalyticsTable(part: GoogleAnalyticsPart, a: GoogleAdsAnal
   const out = (header: string[]) => ({ header, rows });
   switch (part) {
     case "overview": {
-      const { current, previous, deltas } = a.overview;
-      // The page compares only with days the account has stored in full.
-      const why = previous ? null : `Not compared: ${a.previous.from} to ${a.previous.to} aren't all stored for this account.`;
+      const { current } = a.overview;
       for (const [label, key, kind] of googleFigures(!!a.account.demo)) {
         const heading = kind === "money" ? money(label) : label;
-        if (!covered) rows.push([heading, "Not stored", null, null, coverage]);
-        else rows.push([heading, figure(kind, current[key]), previous ? figure(kind, previous[key]) : "Not compared", previous ? pct(deltas[key]) : null, [coverage, why].filter(Boolean).join(" ") || null]);
+        rows.push([heading, covered ? figure(kind, current[key]) : "Not stored", coverage]);
       }
-      return out(["Measure", "Value", `Before (${a.previous.from} to ${a.previous.to})`, "Change (%)", "Note"]);
+      return out(["Measure", "Value", "Note"]);
     }
     case "campaigns": {
       for (const c of a.campaigns ?? []) {

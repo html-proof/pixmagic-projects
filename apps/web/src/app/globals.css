@@ -62,7 +62,6 @@
   --home-soft-hover: #e5eeff;
   --home-line: #e5eeff;
   --home-tag: #dce9ff;
-  --home-prev: #bec9bf;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -109,7 +108,6 @@
     --home-soft-hover: #293040;
     --home-line: #2b303b;
     --home-tag: #2b3550;
-    --home-prev: #5d6a61;
     --shadow-lift: 0 2px 6px rgb(0 0 0 / 0.35), 0 24px 48px -18px rgb(0 0 0 / 0.85);
   }
 }
@@ -149,7 +147,6 @@
   --color-home-soft-hover: var(--home-soft-hover);
   --color-home-line: var(--home-line);
   --color-home-tag: var(--home-tag);
-  --color-home-prev: var(--home-prev);
 }
 
 body {

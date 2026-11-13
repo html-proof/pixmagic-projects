@@ -2,7 +2,6 @@
 import type { ReactNode } from "react";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { plural } from "@/components/dashboard/format";
-import { ChangeText } from "@/components/dashboard/HomeCards";
 import type { Overview } from "@/components/dashboard/types";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { AdCard } from "./AdCard";
@@ -15,14 +14,13 @@ import { AdCard } from "./AdCard";
 // say otherwise; nothing here is the platforms' claim, and the two are never added together.
 // ---------------------------------------------------------------------------
 
-function Fig({ label, value, sub, change, testid }: { label: string; value: string; sub?: ReactNode; change?: ReactNode; testid: string }) {
+function Fig({ label, value, sub, testid }: { label: string; value: string; sub?: ReactNode; testid: string }) {
   return (
     <div className="min-w-0 rounded-xl border border-border p-3" data-testid={testid}>
       <p className="truncate text-xs text-muted">{label}</p>
       <p className="mt-0.5 truncate text-xl font-bold tabular-nums tracking-tight" data-testid={`${testid}-value`}>
         {value}
       </p>
-      {change && <div className="mt-1">{change}</div>}
       {sub && <p className="mt-1 text-[11px] text-muted">{sub}</p>}
     </div>
   );
@@ -73,8 +71,8 @@ export function AttributionSummary({ ov }: { ov: Overview }) {
         )}
         {s && (
           <>
-            <Fig label="Net sales (whole store)" value={money(s.current.netSales)} sub="After discounts and returns, before tax and shipping" change={<ChangeText value={s.deltas.netSales} />} testid="attr-net-sales" />
-            <Fig label="Average order value (whole store)" value={s.current.averageOrderValue === null ? "—" : money(s.current.averageOrderValue)} change={<ChangeText value={s.deltas.averageOrderValue} />} testid="attr-store-aov" />
+            <Fig label="Net sales (whole store)" value={money(s.current.netSales)} sub="After discounts and returns, before tax and shipping" testid="attr-net-sales" />
+            <Fig label="Average order value (whole store)" value={s.current.averageOrderValue === null ? "—" : money(s.current.averageOrderValue)} testid="attr-store-aov" />
           </>
         )}
         {c && (
@@ -88,7 +86,6 @@ export function AttributionSummary({ ov }: { ov: Overview }) {
             label="Refunds (whole store)"
             value={money(refunds.refunds)}
             sub={`${plural(refunds.refundedOrders, "order")} refunded${refunds.refundRate !== null ? ` · ${fmtPct(refunds.refundRate)} of sales` : ""}. Net sales are already after returns.`}
-            change={<ChangeText value={ov.modules.refunds?.deltas.refunds ?? null} invert />}
             testid="attr-refunds"
           />
         )}

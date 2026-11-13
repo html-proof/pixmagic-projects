@@ -117,7 +117,7 @@ aws lambda invoke --region ap-southeast-2 --function-name insights-production-cr
 ```
 
    Every figure of today, yesterday, the last 7/30/90 days, this month and last month, ours next to Shopify's, each `match`, `difference`, `sync_delay` (changes still being counted here), `definition_mismatch` (the pixel's tracked visits against Shopify's sessions) or `not_verifiable` (Shopify refused, or the period starts before the imported history). Owners and admins get the same from `GET /workspaces/:ws/stores/:id/shopify-check` (`?format=csv` downloads it). A `difference` on a sales figure is a bug to chase: both sides add up Shopify's sales records.
-   Without `read_reports`, compare with Shopify Analytics by hand for the **same time zone, dates and comparison** (see [kpis.md](kpis.md)). Refunds count on the day they were made.
+   Without `read_reports`, compare with Shopify Analytics by hand for the **same time zone and dates** (see [kpis.md](kpis.md)). Refunds count on the day they were made.
 3. Recompute the store's daily aggregates from its orders and their sales records (idempotent; see [Maintenance tasks](#maintenance-tasks)):
 
 ```bash

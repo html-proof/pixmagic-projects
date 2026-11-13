@@ -1,7 +1,7 @@
 "use client";
 import { useId, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, Minus, type LucideIcon } from "lucide-react";
-import { fmtMoney, fmtPct } from "@/lib/api";
+import type { LucideIcon } from "lucide-react";
+import { fmtMoney } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // The top of the dashboard: four headline numbers, each on a tinted tile with its day-by-day
@@ -32,25 +32,6 @@ const TINT = {
   },
 } as const;
 export type Tint = keyof typeof TINT;
-
-/**
- * A change on the period before as coloured words, as the owner's design writes it: "↑ 12.4%",
- * green when it's good news, red when not (`invert` for costs), grey when it is neither (`neutral`:
- * spending more on ads isn't good or bad by itself).
- */
-export function ChangeText({ value, invert = false, neutral = false, className = "" }: { value: number | null | undefined; invert?: boolean; neutral?: boolean; className?: string }) {
-  if (value === null || value === undefined) return <span className={`text-xs text-muted ${className}`}>No earlier data</span>;
-  const good = invert ? value < 0 : value > 0;
-  const tone = value === 0 || neutral ? "text-muted" : good ? "text-good" : "text-danger";
-  const Arrow = value > 0 ? ArrowUp : value < 0 ? ArrowDown : Minus;
-  return (
-    <span className={`inline-flex items-center gap-1 text-xs font-semibold tabular-nums ${tone} ${className}`}>
-      <Arrow aria-hidden className="h-3.5 w-3.5" strokeWidth={2.5} />
-      <span className="sr-only">{value > 0 ? "up" : value < 0 ? "down" : "unchanged,"}</span>
-      {fmtPct(Math.abs(value))}
-    </span>
-  );
-}
 
 /**
  * A figure's shape over the days picked, small and unlabelled (the tile says what it is): a line
@@ -116,12 +97,8 @@ export function RefundsLine({ refunded, currency }: { refunded: number; currency
 export function KpiCard({
   title,
   value,
-  delta,
-  invert,
   icon: IconCmp,
   tint,
-  compared,
-  versus = "vs previous period",
   spark,
   i = 0,
   extra,
@@ -129,18 +106,12 @@ export function KpiCard({
 }: {
   title: string;
   value: ReactNode;
-  delta: number | null | undefined;
-  invert?: boolean;
   icon: LucideIcon;
   tint: Tint;
-  /** "Compared with 18 Aug – 16 Sep", once known. */
-  compared?: string;
-  /** What the change is on, under the number: "vs same time yesterday" (`versusWords`). */
-  versus?: string;
   /** The figure day by day over the dates picked, for the sparkline. */
   spark?: Array<number | null>;
   i?: number;
-  /** One more line under the change, such as the store's Custom sales beside Shopify's figure. */
+  /** One more line under the figure, such as the store's Custom sales beside Shopify's figure. */
   extra?: ReactNode;
   onClick: () => void;
 }) {
@@ -162,17 +133,7 @@ export function KpiCard({
           <span className="mt-0.5 block truncate text-xl font-bold tracking-tight sm:text-[1.65rem] sm:leading-9">{value}</span>
         </span>
       </span>
-      <span className="mt-3 flex min-w-0 items-end justify-between gap-2">
-        <span className="min-w-0">
-          <ChangeText value={delta} invert={invert} />
-          {delta !== null && delta !== undefined && (
-            <span className="mt-0.5 block truncate text-[11px] text-muted" title={compared}>
-              {versus}
-            </span>
-          )}
-        </span>
-        {spark && <Sparkline values={spark} className={`hidden h-10 w-24 shrink-0 min-[420px]:block sm:w-28 ${t.ink}`} />}
-      </span>
+      {spark && <Sparkline values={spark} className={`mt-3 hidden h-10 w-24 shrink-0 self-end min-[420px]:block sm:w-28 ${t.ink}`} />}
       {extra && <span className="mt-2 block min-w-0 text-xs text-muted">{extra}</span>}
       {/* No aria-label: it would replace the figure; screen readers read the tile, then this. */}
       <span className="sr-only"> – open details</span>
