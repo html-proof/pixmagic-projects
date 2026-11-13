@@ -151,6 +151,13 @@ from the owner's PC). Staging stays off: the two copies don't fit on the server 
   two minutes after it: no ship by hand. Check `https://bizinsights.io/api/version` as before.
 - A merge of only Markdown or `docs/` starts no CI run and deploys nothing, so `/api/version` keeps
   naming the last commit that did.
+- Production never goes back by itself. CI's runs on `main` don't finish in the order of their
+  commits, so a run can arrive for a commit older than the live one; the workflow asks the site
+  which commit is live and leaves it alone when it already contains the run's (the step "Is
+  production already on a newer commit?"). Without that step, on its first day, the run for
+  33688521 put that release back over 21d1dd6c seven minutes after it went live; the two differed
+  only in `docs/`. Going back on purpose is a ship by hand
+  ([Rolling back a release](#rolling-back-a-release)).
 - A ship by hand still works (the owner's key, `ship.sh`), for the day GitHub is unreachable.
   `deploy.sh` takes a lock in the project's folder (`.deploy.lock`), so a hand ship and a run that
   arrive together go one after the other; the second waits up to 15 minutes, then gives up without
