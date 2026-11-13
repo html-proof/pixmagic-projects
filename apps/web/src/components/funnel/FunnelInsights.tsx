@@ -5,8 +5,12 @@ import { MIN_COMPARED, type FunnelInsight } from "@app/shared/funnel";
 import type { FunnelStep } from "@app/shared/journey";
 import type { FunnelPageModule } from "@/components/dashboard/types";
 import { fmtNum, fmtPct } from "@/lib/api";
-import { fmtPts, FunnelSection, segmentLabel } from "./FunnelUi";
+import { FunnelSection, segmentLabel } from "./FunnelUi";
 import { STAGES } from "./stageGuide";
+
+/** The observations the page words: where most visits stop, and a segment or a product against the others. */
+type ShownInsight = Extract<FunnelInsight, { kind: "largest_drop" | "segment_gap" | "product_interest" }>;
+const isShown = (i: FunnelInsight): i is ShownInsight => i.kind === "largest_drop" || i.kind === "segment_gap" || i.kind === "product_interest";
 
 interface Worded {
   title: string;
@@ -21,11 +25,9 @@ interface Worded {
 }
 
 const name = (s: FunnelStep) => `“${STAGES[s].name}”`;
-/** "start checkout", from "went on to start checkout". */
-const verb = (s: FunnelStep) => STAGES[s].wentOn.replace(/^went on to /, "");
 
 /** One observation in words. Measured differences only: the reasons are offered as things to check. */
-function word(i: FunnelInsight): Worded {
+function word(i: ShownInsight): Worded {
   switch (i.kind) {
     case "largest_drop":
       return {
@@ -34,36 +36,6 @@ function word(i: FunnelInsight): Worded {
         metric: "Drop-off rate",
         why: "It is the step where the most potential customers are lost, so a small improvement here reaches the most shoppers.",
         action: `Open the stage to see where those visits were last, and the checks worth making.`,
-        link: { label: `Open "${STAGES[i.to].name}"`, step: i.to },
-      };
-    case "visits":
-      return {
-        title: `Tracked visits ${i.tone === "positive" ? "increased" : "decreased"} compared with the dates before`,
-        measured: `${fmtNum(i.current)} visits against ${fmtNum(i.previous)} (${i.change > 0 ? "+" : "−"}${fmtPct(Math.abs(i.change))}).`,
-        metric: "Store visits",
-        why: i.tone === "positive" ? "More visits only become sales if they go on through the funnel: check whether the rates below held up." : "Fewer visits means fewer chances to sell, even if the rest of the funnel holds.",
-        action: i.tone === "positive" ? "Compare the conversion rate with the dates before to see if the new visits buy as often." : "Check your traffic sources, campaigns and any recent changes to ads or search listings.",
-        link: { label: "See the trend", anchor: "trend" },
-      };
-    case "conversion":
-      return {
-        title: `A ${i.tone === "positive" ? "larger" : "smaller"} share of visits ended in a purchase`,
-        measured: `${fmtPct(i.current)} of ${fmtNum(i.visits)} visits bought, against ${fmtPct(i.previous)} of ${fmtNum(i.previousVisits)} (${fmtPts(i.current - i.previous)}).`,
-        metric: "Overall conversion rate",
-        why: "Conversion rate sums up the whole funnel: the same visits now bring more or fewer orders.",
-        action: "Look at which step changed most in the table of drop-offs.",
-        link: { label: "See the drop-offs", anchor: "drop-offs" },
-      };
-    case "transition":
-      return {
-        title:
-          i.tone === "negative"
-            ? `A larger share of ${STAGES[i.from].visitsAt} visits didn't go on to ${verb(i.to)}`
-            : `A larger share of ${STAGES[i.from].visitsAt} visits went on to ${verb(i.to)}`,
-        measured: `${fmtPct(i.current)} went on, against ${fmtPct(i.previous)} before (${fmtPts(i.current - i.previous)}; ${fmtNum(i.fromCount)} and ${fmtNum(i.previousFromCount)} visits).`,
-        metric: "Progression rate",
-        why: i.tone === "negative" ? "Shoppers who already got this far are stopping more often, which costs sales directly." : "Shoppers are getting through this step more easily than before.",
-        action: i.tone === "negative" ? `Check what changed around "${STAGES[i.to].name.toLowerCase()}": prices, shipping, page changes or apps.` : "Note what changed so you can keep it, and apply it elsewhere.",
         link: { label: `Open "${STAGES[i.to].name}"`, step: i.to },
       };
     case "segment_gap": {
@@ -97,21 +69,22 @@ const TONE: Record<FunnelInsight["tone"], { label: string; Icon: typeof Info; cl
   neutral: { label: "Observation", Icon: Info, cls: "text-info" },
 };
 
-/** "Shopping Funnel Insights": what changed, by how much, over which dates, why it may matter and what to do, each only where the numbers support it. */
+/** "Shopping Funnel Insights": what stands out, by how much, over which dates, why it may matter and what to do, each only where the numbers support it. */
 export function FunnelInsights({ f, period, onOpen }: { f: FunnelPageModule; period: ReactNode; onOpen: (step: FunnelStep) => void }) {
+  const insights = f.insights.filter(isShown);
   const go = (link: Worded["link"]) => {
     if (link.step) onOpen(link.step);
     else if (link.anchor) document.getElementById(link.anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   return (
     <FunnelSection id="insights" title="Shopping Funnel insights" sub={<>What the numbers show for {period}. Each appears only when the data supports it.</>}>
-      {f.insights.length === 0 ? (
+      {insights.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted">
           Nothing stands out yet. Observations need at least {MIN_COMPARED} visits in each group compared, and a difference larger than chance would explain; with more visits, or longer dates, they appear here.
         </p>
       ) : (
         <ul className="grid gap-3 lg:grid-cols-2">
-          {f.insights.map((insight, n) => {
+          {insights.map((insight, n) => {
             const w = word(insight);
             const t = TONE[insight.tone];
             return (
@@ -141,7 +114,7 @@ export function FunnelInsights({ f, period, onOpen }: { f: FunnelPageModule; per
         </ul>
       )}
       <p className="mt-3 text-xs text-muted">
-        Changes are tested with a two-proportion test (95%) and need at least {MIN_COMPARED} visits on each side; visit counts are compared only between dates of the same length. Possible reasons are suggestions to check, not measured causes.
+        Differences are tested with a two-proportion test (95%) and need at least {MIN_COMPARED} visits on each side. Possible reasons are suggestions to check, not measured causes.
       </p>
     </FunnelSection>
   );

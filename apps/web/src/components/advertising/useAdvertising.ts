@@ -95,7 +95,7 @@ export function useAdvertising(platform?: AdProvider | null) {
   const ov = live.data && store && live.data.store.id === store.id ? live.data : null;
   const fetching = !!ov && [...(ov.modules.ads?.accounts ?? []), ...(ov.modules.adsense?.accounts ?? [])].some((a) => (a.status === "active" && !a.lastSyncedAt) || refreshing(a));
   useEffect(() => setEvery(fetching ? FETCHING_EVERY_MS : LIVE_EVERY_MS), [fetching]);
-  const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
+  const shown: Shown = ov && { range: ov.range, timezone: ov.store.timezone };
   return {
     ...question,
     shown,

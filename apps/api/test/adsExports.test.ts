@@ -394,15 +394,13 @@ describe("the Google Ads analytics page's downloads", () => {
     return systemDb.adConnection.findFirstOrThrow({ where: { storeId, isDemo: true } });
   }
 
-  it("the overview: each figure, the one compared with and the change, marked simulated; audited with the part", async () => {
+  it("the overview: each figure, marked simulated; audited with the part", async () => {
     const conn = await demo();
     const res = await get(`${base()}?part=overview&preset=7d`);
     expect(res.statusCode, res.body).toBe(200);
     expect(res.headers["content-disposition"]).toMatch(/filename="bizinsights-google-ads-demo-simulated-DEMO-ADS-001-overview-\d{4}-\d{2}-\d{2}-to-\d{4}-\d{2}-\d{2}\.csv"/);
     const [header, simulated, ...rows] = rowsOf(res.body);
-    expect(header!.slice(0, 2)).toEqual(["Measure", "Value"]);
-    expect(header![2]).toMatch(/^Before \(\d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2}\)$/);
-    expect(header!.slice(3)).toEqual(["Change (%)", "Note"]);
+    expect(header).toEqual(["Measure", "Value", "Note"]);
     expect(simulated![0]).toBe("Simulated data");
     expect(rows.map((r) => r[0])).toEqual([
       "Spend (AUD)",

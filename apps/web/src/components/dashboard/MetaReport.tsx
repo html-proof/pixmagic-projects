@@ -22,9 +22,8 @@ import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api"
 import { saveApiFile } from "@/lib/download";
 import { Definitions } from "./AdsCommon";
 import { fmtDay, fmtRange, fmtSpan, fmtTimes, plural } from "./format";
-import { Badge, Delta, NeutralDelta, Panel, type Tone } from "./Primitives";
+import { Badge, Panel, type Tone } from "./Primitives";
 import { DrillCrumbs, OpenRow, useDrillFocus, useReportDrill } from "./ReportDrill";
-import { ReportChange, reportChange } from "./ReportCompare";
 import { CsvButton } from "./ReportDownload";
 import type { AdsModule, Overview } from "./types";
 
@@ -32,9 +31,7 @@ import type { AdsModule, Overview } from "./types";
 // The Meta Ads report: campaigns, ad sets and ads, or the whole account by placement, device,
 // country, age group or gender, for the dates picked, asked of Meta for exactly those dates (GET
 // .../ads/meta/report). Reach and frequency count each person once over the range, so they're
-// never added up from days. Read-only: there is nothing here that changes an ad. When the answer
-// carries the dates compared with (`comparison`), the figures at a glance and each row show their
-// change; the dates picked must have ended, so a day still running is never set against whole days.
+// never added up from days. Read-only: there is nothing here that changes an ad.
 // Each campaign, ad set or ad also brings what it is set to at Meta (objective, budget, schedule,
 // bidding, an ad's preview), and the account's campaigns are counted by state. A campaign opens to
 // its ad sets, an ad set to its ads (?campaign=&adset=, ReportDrill), with that campaign's or ad
@@ -53,8 +50,6 @@ interface Report {
   attribution: string[];
   /** The account's campaigns by state at Meta now; null when not read, absent from older answers. */
   campaigns?: MetaCampaignCounts | null;
-  /** The dates compared with, when asked for and given: their totals and each row's figures (by id). */
-  comparison?: { since: string; until: string; totals: MetaReportMetrics; rows: Array<{ id: string } & Partial<MetaReportMetrics>> };
 }
 interface Answer {
   account: { id: string; accountId: string; name: string | null; currency: string | null; timezone: string | null };
@@ -122,8 +117,7 @@ const isPurchaseKey = (k: string): k is PurchaseKey => k === "purchases" || k ==
  * Meta gave no figure for that window (Not reported), as in answers cached before the windows were read.
  * Null: no figure to work out (a cost with no purchases, a return with no spend), "—" as elsewhere.
  */
-function purchaseFigure(m: Partial<MetaReportMetrics> | undefined, key: PurchaseKey, at: Attribution): number | null | undefined {
-  if (!m) return undefined;
+function purchaseFigure(m: MetaReportMetrics, key: PurchaseKey, at: Attribution): number | null | undefined {
   if (at === "setting") return m[key];
   const w = m.byWindow?.[at];
   if (!w || (key === "purchases" || key === "costPerPurchase" ? w.purchases : w.purchaseValue) === null) return undefined;
@@ -183,37 +177,30 @@ const DEFINITIONS: Array<[string, string]> = [
 ];
 
 // ---------------------------------------------------------------------------
-// The figures at a glance: the account's totals for the dates, each with the change against the
-// dates compared with (whole days only) and what was compared.
+// The figures at a glance: the account's totals for the dates.
 // ---------------------------------------------------------------------------
 
-/**
- * How each figure reads as news: `neutral` ones (spend, how many people were reached) are neither
- * good nor bad by themselves; `invert` ones are costs, where lower is better.
- */
-const KPIS: Array<{ key: Exclude<keyof MetaReportMetrics, "byWindow">; label: string; kind: "money" | "count" | "rate" | "times" | "frequency"; neutral?: boolean; invert?: boolean }> = [
-  { key: "spend", label: "Spent", kind: "money", neutral: true },
-  { key: "impressions", label: "Impressions", kind: "count", neutral: true },
-  { key: "reach", label: "Reach", kind: "count", neutral: true },
-  { key: "frequency", label: "Frequency", kind: "frequency", neutral: true },
+const KPIS: Array<{ key: Exclude<keyof MetaReportMetrics, "byWindow">; label: string; kind: "money" | "count" | "rate" | "times" | "frequency" }> = [
+  { key: "spend", label: "Spent", kind: "money" },
+  { key: "impressions", label: "Impressions", kind: "count" },
+  { key: "reach", label: "Reach", kind: "count" },
+  { key: "frequency", label: "Frequency", kind: "frequency" },
   { key: "linkClicks", label: "Link clicks", kind: "count" },
   { key: "linkCtr", label: "Link click rate", kind: "rate" },
-  { key: "costPerLinkClick", label: "Per link click", kind: "money", invert: true },
-  { key: "cpm", label: "Per 1,000 impressions", kind: "money", invert: true },
+  { key: "costPerLinkClick", label: "Per link click", kind: "money" },
+  { key: "cpm", label: "Per 1,000 impressions", kind: "money" },
   { key: "landingPageViews", label: "Landing page views (Meta's count)", kind: "count" },
   { key: "purchases", label: "Purchases (Meta's count)", kind: "count" },
   { key: "purchaseValue", label: "Purchase value (Meta's count)", kind: "money" },
   { key: "roas", label: "Purchase ROAS", kind: "times" },
-  { key: "costPerPurchase", label: "Per purchase", kind: "money", invert: true },
+  { key: "costPerPurchase", label: "Per purchase", kind: "money" },
 ];
 
-function Kpi({ label, value, change, before, note, testid }: { label: string; value: string; change?: ReactNode; before?: string | null; note?: string; testid: string }) {
+function Kpi({ label, value, note, testid }: { label: string; value: string; note?: string; testid: string }) {
   return (
     <div className="lift min-w-0 rounded-lg border border-border bg-surface p-3" data-testid={testid}>
       <p className="text-xs text-muted">{label}</p>
       <p className="mt-1 truncate text-xl font-semibold tabular-nums">{value}</p>
-      {change && <p className="mt-1">{change}</p>}
-      {before && <p className="mt-1 truncate text-xs text-muted">Before: {before}</p>}
       {note && <p className="mt-1 text-xs text-muted">{note}</p>}
     </div>
   );
@@ -223,38 +210,20 @@ function Glance({ r, money, cached, timezone, drilled, at }: { r: Report; money:
   // Undefined: a window's figure Meta didn't give (purchaseFigure).
   const show = (kind: (typeof KPIS)[number]["kind"], v: number | null | undefined) =>
     v === undefined ? NOT_REPORTED : v === null ? NA : kind === "money" ? money(v) : kind === "count" ? fmtNum(v) : kind === "rate" ? fmtPct(v) : kind === "times" ? fmtTimes(v) : freq(v);
-  const cmp = r.comparison;
-  const label = cmp ? `vs ${fmtSpan(cmp.since, cmp.until)}` : "vs before";
   // The account's campaigns by state: not a campaign's or an ad set's figure, so not shown down from one.
   const counts = drilled ? undefined : r.campaigns;
-  const figure = (m: Partial<MetaReportMetrics> | undefined, key: (typeof KPIS)[number]["key"]) => (isPurchaseKey(key) ? purchaseFigure(m, key, at) : (m?.[key] ?? null));
   return (
     <div className="mb-4" data-testid="meta-report-glance">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-        {KPIS.map((k) => {
-          const now = figure(r.totals, k.key);
-          const was = cmp ? figure(cmp.totals, k.key) : null;
-          const change = cmp ? reportChange(now, was) : null;
-          return (
-            <Kpi
-              key={k.key}
-              testid={`meta-kpi-${k.key}`}
-              // A window's figures say which: Meta's count under it.
-              label={isPurchaseKey(k.key) && at !== "setting" ? `${k.label.replace(/ \(Meta's count\)$/, "")} (Meta's count, ${attributionLabel(at)})` : k.label}
-              value={show(k.kind, now)}
-              change={
-                !cmp ? undefined : change === null ? (
-                  <span className="text-xs text-muted">nothing to compare with</span>
-                ) : k.neutral ? (
-                  <NeutralDelta value={change} label={label} />
-                ) : (
-                  <Delta value={change} invert={k.invert} label={label} />
-                )
-              }
-              before={cmp ? show(k.kind, was) : null}
-            />
-          );
-        })}
+        {KPIS.map((k) => (
+          <Kpi
+            key={k.key}
+            testid={`meta-kpi-${k.key}`}
+            // A window's figures say which: Meta's count under it.
+            label={isPurchaseKey(k.key) && at !== "setting" ? `${k.label.replace(/ \(Meta's count\)$/, "")} (Meta's count, ${attributionLabel(at)})` : k.label}
+            value={show(k.kind, isPurchaseKey(k.key) ? purchaseFigure(r.totals, k.key, at) : r.totals[k.key])}
+          />
+        ))}
         {counts !== undefined && (
           <Kpi
             testid="meta-kpi-campaigns"
@@ -270,8 +239,7 @@ function Glance({ r, money, cached, timezone, drilled, at }: { r: Report; money:
       </div>
       <p className="mt-2 text-xs text-muted" data-testid="meta-report-source">
         Source: Meta Ads · {cached ? "fetched from Meta in the last few minutes" : "fetched from Meta just now"} · {fmtRange(r.since, r.until)}
-        {timezone ? `, days in ${timezone}` : ""}
-        {cmp ? ` · changes compare with ${fmtSpan(cmp.since, cmp.until)}, as Meta reports those dates now` : " · changes show once the dates picked are over"}.
+        {timezone ? `, days in ${timezone}` : ""}.
       </p>
     </div>
   );
@@ -356,10 +324,6 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const [error, setError] = useState<{ message: string; reconnect: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const { from, to } = ov.range;
-  // Changes only for dates that are over: a day still running against whole days reads as a drop.
-  const ended = to < ov.today;
-  const cfrom = ended ? ov.previous.from : null;
-  const cto = ended ? ov.previous.to : null;
   const chosen = meta.find((a) => a.id === connection) ?? meta[0];
   const drill = useReportDrill("adset", isMetaObjectId, chosen?.id);
   // Down from a campaign: its ad sets; from an ad set: its ads (in its campaign, when known).
@@ -371,7 +335,7 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const drillKey = `${drill.campaign ?? "-"}:${drill.child ?? "-"}`;
   useDrillFocus(drill, "d-meta-report", !!error || answer?.drill === drillKey);
   // The question asked of the API: the page's read, and its download (format=csv) of the same answer.
-  const path = chosen ? `/workspaces/${workspace.id}/stores/${ov.store.id}/ads/meta/report?${new URLSearchParams({ connection: chosen.id, ...asked, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) })}` : null;
+  const path = chosen ? `/workspaces/${workspace.id}/stores/${ov.store.id}/ads/meta/report?${new URLSearchParams({ connection: chosen.id, ...asked, from, to })}` : null;
   const asking = useRef(path);
   useEffect(() => {
     asking.current = path;
@@ -424,8 +388,6 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
   const money = (n: number | null) => (n === null ? NA : fmtMoney(n, currency));
   const attribution = (r?.attribution ?? []).map(metaAttributionLabel).filter(Boolean).join("; ");
   const includesToday = !!shown && to >= shown.today;
-  const cmp = r?.comparison;
-  const before = new Map((cmp?.rows ?? []).map((row) => [row.id, row]));
   const objects = !!r && OBJECT_LEVELS.has(r.level);
   // The filters apply to campaigns, ad sets and ads (a split of the account has no status).
   const objectives = objects && r.level === "campaign" ? [...new Set(r.rows.map((row) => row.details?.objective).filter((o): o is string => !!o))].sort() : [];
@@ -577,28 +539,15 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
                       {h}
                     </th>
                   ))}
-                  {cmp && <th className="px-2 pb-2 text-right font-normal">Spend vs before</th>}
-                  {cmp && <th className="px-2 pb-2 text-right font-normal">Purchases vs before</th>}
                 </tr>
               </thead>
               <tbody>
                 <tr className="border-t border-border bg-surface font-medium" data-testid="meta-report-whole">
                   <td className="px-2 py-2">Whole {whole}</td>
                   <Cells m={r.totals} money={money} at={at} />
-                  {cmp && <ReportChange value={reportChange(r.totals.spend, cmp.totals.spend)} neutral />}
-                  {cmp && <ReportChange value={reportChange(purchaseFigure(r.totals, "purchases", at), purchaseFigure(cmp.totals, "purchases", at))} />}
                 </tr>
-                {cmp && (
-                  <tr className="border-t border-border text-muted" data-testid="meta-report-before">
-                    <td className="px-2 py-2">Before ({fmtSpan(cmp.since, cmp.until)})</td>
-                    <Cells m={cmp.totals} money={money} at={at} />
-                    <td />
-                    <td />
-                  </tr>
-                )}
                 {rows.map((row) => {
                   const s = statusOf(row.status);
-                  const was = before.get(row.id);
                   const open = opens(row);
                   // Down from a campaign or an ad set, the breadcrumb names them; on the account's own lists, each row does.
                   const parents = drill.open ? [] : [row.campaignName, row.adsetName].filter(Boolean);
@@ -619,8 +568,6 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
                         {row.details && <DetailsLine level={r.level} d={row.details} money={money} />}
                       </td>
                       <Cells m={row} money={money} at={at} />
-                      {cmp && <ReportChange value={reportChange(row.spend, was?.spend)} neutral />}
-                      {cmp && <ReportChange value={reportChange(purchaseFigure(row, "purchases", at), purchaseFigure(was, "purchases", at))} />}
                     </tr>
                   );
                 })}
@@ -649,11 +596,6 @@ export function MetaReportPanel({ ov, accounts }: { ov: Overview; accounts: AdsM
             {r.level === "device" && <li>Devices are the ones the ads were shown on.</li>}
             {r.level === "country" && <li>Countries are where the people who saw your ads were.</li>}
             {(r.level === "age" || r.level === "gender") && <li>Age groups and genders are Meta&apos;s own totals for the people who saw the ads; nothing here is about any one person.</li>}
-            {cmp ? (
-              <li>Changes compare with {fmtSpan(cmp.since, cmp.until)}, as Meta reports those dates now.</li>
-            ) : !ended ? (
-              <li>Changes show once the dates picked are over: today is still running, so it isn&apos;t set against whole days.</li>
-            ) : null}
             {at === "setting" ? (
               <li>
                 Purchases and purchase value are Meta&apos;s own count of sales it credits to these ads, by each ad set&apos;s own attribution setting

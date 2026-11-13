@@ -2,19 +2,17 @@
 import type { ReactNode } from "react";
 import { Eye, Percent, ShoppingBag, ShoppingCart, Store, Wallet, type LucideIcon } from "lucide-react";
 import { FUNNEL_STEPS, type FunnelStep } from "@app/shared/journey";
-import { ChangeText, Sparkline } from "@/components/dashboard/HomeCards";
+import { Sparkline } from "@/components/dashboard/HomeCards";
 import type { FunnelPageModule, Overview } from "@/components/dashboard/types";
 import { fmtNum, fmtPct } from "@/lib/api";
 import { InfoTip } from "./FunnelUi";
 import { FORMULAS, STAGES } from "./stageGuide";
 
-/** One headline figure: its value, the change on the dates compared with, a plain question it answers, how it's counted, and its stage's details on a click. */
+/** One headline figure: its value, a plain question it answers, how it's counted, and its stage's details on a click. */
 function Kpi({
   title,
   icon: Icon,
   value,
-  delta,
-  versus,
   question,
   measure,
   tip,
@@ -25,8 +23,6 @@ function Kpi({
   title: string;
   icon: LucideIcon;
   value: ReactNode;
-  delta: number | null | undefined;
-  versus: string;
   question: string;
   measure: ReactNode;
   tip: ReactNode;
@@ -46,10 +42,6 @@ function Kpi({
           <span className="truncate">{title}</span>
         </span>
         <span className="mt-2 text-2xl font-bold tabular-nums tracking-tight">{value}</span>
-        <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted">
-          <ChangeText value={delta} />
-          {delta !== null && delta !== undefined && <span>{versus}</span>}
-        </span>
         <span className="mt-2 text-xs text-muted">{measure}</span>
         <span className="mt-auto flex items-end justify-between gap-2 pt-2">
           <span className="text-xs text-text/80">{question}</span>
@@ -76,10 +68,9 @@ const TITLE: Record<FunnelStep, string> = { visited: "Store visitors", viewed_pr
  * All are tracked visits (one rate can't divide one source by another); the store's orders are named
  * beside the purchases as what they are.
  */
-export function FunnelKpis({ f, ov, versus, onOpen }: { f: FunnelPageModule; ov: Overview; versus: string; onOpen: (step: FunnelStep) => void }) {
+export function FunnelKpis({ f, ov, onOpen }: { f: FunnelPageModule; ov: Overview; onOpen: (step: FunnelStep) => void }) {
   const orders = ov.modules.sales_overview?.current.orders;
   const sparkOf = (k: number) => f.daily.map((d) => d.reached?.[k] ?? null);
-  const before = f.previous.reached;
   return (
     <section aria-label="Funnel summary" className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
       {FUNNEL_STEPS.map((step, k) => {
@@ -92,8 +83,6 @@ export function FunnelKpis({ f, ov, versus, onOpen }: { f: FunnelPageModule; ov:
             title={TITLE[step]}
             icon={ICON[step]}
             value={fmtNum(s.reached)}
-            delta={f.stepDeltas[k]}
-            versus={versus}
             question={QUESTION[step]}
             spark={sparkOf(k)}
             onOpen={() => onOpen(step)}
@@ -113,11 +102,6 @@ export function FunnelKpis({ f, ov, versus, onOpen }: { f: FunnelPageModule; ov:
                 <p className="font-medium">{guide.name}</p>
                 <p className="mt-1">{guide.counted}</p>
                 {k > 0 && <p className="mt-1 text-muted">Share of visits: {FORMULAS.share}.</p>}
-                {before && (
-                  <p className="mt-1 text-muted">
-                    Dates compared with: {fmtNum(before[k] ?? 0)} visits.
-                  </p>
-                )}
                 {step === "purchased" && orders !== undefined && (
                   <p className="mt-1 text-muted">
                     Shopify&apos;s order count includes every order in these dates (all sales channels, shoppers who declined tracking), so it is usually higher than the visits that bought.
@@ -133,8 +117,6 @@ export function FunnelKpis({ f, ov, versus, onOpen }: { f: FunnelPageModule; ov:
         title="Conversion rate"
         icon={Percent}
         value={fmtPct(f.conversionRate)}
-        delta={f.deltas.conversionRate}
-        versus={versus}
         question="What share of visits ended in a purchase?"
         spark={f.daily.map((d) => (d.reached && d.reached[0]! > 0 ? d.reached[4]! / d.reached[0]! : null))}
         onOpen={() => onOpen("purchased")}
@@ -143,7 +125,6 @@ export function FunnelKpis({ f, ov, versus, onOpen }: { f: FunnelPageModule; ov:
           <>
             <p className="font-medium">Overall conversion rate</p>
             <p className="mt-1">{FORMULAS.conversion}.</p>
-            {f.previous.conversionRate !== null && <p className="mt-1 text-muted">Dates compared with: {fmtPct(f.previous.conversionRate)}. The change shown is relative (2.0% to 2.5% is +25%).</p>}
             <p className="mt-1 text-muted">Shopify Analytics divides by its own sessions instead, so its rate differs.</p>
           </>
         }

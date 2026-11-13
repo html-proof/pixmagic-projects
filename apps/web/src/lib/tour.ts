@@ -20,7 +20,7 @@ export const TOUR_STEPS: TourStep[] = [
     id: "numbers",
     targets: ["numbers"],
     title: "Your numbers at a glance",
-    body: "Four figures for the dates you picked, each with its change. Click one for the detail behind it.",
+    body: "Four figures for the dates you picked. Click one for the detail behind it.",
   },
   {
     id: "dates",

@@ -6,7 +6,7 @@ import { hasFullAccess } from "@app/shared/access";
 import type { AdProvider } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
-import { comparedWith, CustomDates, DateRangeSelect, type DateRangeState, type Shown } from "@/components/dashboard/DateRange";
+import { CustomDates, DateRangeSelect, type DateRangeState, type Shown } from "@/components/dashboard/DateRange";
 import { fmtDateTime, fmtRange } from "@/components/dashboard/format";
 import type { Overview } from "@/components/dashboard/types";
 import { StoreMetaDiscovery } from "@/components/integrations/MetaDiscovery";
@@ -16,8 +16,8 @@ import { apiHref, friendlyError, isTransient, liveDataChanged } from "@/lib/api"
 import type { AccountChoice, AdvertisingState } from "./useAdvertising";
 
 // ---------------------------------------------------------------------------
-// The pieces every Advertising page shares: its header (the dates, what they're compared with, the
-// account picked, a download), the loading and failure states, and what to say with nothing connected.
+// The pieces every Advertising page shares: its header (the dates, the account picked, a download),
+// the loading and failure states, and what to say with nothing connected.
 // ---------------------------------------------------------------------------
 
 export const PLATFORM: Record<AdProvider, { name: string; Icon: (p: { size?: number }) => ReactNode }> = {
@@ -89,7 +89,6 @@ export function AdvertisingHeader({
   actions?: ReactNode;
 }) {
   const { store, access, allowed } = useApp();
-  const compared = comparedWith(shown);
   return (
     <div className="animate-rise">
       <h1 className="page-title flex flex-wrap items-center gap-2">
@@ -102,7 +101,6 @@ export function AdvertisingHeader({
       {shown && (
         <p className="mt-1 hidden text-sm print:block">
           {store?.name ?? store?.shopDomain} · {fmtRange(shown.range.from, shown.range.to)}
-          {compared ? ` · ${compared}` : ""}
         </p>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-2 print:hidden">

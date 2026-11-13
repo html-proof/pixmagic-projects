@@ -5,13 +5,12 @@ import { categoryLabel, EXPENSE_SECTION_LABEL } from "@app/shared/expenses";
 import type { ProfitLoss } from "@app/shared/profit";
 import { useAction } from "@/components/AppUi";
 import { BarRow } from "@/components/dashboard/Charts";
-import { versusWords } from "@/components/dashboard/DateRange";
 import { LineChart } from "@/components/dashboard/LineChart";
 import { adsNotUsableWords } from "@/components/dashboard/profitFigures";
 import { fmtMoneyCompact, fmtTimes, weekdayNames } from "@/components/dashboard/format";
 import { api, fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { ExpenseDonut, ProfitAnalysisCard, whyNoProfit } from "./Overview";
-import { Change, MiniTile, MISSING, PlCard, PointsChange, Steps } from "./PlKit";
+import { MiniTile, MISSING, PlCard, Steps } from "./PlKit";
 import { PLATFORM_NAME } from "./profitUi";
 import { periodLabel } from "./Statement";
 import type { StatementAnswer, StatementState } from "./useStatement";
@@ -28,22 +27,20 @@ const periodsOf = (a: StatementAnswer) => (a.grain === "day" ? undefined : a.col
 
 // ---- Revenue ---------------------------------------------------------------------------------------------
 
-export function RevenueTab({ a, s }: { a: StatementAnswer; s: StatementState }) {
+export function RevenueTab({ a }: { a: StatementAnswer }) {
   const t = a.total;
-  const c = a.compare;
   const money = (n: number | null | undefined) => (n === null || n === undefined ? null : fmtMoney(n, a.currency));
   const count = (n: number | null) => (n === null ? null : fmtNum(n));
-  const versus = versusWords(s.shown);
   const word = GRAIN_WORD[a.grain];
   const empty = a.columns.every((x) => x.revenue === null);
   return (
     <>
       <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5" aria-label="Revenue figures">
-        <MiniTile label="Revenue (tax included)" value={money(t.totalSales)} change={<Change now={t.totalSales} before={c.totalSales} />} versus={versus} help="Everything customers paid, tax and duties included: Shopify's total sales." testid="pl-rev-total" />
-        <MiniTile label="Revenue before tax" value={money(t.revenue)} change={<Change now={t.revenue} before={c.revenue} />} versus={versus} help="What the business keeps from its sales before any cost: net sales plus the shipping and fees charged. Profit is worked out from this." testid="pl-rev-before-tax" />
-        <MiniTile label="Tax collected" value={money(t.taxes)} change={<Change now={t.taxes} before={c.taxes} />} versus={versus} help="Sales tax and duties collected from customers. It is passed on to the government, so it is never the store's income." testid="pl-rev-tax" />
-        <MiniTile label="Orders" value={count(t.orders)} change={<Change now={t.orders} before={c.orders} />} versus={versus} testid="pl-rev-orders" />
-        <MiniTile label="Items sold" value={count(t.units)} change={<Change now={t.units} before={c.units} />} versus={versus} testid="pl-rev-units" />
+        <MiniTile label="Revenue (tax included)" value={money(t.totalSales)} help="Everything customers paid, tax and duties included: Shopify's total sales." testid="pl-rev-total" />
+        <MiniTile label="Revenue before tax" value={money(t.revenue)} help="What the business keeps from its sales before any cost: net sales plus the shipping and fees charged. Profit is worked out from this." testid="pl-rev-before-tax" />
+        <MiniTile label="Tax collected" value={money(t.taxes)} help="Sales tax and duties collected from customers. It is passed on to the government, so it is never the store's income." testid="pl-rev-tax" />
+        <MiniTile label="Orders" value={count(t.orders)} testid="pl-rev-orders" />
+        <MiniTile label="Items sold" value={count(t.units)} testid="pl-rev-units" />
       </section>
       <div className="grid gap-4 xl:grid-cols-3">
         <PlCard id="pl-chart-revenue" icon={<ChartColumn className="h-5 w-5" />} tone="var(--viz-cat-1)" title="Revenue Trend" sub={`Revenue before tax, ${word} by ${word}.`} className="xl:col-span-2">
@@ -108,10 +105,8 @@ function adsWords(a: StatementAnswer): string {
 /** The top of the Expenses tab: the kinds of cost, where the money went (the Overview's ring), and every cost biggest first. */
 export function ExpensesSummary({ a, s, onCategories }: { a: StatementAnswer; s: StatementState; onCategories: () => void }) {
   const t = a.total;
-  const c = a.compare;
   const money = (n: number) => fmtMoney(n, a.currency);
   const orNull = (n: number | null) => (n === null ? null : money(n));
-  const versus = versusWords(s.shown);
   const ranked = costsRanked(a, t);
   const top = Math.max(...ranked.map((r) => Math.abs(r.amount)), 0);
   // A platform whose spend isn't known for every day has no bar: it is named under the list instead.
@@ -121,10 +116,10 @@ export function ExpensesSummary({ a, s, onCategories }: { a: StatementAnswer; s:
   return (
     <>
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Expense figures">
-        <MiniTile label="Total expenses" value={orNull(t.totalExpenses)} change={<Change now={t.totalExpenses} before={c.totalExpenses} cost />} versus={versus} help="Advertising + variable costs + fixed costs (+ interest, tax and the like): each counted once." testid="pl-card-total-expenses" />
-        <MiniTile label="Advertising" value={orNull(t.advertising)} change={<Change now={t.advertising} before={c.advertising} cost />} versus={versus} help="Your connected ad accounts' spend, plus the advertising you added yourself." testid="pl-card-advertising" />
-        <MiniTile label="Variable costs" value={orNull(t.variableExAds)} change={<Change now={t.variableExAds} before={c.variableExAds} cost />} versus={versus} help="Costs that rise and fall with sales: what the items sold cost you, shipping, packaging, payment fees." testid="pl-card-variable" />
-        <MiniTile label="Fixed costs" value={money(t.fixedCosts)} change={<Change now={t.fixedCosts} before={c.fixedCosts} cost />} versus={versus} help="Costs you pay whatever you sell (rent, salaries, software). A monthly cost is spread over its month's days, so these dates carry only their share." testid="pl-card-fixed" />
+        <MiniTile label="Total expenses" value={orNull(t.totalExpenses)} help="Advertising + variable costs + fixed costs (+ interest, tax and the like): each counted once." testid="pl-card-total-expenses" />
+        <MiniTile label="Advertising" value={orNull(t.advertising)} help="Your connected ad accounts' spend, plus the advertising you added yourself." testid="pl-card-advertising" />
+        <MiniTile label="Variable costs" value={orNull(t.variableExAds)} help="Costs that rise and fall with sales: what the items sold cost you, shipping, packaging, payment fees." testid="pl-card-variable" />
+        <MiniTile label="Fixed costs" value={money(t.fixedCosts)} help="Costs you pay whatever you sell (rent, salaries, software). A monthly cost is spread over its month's days, so these dates carry only their share." testid="pl-card-fixed" />
       </section>
       <div className="grid gap-4 lg:grid-cols-2">
         <ExpenseDonut a={a} />
@@ -234,12 +229,10 @@ export function OperatingDays({ a, s }: { a: StatementAnswer; s: StatementState 
 
 // ---- Profit analysis -------------------------------------------------------------------------------------
 
-export function AnalysisTab({ a, s }: { a: StatementAnswer; s: StatementState }) {
+export function AnalysisTab({ a }: { a: StatementAnswer }) {
   const t = a.total;
-  const c = a.compare;
   const money = (n: number | null) => (n === null ? null : fmtMoney(n, a.currency));
   const pct = (n: number | null) => (n === null ? null : fmtPct(n));
-  const versus = versusWords(s.shown);
   const none = a.daily.every((d) => d.netProfit === null);
   const why = whyNoProfit(t);
   return (
@@ -292,11 +285,11 @@ export function AnalysisTab({ a, s }: { a: StatementAnswer; s: StatementState })
           Ratios, in Plain Words
         </h2>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-          <MiniTile label="Profit margin" value={pct(t.netMargin)} signed={t.netMargin} change={<PointsChange now={t.netMargin} before={c.netMargin} />} versus={versus} note="Of every 100 of revenue before tax, this much is profit." testid="pl-ratio-margin" />
-          <MiniTile label="MER" value={pct(t.mer)} change={<PointsChange now={t.mer} before={c.mer} cost />} versus={versus} note="Marketing expense ratio: advertising as a share of revenue (tax included). Lower is better." testid="pl-card-mer" />
+          <MiniTile label="Profit margin" value={pct(t.netMargin)} signed={t.netMargin} note="Of every 100 of revenue before tax, this much is profit." testid="pl-ratio-margin" />
+          <MiniTile label="MER" value={pct(t.mer)} note="Marketing expense ratio: advertising as a share of revenue (tax included). Lower is better." testid="pl-card-mer" />
           <MiniTile label="Sitewide ROAS" value={t.roas === null ? null : fmtTimes(t.roas)} note="Revenue (tax included) for every 1 spent on advertising. Higher is better." testid="pl-card-roas" />
-          <MiniTile label="VCR" value={pct(t.vcr)} change={<PointsChange now={t.vcr} before={c.vcr} cost />} versus={versus} note="Variable cost ratio: variable costs as a share of revenue before tax." testid="pl-card-vcr" />
-          <MiniTile label="FCR" value={pct(t.fcr)} change={<PointsChange now={t.fcr} before={c.fcr} cost />} versus={versus} note="Fixed cost ratio: fixed costs as a share of revenue before tax." testid="pl-card-fcr" />
+          <MiniTile label="VCR" value={pct(t.vcr)} note="Variable cost ratio: variable costs as a share of revenue before tax." testid="pl-card-vcr" />
+          <MiniTile label="FCR" value={pct(t.fcr)} note="Fixed cost ratio: fixed costs as a share of revenue before tax." testid="pl-card-fcr" />
         </div>
       </section>
       <p className="px-1 text-xs text-muted" data-testid="pl-cash-flow">

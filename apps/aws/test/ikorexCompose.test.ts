@@ -1,5 +1,5 @@
-import { execFile, execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync, spawn } from "node:child_process";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -23,6 +23,15 @@ const hasCompose = (() => {
   }
 })();
 const bash = findBash();
+function hasFlock(): boolean {
+  if (!bash) return false;
+  try {
+    execFileSync(bash, ["-c", "command -v flock"], { stdio: "ignore", timeout: 30_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface Service {
   image?: string;
@@ -154,6 +163,35 @@ describe.skipIf(!bash)("the server's scripts refuse placeholder passwords", () =
     const r = await run(dir, "scripts/deploy.sh", ["abc123"]);
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/placeholder values \(CHANGE_ME\) still in: .*env\/owner\.env/);
+  });
+
+  // Deploy to iKorex and a ship by hand can reach the server together. flock is Linux's (the
+  // server, CI); Git Bash on a Windows PC has none, and there deploy.sh never runs for real.
+  it.skipIf(!hasFlock())("deploy.sh waits for a deploy already running in the folder, and gives up without touching anything", async () => {
+    const dir = stage();
+    for (const f of readdirSync(join(dir, "env")).filter((f) => f.endsWith(".env"))) {
+      writeFileSync(join(dir, "env", f), readFileSync(join(dir, "env", f), "utf8").replace(/CHANGE_ME/g, "set"));
+    }
+    // The deploy "already running": it holds the folder's lock until the test ends.
+    const holder = spawn(bash!, ["-c", "exec 9>.deploy.lock; flock 9; echo held; exec sleep 60"], { cwd: dir });
+    try {
+      await new Promise<void>((held, failed) => {
+        holder.stdout.once("data", () => held());
+        holder.once("exit", () => failed(new Error("the lock holder exited")));
+      });
+      const r = await new Promise<{ code: number; out: string }>((done) =>
+        execFile(bash!, [join(dir, "scripts/deploy.sh"), "abc123"], { cwd: dir, env: { ...process.env, DEPLOY_LOCK_WAIT: "1" } }, (err, stdout, stderr) =>
+          done({ code: err ? ((err as { code?: number }).code ?? 1) : 0, out: stdout + stderr }),
+        ),
+      );
+      expect(r.code).toBe(1);
+      expect(r.out).toMatch(/another deploy of .* still holds \.deploy\.lock: not started/);
+      // It stopped before the tag, the database and the migrations.
+      expect(readFileSync(join(dir, ".env"), "utf8")).toBe("APP_TAG=test\nSCHEDULES=off\n");
+      expect(r.out).not.toMatch(/migrations|switching/);
+    } finally {
+      holder.kill("SIGKILL");
+    }
   });
 
   it("render-monitoring.sh does too (Grafana's admin password)", async () => {

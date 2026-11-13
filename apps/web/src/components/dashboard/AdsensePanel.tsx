@@ -12,23 +12,18 @@ import {
   ADSENSE_DEFINITIONS,
   ADSENSE_REPORT_DEFINITIONS,
   AdStatusNotes,
-  ChangeNote,
-  ComparedLine,
   dailyMoneyColumns,
   Definitions,
   earningsLabel,
   EarningsState,
   missingReasons,
-  runningWords,
-  throughLabel,
   timeZoneNote,
   UNAVAILABLE,
 } from "./AdsCommon";
 import { shownFigures, upToWords } from "./adFigures";
-import { noEarlierData } from "./DateRange";
 import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtRange, fmtSpan, plural } from "./format";
 import { Icon } from "./Icons";
-import { B, comparedOnWholeDays } from "./Narrative";
+import { B } from "./Narrative";
 import { Panel, Stat } from "./Primitives";
 import { ColumnsWithTotal } from "./ColumnsWithTotal";
 import type { AdAccount, AdsenseModule, AdsenseReportAnswer, Overview } from "./types";
@@ -82,16 +77,15 @@ function EarningsChart({ a, ov }: { a: AdsenseModule; ov: Overview }) {
   );
 }
 
-function Glance({ a, t, ov, partial }: { a: AdsenseModule; t: AdsenseTotals; ov: Overview; partial: boolean }) {
+function Glance({ a, t }: { a: AdsenseModule; t: AdsenseTotals }) {
   const money = (n: number) => fmtMoney(n, a.currency);
-  const change = (value: number | null) => (partial ? undefined : <ChangeNote fig={a} value={value} ov={ov} />);
   const rpm = t.impressions > 0 ? (t.earnings * 1000) / t.impressions : null;
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <Stat label={earningsLabel(a.final)} value={money(t.earnings)} note={change(a.deltas.earnings)} />
-      <Stat label="Page views" value={fmtNum(t.pageViews)} note={change(a.deltas.pageViews)} />
-      <Stat label="Page RPM" value={t.pageRpm !== null ? money(t.pageRpm) : "—"} note={partial ? "Earnings per 1,000 page views" : change(a.deltas.pageRpm)} />
-      <Stat label="Clicks" value={fmtNum(t.clicks)} note={change(a.deltas.clicks)} />
+      <Stat label={earningsLabel(a.final)} value={money(t.earnings)} />
+      <Stat label="Page views" value={fmtNum(t.pageViews)} />
+      <Stat label="Page RPM" value={t.pageRpm !== null ? money(t.pageRpm) : "—"} note="Earnings per 1,000 page views" />
+      <Stat label="Clicks" value={fmtNum(t.clicks)} />
       <Stat label="Impressions" value={fmtNum(t.impressions)} note="Ad requests that delivered at least one ad" />
       <Stat label="Click-through rate" value={fmtPct(t.ctr)} note="Clicks ÷ impressions" />
       <Stat label="Earnings per click" value={t.perClick !== null ? money(t.perClick) : "—"} />
@@ -241,21 +235,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
   const counted = a.accounts.filter((acc) => acc.counted);
   const reasons = missingReasons(counted, ov.range);
   const bySite = a.sites.length > 1 || (a.sites.length === 1 && a.sites[0]!.site !== "");
-  const missing = a.notCompared === "no_history" ? noEarlierData(a.historyFrom, "adsense") : null;
-  const on = comparedOnWholeDays(ov);
-  const through = throughLabel(a, ov);
   const shown = c ?? a.partial?.totals ?? null;
-  const d = a.deltas.earnings;
-  const change =
-    a.notCompared === "running"
-      ? `, ${runningWords(ov)}: nothing to compare yet`
-      : a.notCompared === "no_history"
-        ? ", with no earlier data to compare"
-        : a.notCompared === "incomplete" || d === null
-          ? ""
-          : d === 0
-            ? `, the same as ${on}`
-            : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on ${on}${through === "vs before" ? "" : ` (${through}: whole days only)`}`;
   const readable = counted.filter((acc) => acc.status !== "reconnect" && acc.status !== "permission");
 
   return (
@@ -285,8 +265,7 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
             <>
               <p>
                 {a.final ? "The ads on your site earned" : "AdSense estimates the ads on your site earned"} <B>{money(c.earnings)}</B>
-                {upTo ? <> up to {fmtDay(upTo, { year: false })}</> : null}
-                {change}.{a.final ? " AdSense has finalized these figures." : ""}
+                {upTo ? <> up to {fmtDay(upTo, { year: false })}</> : null}.{a.final ? " AdSense has finalized these figures." : ""}
               </p>
               {upTo && reasons.length > 0 && <p className="text-muted">{reasons.join(" ")}</p>}
               <p>
@@ -331,18 +310,12 @@ export function AdsenseDetail({ ov }: { ov: Overview }) {
               : c || !a.partial
                 ? fmtRange(ov.range.from, ov.range.to)
                 : `${fmtRange(a.partial.from, a.partial.to)} only, the days every account has`}
-            .{" "}
-            {a.compared && c ? (
-              <>
-                <ComparedLine fig={a} show={(t) => money(t.earnings)} what="earnings" />.{" "}
-              </>
-            ) : null}
-            {missing ? `${missing} ` : ""}In {a.currency}.
+            . In {a.currency}.
           </>
         }
       >
         {shown ? (
-          <Glance a={a} t={shown} ov={ov} partial={!c} />
+          <Glance a={a} t={shown} />
         ) : (
           <div className="space-y-1 text-sm text-muted">
             <p className="text-xl font-semibold text-text">{UNAVAILABLE}</p>

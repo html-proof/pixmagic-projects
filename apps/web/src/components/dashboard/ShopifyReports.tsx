@@ -1,7 +1,7 @@
 "use client";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtRelative } from "./format";
-import { Badge, Delta, Empty, Panel, Stat, type Tone } from "./Primitives";
+import { Badge, Empty, Panel, Stat, type Tone } from "./Primitives";
 import type { ProfitCardFigures } from "./profitFigures";
 import type { ProfitModule, ReportStatus, ShopifyCheckModule, ShopifySessionsModule } from "./types";
 
@@ -38,7 +38,7 @@ export function asOfWords(m: { asOf: string | null; until: string | null }): str
   return r ? `fetched ${r}` : null;
 }
 
-export function ShopifySessionsCard({ m, versus }: { m: ShopifySessionsModule; versus?: string }) {
+export function ShopifySessionsCard({ m }: { m: ShopifySessionsModule }) {
   const c = m.current;
   const note = statusNote(m.status);
   const when = asOfWords(m);
@@ -52,9 +52,9 @@ export function ShopifySessionsCard({ m, versus }: { m: ShopifySessionsModule; v
         <Empty>{note}</Empty>
       ) : (
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <Stat label="Sessions" value={c.sessions === null ? "—" : fmtNum(c.sessions)} note={<Delta value={m.deltas.sessions} label={versus} />} />
-          <Stat label="Online store visitors" value={c.visitors === null ? "—" : fmtNum(c.visitors)} note={<Delta value={m.deltas.visitors} label={versus} />} />
-          <Stat label="Conversion rate" value={fmtPct(c.conversionRate)} note={<Delta value={m.deltas.conversionRate} label={versus} />} />
+          <Stat label="Sessions" value={c.sessions === null ? "—" : fmtNum(c.sessions)} />
+          <Stat label="Online store visitors" value={c.visitors === null ? "—" : fmtNum(c.visitors)} />
+          <Stat label="Conversion rate" value={fmtPct(c.conversionRate)} />
           <Stat label="Pageviews" value={c.pageviews === null ? "—" : fmtNum(c.pageviews)} note={c.sessions && c.pageviews !== null ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.pageviews / c.sessions)} per session` : undefined} />
           <Stat label="Added to cart" value={c.cartSessions === null ? "—" : fmtNum(c.cartSessions)} note="Sessions" />
           <Stat label="Reached checkout" value={c.checkoutSessions === null ? "—" : fmtNum(c.checkoutSessions)} note="Sessions" />
@@ -70,7 +70,7 @@ export function ShopifySessionsCard({ m, versus }: { m: ShopifySessionsModule; v
  * recorded, and the net profit Business profit overview gives for the same store and dates, or why
  * there is none in its words, so the two never disagree.
  */
-export function ProfitCard({ m, currency, versus, f }: { m: ProfitModule; currency: string; versus?: string; f: ProfitCardFigures }) {
+export function ProfitCard({ m, currency, f }: { m: ProfitModule; currency: string; f: ProfitCardFigures }) {
   const c = m.current;
   const money = (n: number | null) => (n === null ? "—" : fmtMoney(n, currency));
   const note = statusNote(m.status);
@@ -87,7 +87,7 @@ export function ProfitCard({ m, currency, versus, f }: { m: ProfitModule; curren
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label="Gross profit" value={money(c.grossProfit)} note={<Delta value={m.deltas.grossProfit} label={versus} />} />
+            <Stat label="Gross profit" value={money(c.grossProfit)} />
             {/* Shopify's 0 for sales none of which had a cost per item isn't a cost. */}
             <Stat label="Cost of goods sold" value={f.noCostRecorded ? "Not recorded in Shopify" : money(c.costOfGoodsSold)} />
             <Stat label="Margin where cost is known" value={fmtPct(c.marginOnCosted)} note={c.profitOnCosted !== null ? `${money(c.profitOnCosted)} on ${money(c.netSalesWithCost)} of sales` : undefined} />

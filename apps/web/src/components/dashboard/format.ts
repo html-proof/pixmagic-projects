@@ -103,14 +103,6 @@ export function fmtClock(time: string): string {
   return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", hour: "numeric", minute: "2-digit" }).format(new Date(Date.UTC(2026, 0, 1, h, m)));
 }
 
-/**
- * The dates the numbers are compared with: "16 Oct 2026 until 4:44 pm" while the dates picked are
- * still running (their comparison stops at the same time of day), otherwise as `fmtRange`.
- */
-export function fmtComparison(c: { from: string; to: string; until?: string }): string {
-  return c.until ? `${fmtRange(c.from, c.to)} until ${fmtClock(c.until)}` : fmtRange(c.from, c.to);
-}
-
 /** An instant shown in the store's time zone, e.g. "8 Mar, 3:30 pm". */
 export function fmtDateTime(iso: string, timeZone: string): string {
   const d = new Date(iso);

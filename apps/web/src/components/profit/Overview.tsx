@@ -3,20 +3,19 @@ import { Fragment, type ReactNode } from "react";
 import { ArrowRight, CalendarPlus, ChartColumn, CircleDollarSign, Download, Info, Megaphone, PieChart, ReceiptText, ShoppingCart, Sparkles, TrendingDown, TrendingUp, Trophy } from "lucide-react";
 import { PROFIT_LOSS_GAP_WORDS, type ProfitLoss } from "@app/shared/profit";
 import { Donut } from "@/components/dashboard/Charts";
-import { versusWords } from "@/components/dashboard/DateRange";
 import { LineChart } from "@/components/dashboard/LineChart";
 import { fmtDay, fmtMoneyCompact, fmtSpan, fmtWeekday, plural } from "@/components/dashboard/format";
 import { HelpTip } from "@/components/PageKit";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { changeOf, IconTile, MISSING, PlCard } from "./PlKit";
+import { IconTile, MISSING, PlCard } from "./PlKit";
 import { costGroups, profitDays, toneOf, TONE_TEXT } from "./profitUi";
 import { periodLabel } from "./Statement";
-import type { StatementAnswer, StatementState } from "./useStatement";
+import type { StatementAnswer } from "./useStatement";
 
 // ---------------------------------------------------------------------------
 // The Overview tab of Profit & Loss (the owner's design, 13 Nov 2026): how revenue, expenses and
 // profit moved over the dates, what stands out in plain words, where the money went, the best and
-// worst days, and the statement against the dates compared with. Every figure is the server's
+// worst days, and the statement. Every figure is the server's
 // (docs/kpis.md "Profit and loss"); what can't be worked out says "Missing data" and why.
 // ---------------------------------------------------------------------------
 
@@ -69,7 +68,7 @@ interface Insight {
 }
 
 /** What stands out in the dates, each in a sentence a figure on the page backs: nothing is guessed. */
-function insightsOf(a: StatementAnswer, versus: string, events: number | null, addEvent: ReactNode): Insight[] {
+function insightsOf(a: StatementAnswer, events: number | null, addEvent: ReactNode): Insight[] {
   const t = a.total;
   const money = (n: number) => fmtMoney(n, a.currency);
   const out: Insight[] = [];
@@ -77,31 +76,14 @@ function insightsOf(a: StatementAnswer, versus: string, events: number | null, a
   if (t.netProfit === null) {
     out.push({ key: "profit", tone: "var(--warn)", icon: <Info className="h-4 w-4" />, title: "Profit can't be shown for these dates yet", sub: whyNoProfit(t) });
   } else {
-    const change = changeOf(t.netProfit, a.compare.netProfit);
     const loss = t.netProfit < 0;
     const amount = money(Math.abs(t.netProfit));
-    if (change !== null && Math.abs(change) >= 0.0005 && !loss && a.compare.netProfit! > 0) {
-      const up = change > 0;
-      out.push({
-        key: "profit",
-        tone: up ? "var(--good)" : "var(--danger)",
-        icon: up ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />,
-        title: (
-          <>
-            Profit is {up ? "up" : "down"} by {fmtPct(Math.abs(change))} ({amount})
-          </>
-        ),
-        sub: `compared ${versus.replace(/^vs /, "with ")}.`,
-      });
-    } else {
-      out.push({
-        key: "profit",
-        tone: loss ? "var(--danger)" : "var(--good)",
-        icon: loss ? <TrendingDown className="h-4 w-4" /> : <TrendingUp className="h-4 w-4" />,
-        title: loss ? `You made a loss of ${amount}` : t.netProfit === 0 ? "You broke even" : `You made a profit of ${amount}`,
-        sub: a.compare.netProfit === null ? "Nothing to compare it with for the earlier dates." : `${money(a.compare.netProfit)} in the dates compared with.`,
-      });
-    }
+    out.push({
+      key: "profit",
+      tone: loss ? "var(--danger)" : "var(--good)",
+      icon: loss ? <TrendingDown className="h-4 w-4" /> : <TrendingUp className="h-4 w-4" />,
+      title: loss ? `You made a loss of ${amount}` : t.netProfit === 0 ? "You broke even" : `You made a profit of ${amount}`,
+    });
   }
 
   const biggest = costGroups(t)
@@ -126,13 +108,13 @@ function insightsOf(a: StatementAnswer, versus: string, events: number | null, a
   return out;
 }
 
-export function KeyInsights({ a, versus, events, onAddEvent }: { a: StatementAnswer; versus: string; /** Business events in the dates; null while not known. */ events: number | null; onAddEvent: (() => void) | null }) {
+export function KeyInsights({ a, events, onAddEvent }: { a: StatementAnswer; /** Business events in the dates; null while not known. */ events: number | null; onAddEvent: (() => void) | null }) {
   const add = onAddEvent && (
     <button type="button" className="font-medium text-accent underline-offset-2 hover:underline" onClick={onAddEvent} data-print-hide>
       Add one
     </button>
   );
-  const list = insightsOf(a, versus, events, add);
+  const list = insightsOf(a, events, add);
   return (
     <PlCard id="pl-insights" icon={<Sparkles className="h-5 w-5" />} tone="var(--violet)" title="Key Insights">
       <ul className="space-y-2.5">
@@ -231,8 +213,6 @@ interface Row {
   label: string;
   format: Format;
   value: (p: ProfitLoss) => number | null;
-  /** A cost: a rise is bad. */
-  cost?: boolean;
   /** The line the statement leads to. */
   highlight?: boolean;
   strong?: boolean;
@@ -260,17 +240,17 @@ const SECTIONS: Array<{ id: string; label: string; rows: Row[] }> = [
     id: "expenses",
     label: "Expenses",
     rows: [
-      { id: "advertising", label: "Advertising", format: "money", value: (p) => p.advertising, cost: true },
-      { id: "variable", label: "Variable Costs", format: "money", value: (p) => p.variableExAds, cost: true },
-      { id: "fixed", label: "Fixed Costs", format: "money", value: (p) => p.fixedCosts, cost: true },
-      { id: "below", label: "Interest, Tax and Other", format: "money", value: (p) => p.belowOperating, cost: true },
+      { id: "advertising", label: "Advertising", format: "money", value: (p) => p.advertising },
+      { id: "variable", label: "Variable Costs", format: "money", value: (p) => p.variableExAds },
+      { id: "fixed", label: "Fixed Costs", format: "money", value: (p) => p.fixedCosts },
+      { id: "below", label: "Interest, Tax and Other", format: "money", value: (p) => p.belowOperating },
     ],
   },
   {
     id: "profit",
     label: "Profit",
     rows: [
-      { id: "total_expenses", label: "Total Expenses", format: "money", value: (p) => p.totalExpenses, cost: true },
+      { id: "total_expenses", label: "Total Expenses", format: "money", value: (p) => p.totalExpenses },
       { id: "profit", label: "Profit (After Tax)", format: "money", value: (p) => p.netProfit, highlight: true, strong: true },
       { id: "margin", label: "Profit Margin", format: "percent", value: (p) => p.netMargin, strong: true },
     ],
@@ -279,14 +259,9 @@ const SECTIONS: Array<{ id: string; label: string; rows: Row[] }> = [
 
 const DASH = <span className="text-muted/60">—</span>;
 
-/** The statement in four columns: these dates, the dates compared with, the change and its share. The Detailed Table has it period by period. */
+/** The statement for the dates as a whole, a row per figure. The Detailed Table has it period by period. */
 export function SummaryStatement({ a, onDownload, onDetails }: { a: StatementAnswer; onDownload: (() => void) | null; onDetails: () => void }) {
   const show = (n: number | null, f: Format) => (n === null || !Number.isFinite(n) ? DASH : f === "money" ? fmtMoney(n, a.currency) : f === "percent" ? fmtPct(n) : fmtNum(n));
-  const signed = (d: number, f: Format) => {
-    const sign = d > 0 ? "+" : d < 0 ? "−" : "";
-    const v = Math.abs(d);
-    return `${sign}${f === "money" ? fmtMoney(v, a.currency) : f === "percent" ? `${(v * 100).toFixed(1)} pp` : fmtNum(v)}`;
-  };
   const cell = "px-4 py-2.5 text-right whitespace-nowrap tabular-nums";
   return (
     <PlCard
@@ -295,7 +270,7 @@ export function SummaryStatement({ a, onDownload, onDetails }: { a: StatementAns
       icon={<ReceiptText className="h-5 w-5" />}
       tone="var(--violet)"
       title="Profit & Loss Statement"
-      sub={`${fmtSpan(a.range.from, a.range.to, { year: true })} (vs ${fmtSpan(a.previous.from, a.previous.to, { year: true })})`}
+      sub={fmtSpan(a.range.from, a.range.to, { year: true })}
       actions={
         <>
           {onDownload && (
@@ -311,8 +286,8 @@ export function SummaryStatement({ a, onDownload, onDetails }: { a: StatementAns
         </>
       }
     >
-      <div className="overflow-x-auto border-t border-home-line" tabIndex={0} role="region" aria-label="Profit and loss statement, these dates against the dates compared with">
-        <table className="w-full min-w-[40rem] text-sm">
+      <div className="overflow-x-auto border-t border-home-line" tabIndex={0} role="region" aria-label="Profit and loss statement">
+        <table className="w-full text-sm">
           <thead>
             <tr className="bg-home-soft text-xs">
               <th scope="col" className="px-4 py-2.5 text-left font-semibold">
@@ -322,36 +297,21 @@ export function SummaryStatement({ a, onDownload, onDetails }: { a: StatementAns
                 This Period
                 <span className="block font-normal text-muted">{fmtSpan(a.range.from, a.range.to)}</span>
               </th>
-              <th scope="col" className="px-4 py-2.5 text-right font-semibold">
-                Previous Period
-                <span className="block font-normal text-muted">{fmtSpan(a.previous.from, a.previous.to)}</span>
-              </th>
-              <th scope="col" className="px-4 py-2.5 text-right font-semibold">
-                Change
-              </th>
-              <th scope="col" className="px-4 py-2.5 text-right font-semibold">
-                % Change
-              </th>
             </tr>
           </thead>
           <tbody>
             {SECTIONS.map((sec) => (
               <Fragment key={sec.id}>
                 <tr>
-                  <th scope="rowgroup" colSpan={5} className="border-t border-home-line bg-home-soft/60 px-4 py-2 text-left text-sm font-semibold">
+                  <th scope="rowgroup" colSpan={2} className="border-t border-home-line bg-home-soft/60 px-4 py-2 text-left text-sm font-semibold">
                     {sec.label}
                   </th>
                 </tr>
                 {sec.rows
-                  // A line of 0 in both periods (no interest or tax recorded) says nothing.
-                  .filter((r) => r.id !== "below" || r.value(a.total) || r.value(a.compare))
+                  // A line of 0 (no interest or tax recorded) says nothing.
+                  .filter((r) => r.id !== "below" || r.value(a.total))
                   .map((r) => {
                     const now = r.value(a.total);
-                    const before = r.value(a.compare);
-                    const d = now === null || before === null ? null : now - before;
-                    const pct = r.format === "percent" ? null : changeOf(now, before);
-                    const good = d === null || Math.abs(d) < 0.00005 ? null : r.cost ? d < 0 : d > 0;
-                    const tone = good === null ? "text-muted" : good ? "text-good" : "text-danger";
                     const profitTone = r.id === "profit" ? toneOf(now) : undefined;
                     return (
                       <tr key={r.id} className={`border-t border-home-line ${r.highlight ? "bg-good/10" : ""}`} data-testid={`pl-sum-${r.id}`}>
@@ -360,18 +320,6 @@ export function SummaryStatement({ a, onDownload, onDetails }: { a: StatementAns
                         </th>
                         <td className={`${cell} ${r.strong ? "font-semibold" : ""} ${profitTone ? (TONE_TEXT[profitTone] ?? "") : ""}`} data-testid="pl-sum-now">
                           {show(now, r.format)}
-                        </td>
-                        <td className={`${cell} text-muted`}>{show(before, r.format)}</td>
-                        <td className={`${cell} ${tone}`}>{d === null ? DASH : signed(d, r.format)}</td>
-                        <td className={cell}>
-                          {pct === null ? (
-                            DASH
-                          ) : (
-                            <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-semibold ${good === null ? "bg-home-soft text-muted" : good ? "bg-good/12 text-good" : "bg-danger/12 text-danger"}`}>
-                              {pct > 0 ? "+" : pct < 0 ? "−" : ""}
-                              {fmtPct(Math.abs(pct))}
-                            </span>
-                          )}
                         </td>
                       </tr>
                     );
@@ -382,7 +330,7 @@ export function SummaryStatement({ a, onDownload, onDetails }: { a: StatementAns
         </table>
       </div>
       <p className="px-5 py-3 text-xs text-muted sm:px-6">
-        In {a.currency}. A dash is a figure that can&apos;t be given (the Detailed Table says why); a green change is good for profit, a red one isn&apos;t.
+        In {a.currency}. A dash is a figure that can&apos;t be given (the Detailed Table says why).
       </p>
     </PlCard>
   );
@@ -390,25 +338,22 @@ export function SummaryStatement({ a, onDownload, onDetails }: { a: StatementAns
 
 export function OverviewTab({
   a,
-  s,
   events,
   onAddEvent,
   onDownload,
   onDetails,
 }: {
   a: StatementAnswer;
-  s: StatementState;
   events: number | null;
   onAddEvent: (() => void) | null;
   onDownload: (() => void) | null;
   onDetails: () => void;
 }) {
-  const versus = versusWords(s.shown);
   return (
     <>
       <div className="grid gap-4 xl:grid-cols-3">
         <TrendCard a={a} className="xl:col-span-2" />
-        <KeyInsights a={a} versus={versus} events={events} onAddEvent={onAddEvent} />
+        <KeyInsights a={a} events={events} onAddEvent={onAddEvent} />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <ExpenseDonut a={a} />

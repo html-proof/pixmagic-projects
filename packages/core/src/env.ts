@@ -326,7 +326,7 @@ export function env(): Env {
       // Fail closed: a deployment must not run on secrets published in this repository...
       const exposed = publicSecrets(parsed);
       if (exposed.length) {
-        throw new Error(`${exposed.join(", ")} still set to a placeholder or test value. Generate new ones (infra/cdk/scripts/put-secrets.mjs) before running in production.`);
+        throw new Error(`${exposed.join(", ")} still set to a placeholder or test value. Generate new ones (the server's env/app.env, docs/ikorex-migration) before running in production.`);
       }
       // ...nor with a development setting that turns a safeguard off.
       const dev = developmentSettings(parsed);

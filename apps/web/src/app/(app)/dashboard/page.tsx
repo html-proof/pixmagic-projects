@@ -7,7 +7,7 @@ import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
 import { AboutThisData, EmptyStoreNote, StatusWords, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
-import { comparedWith, CustomDates, DateChip, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
+import { CustomDates, DateChip, DateRangeSelect, periodWords, useDateRange, type Shown } from "@/components/dashboard/DateRange";
 import { SalesActions, SalesCrumbs, SalesHeader, SalesTabs, salesTabOf, StatusPill } from "@/components/dashboard/SalesFrame";
 import { HistoryLine } from "@/components/dashboard/HistoryLine";
 import { topicInfo, useDetailView } from "@/components/dashboard/topics";
@@ -366,7 +366,7 @@ export default function DashboardPage() {
   const s = m?.sales_overview;
   const custom = appliedCustom(s);
 
-  const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
+  const shown: Shown = ov && { range: ov.range, timezone: ov.store.timezone };
   // Every day of the dates lies before the orders Shopify shared: there are no figures for them,
   // which isn't the same as $0 (the line under the dates says why).
   const historyFrom = ov?.data?.historyFrom;
@@ -379,8 +379,6 @@ export default function DashboardPage() {
     ) : (
       n
     );
-  const compared = comparedWith(shown);
-  const versus = versusWords(shown);
   const name = firstName(me.user.displayName);
 
   // Under Total sales: what refunds took off it (it is already after them), for a
@@ -609,19 +607,16 @@ export default function DashboardPage() {
               tint="green"
               title="Total sales"
               value={figure(<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />)}
-              delta={s.deltas.totalSales ?? null}
-              compared={compared}
-              versus={versus}
               spark={s.series.map((d) => d.totalSales ?? d.netSales)}
               extra={salesExtra}
               onClick={() => detail.open("sales")}
             />
           ) : (
-            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.netSales} compared={compared} versus={versus} spark={s.series.map((d) => d.netSales)} onClick={() => detail.open("sales")} />
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />)} spark={s.series.map((d) => d.netSales)} onClick={() => detail.open("sales")} />
           )}
-          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} delta={s.deltas.orders} compared={compared} versus={versus} spark={s.series.map((d) => d.orders)} onClick={() => detail.open("sales")} />
-          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} spark={s.series.map((d) => d.averageOrderValue)} onClick={() => detail.open("sales")} />
-          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} delta={s.deltas.units} compared={compared} versus={versus} spark={s.series.map((d) => d.units ?? null)} onClick={() => detail.open("products")} />
+          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} spark={s.series.map((d) => d.orders)} onClick={() => detail.open("sales")} />
+          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />)} spark={s.series.map((d) => d.averageOrderValue)} onClick={() => detail.open("sales")} />
+          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} spark={s.series.map((d) => d.units ?? null)} onClick={() => detail.open("products")} />
         </section>
       )}
 

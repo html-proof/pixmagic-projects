@@ -14,7 +14,7 @@ in the browser. An account's days land in the same tables (`ad_connections`, `ad
 | Shopify attribution | `/advertising/attribution` | What the store's own orders record of Meta and Google, connected or not ("Shopify attribution", below): sales and orders from their sites, the tagged-ad part and its ad cost per order, new and returning customers, refunds, the store funnel from their visits, the store's sales against the spend with both ways of crediting a sale, and each platform by site, by campaign and by day. |
 | Profitability | `/advertising/profitability` | Did the ads make money ("Profitability", below): the platform's purchase value less the spend, with Shopify's margin what's left after the products and the break-even ROAS (with Meta and Google both counted, each platform's attributed revenue, ROAS and profit before product costs under the spend added up, never their sum), each platform on its own; then the store's net profit from every cost bizinsights knows. |
 | AdSense | `/advertising/adsense` | AdSense's earnings by site from the stored days, each figure marked Estimated or Final; and AdSense's live report by country, device type or ad unit, with ad requests, coverage and Active View viewability (read when opened and cached briefly, never stored with the days). |
-| Campaign comparison | `/advertising/campaigns` | Every Meta and Google Ads campaign of the dates side by side, from the stored days, with each one's change; a campaign's name opens it in its platform's live report. Needs "View campaigns". |
+| Campaign comparison | `/advertising/campaigns` | Every Meta and Google Ads campaign of the dates side by side, from the stored days; a campaign's name opens it in its platform's live report. Needs "View campaigns". |
 | Reports | `/advertising/reports` | Each report's table as it downloads, and the CSV. |
 
 The stored days behind these pages are kept current by the syncs: one sync per account at a time, and Meta's
@@ -41,7 +41,7 @@ mock, so nothing on the page is made up:
   with the whole store's new and returning customers; age, gender, country, device and placement are read
   live on the Meta Ads and Google Ads pages, not on every visit to the overview.
 - **Key insights** (`advertisingInsights` in `@app/shared/adInsights`): a few sentences from the figures on
-  the page (spend outpacing purchases, the purchase value's change, the platform with the better ROAS, a
+  the page (the platform with the better ROAS, a
   platform crediting less than it cost, no purchases at all, the break-even ROAS at Shopify's margin, what a
   ROAS means); one whose figures aren't known is left out.
 - **Meta Ads vs Google Ads** marks the platform that does better on each measure where one can (a higher
@@ -97,8 +97,8 @@ answers are kept apart.
 - **Dates**: the dashboard's own address-bar state (`?preset=&from=&to=`), kept
   for the tab, so the dashboard and every Advertising page show the same dates. The presets are the
   dashboard's: Today, Yesterday, This week (`wtd`, Monday to today) and Last week (`lastweek`, Monday to
-  Sunday), Last 7/30/90 days, This month, Last month, This year (`ytd`), Last year (`lastyear`, compared
-  with the whole year before), Custom (`@app/shared/dates`). Weeks run Monday to Sunday everywhere.
+  Sunday), Last 7/30/90 days, This month, Last month, This year (`ytd`), Last year (`lastyear`),
+  Custom (`@app/shared/dates`). Weeks run Monday to Sunday everywhere.
 - **By day, week or month**: the overview's charts ("Ad charts group") and the Meta and Google pages'
   trend ("Trend groups") add the days up per week or calendar month once the dates are long enough
   (`groupSeries` in @app/shared/ads): a week or month missing any day's figures is left blank, and a
@@ -178,10 +178,9 @@ Performance Max, Display, YouTube), which have no keywords.
   add up to less than. Spend with no keyword (Shopping, Performance Max, Display, YouTube) is in it and in no keyword
   row; Google lists only the search terms enough people searched (its privacy threshold), and Display, YouTube and
   other placements have none. The page says so under the table.
-- **The 200 that spent most**, as Google lists them, with "Showing the 200 that spent most" when there are more. A
-  comparison matches the same keyword or term: one that wasn't among the earlier dates' 200 shows "—".
+- **The 200 that spent most**, as Google lists them, with "Showing the 200 that spent most" when there are more.
 - Conversions are Google's own count, on every conversion action, as on the report's other tabs: not Shopify orders.
-- **Cost and limits**: read only when the tab is pressed, two Google Ads operations (four with a comparison), kept 6
+- **Cost and limits**: read only when the tab is pressed, two Google Ads operations, kept 6
   hours (30 minutes when the dates end today or yesterday, which Google may still be finishing). Each ad account may read them from Google 25 times a day, and
   none are read once bizinsights has used 70% of the day's shared allowance, so the syncs keep the dashboard's figures
   current; either case is said in words on the tab ([ads-setup.md](ads-setup.md), "Keywords and search terms"). The
@@ -248,8 +247,8 @@ Each sync keeps, per campaign, what its platform says about it now beyond its st
 
 The Meta Ads report's **Attribution** choice says how its purchases are counted: **Each ad set's own setting** (the
 default, as Ads Manager shows them, for example 7-day click, 1-day view), **1-day click**, **7-day click** or **1-day
-view**. It switches purchases, purchase value, purchase ROAS and cost per purchase in the figures at a glance, the
-table (whose purchase headings name the window) and the "Purchases vs before" change, on every level and split.
+view**. It switches purchases, purchase value, purchase ROAS and cost per purchase in the figures at a glance and the
+table (whose purchase headings name the window), on every level and split.
 
 - Meta is asked once for all of them: every live-report read sends `use_unified_attribution_setting=true` (each
   action's `value`: the ad set's own setting) and `action_attribution_windows=["1d_click","7d_click","1d_view"]`
@@ -394,7 +393,7 @@ came from Facebook or Instagram (Meta Ads) or from Google or YouTube (Google Ads
   own state when their access ended), and the dashboard's Advertising performance card, a tab per
   platform, each with its source badge. Each says the platform isn't connected (or that its login waits
   for an ad account, or that its accounts are hidden, or that its access ended) with the way to connect it.
-- **What:** per platform, its sales (net sales) and orders with the change on the dates compared with,
+- **What:** per platform, its sales (net sales) and orders,
   its share of the store's sales, the part from links tagged as ads, day by day, by site (Facebook and
   Instagram; Google and YouTube) and by the campaign named in the links (utm_campaign); and, while the
   storefront pixel records where visits came from, the store visits from its sites (`visits`, counted from
@@ -420,8 +419,9 @@ same header (`AdvertisingHeader`), with the demo's DEMO DATA badge and disclaime
 ## Rules the pages keep
 
 - A figure exists only for days every account behind it has stored; otherwise it is Unavailable, with
-  why, never 0 (the ad modules' rule). A change is shown only where the API compared (`compared`, on
-  whole days, never against days an account hasn't stored, `canCompareFrom`); otherwise the reason.
+  why, never 0 (the ad modules' rule). The pages show no change on the dates before; the API works
+  one out only on whole days, never against days an account hasn't stored (`compared`,
+  `canCompareFrom`), and otherwise gives the reason (`notCompared`).
 - Purchases, purchase value and ROAS are each platform's own claim and are labelled so; they are never
   added to, or shown as, Shopify sales. Google's other conversions stay apart from purchases.
 - The store's sales are set against the whole spend only (MER, share of sales, cost per Shopify order):
@@ -460,9 +460,9 @@ per person), and is in the audit log as `report.exported`.
   platform is never asked for a download. An answer no longer kept (10 minutes to 6 hours, as above)
   answers `409 report_expired`, looked up before the download is counted, so it uses none of the person's
   30; the page then reads the report again, as a refresh would, shows it and downloads that. The file holds every row of the answer whatever the page's filters show, with the top
-  row (**Whole ad account**, **Whole campaign**, **All ad groups in this campaign**...) and, with dates
-  compared, a **Before** row and each row's spend and purchases (Meta) or conversions (Google) then and
-  their change. Meta's file has purchases under each ad set's own setting and under each fixed window
+  row (**Whole ad account**, **Whole campaign**, **All ad groups in this campaign**...). A request that
+  names dates to compare with (`cfrom`, `cto`: the pages send none) adds a **Before** row and each row's
+  spend and purchases (Meta) or conversions (Google) then and their change. Meta's file has purchases under each ad set's own setting and under each fixed window
   side by side (**Not reported** where Meta gave none, as is reach Meta didn't give); a row the dates
   compared with don't list says **Not listed for the dates compared**. Statuses, budgets and Google's
   delivery and Quality Score are as the platform lists them now, labelled so; a keyword Google gives no
@@ -474,8 +474,8 @@ per person), and is in the audit log as `report.exported`.
 - **Account analytics** (`/advertising/google/analytics`): a **Section** picked and **Download CSV**, `GET
   …/ads/google/analytics/export?part=overview|campaigns|days|weeks|months|devices|audience|recommendations|combined`
   with the page's dates and `connection`. The same answer as the page, from the stored days: a day, week
-  or month the account hasn't stored is **Not stored** (one partly stored says which days), the overview
-  with nothing stored says so and one whose dates compared with aren't all stored says **Not compared**,
+  or month the account hasn't stored is **Not stored** (one partly stored says which days), and the
+  overview (`Measure, Value, Note`) with nothing stored says so,
   never 0. The campaigns and recommendations need "View campaigns" too. A real account's devices and
   audience read Google's splits as the page does; a split that couldn't be read says why. The audit entry:
   `section: "google_ads_analytics"`, the `part`, `platform: "google"`, `account` and the dates.

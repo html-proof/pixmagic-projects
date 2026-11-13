@@ -3,7 +3,6 @@ import { ArrowDown, ChevronRight, TriangleAlert } from "lucide-react";
 import { largestDropOff } from "@app/shared/funnel";
 import { FUNNEL_STEPS } from "@app/shared/journey";
 import type { FunnelStep } from "@app/shared/journey";
-import { ChangeText } from "@/components/dashboard/HomeCards";
 import type { FunnelPageModule } from "@/components/dashboard/types";
 import { fmtNum, fmtPct } from "@/lib/api";
 import { FunnelSection } from "./FunnelUi";
@@ -18,7 +17,7 @@ const SHADE = ["bg-accent", "bg-accent/85", "bg-accent/70", "bg-accent/60", "bg-
  * its explanation. Every stage counts the same visits, so the bars narrow by what happened, never by
  * design.
  */
-export function FunnelChart({ f, versus, onOpen }: { f: FunnelPageModule; versus: string; onOpen: (step: FunnelStep) => void }) {
+export function FunnelChart({ f, onOpen }: { f: FunnelPageModule; onOpen: (step: FunnelStep) => void }) {
   const worst = largestDropOff(f.transitions);
   return (
     <FunnelSection
@@ -52,8 +51,6 @@ export function FunnelChart({ f, versus, onOpen }: { f: FunnelPageModule; versus
                     <span className="flex flex-wrap items-baseline gap-x-2 text-sm">
                       <strong className="text-lg tabular-nums">{fmtNum(s.reached)}</strong>
                       <span className="text-muted">visits · {fmtPct(share)} of all visits</span>
-                      <ChangeText value={f.stepDeltas[k]} />
-                      {f.stepDeltas[k] !== null && f.stepDeltas[k] !== undefined && <span className="text-[11px] text-muted">{versus}</span>}
                     </span>
                   </span>
                   <span className="mt-0.5 block text-xs text-muted">{g.short}</span>

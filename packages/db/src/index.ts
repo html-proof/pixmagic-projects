@@ -93,7 +93,7 @@ function scope(): Scope {
 function tenantUrl(urls: DbUrls): string {
   if (urls.tenant) return urls.tenant;
   if (process.env.NODE_ENV === "production") {
-    throw new Error("APP_DATABASE_URL is not set: tenant queries would run on the owner's login, outside row-level security. Set APP_RLS_PASSWORD (infra/cdk/scripts/put-secrets.mjs).");
+    throw new Error("APP_DATABASE_URL is not set: tenant queries would run on the owner's login, outside row-level security. Set it in the server's env/app.env (infra/ikorex/env/app.env.example).");
   }
   return urls.system;
 }

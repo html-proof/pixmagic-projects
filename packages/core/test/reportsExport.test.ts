@@ -65,7 +65,7 @@ describe("the Advertising CSV", () => {
 describe("the Advertising area's reports", () => {
   const compared = { current: { from: "2026-10-13", to: "2026-10-18", totals }, previous: { from: "2026-10-06", to: "2026-10-11", totals: { ...totals, spend: 20 } }, trimmed: 1 };
 
-  it("the summary: each figure with the one compared with and the change, the store's own sales apart from the platforms' counts, AdSense apart from the spend", () => {
+  it("the summary: each figure once, with no figure for other dates beside it, the store's own sales apart from the platforms' counts, AdSense apart from the spend", () => {
     const t = exportTable("ads_summary", {
       ads: {
         current: totals,
@@ -77,17 +77,16 @@ describe("the Advertising area's reports", () => {
       },
       adsense: { current: null, soFar: null, partial: null, compared: null, notCompared: "incomplete", previous: {}, deltas: {} },
     });
-    expect(t.header).toEqual(["Measure", "Value", "Value on the days compared", "Before", "Change (%)", "Note"]);
-    // Today isn't over: the change is on the days through yesterday, said so, beside the whole dates' figure.
-    const through = "Compared through 2026-10-18: whole days only.";
-    expect(t.rows).toContainEqual(["Ad spend", 40, 40, 20, 100, through]);
-    // Impressions have no change of their own.
-    expect(t.rows).toContainEqual(["Impressions", 4000, null, null, null, null]);
-    expect(t.rows).toContainEqual(["Purchases (platforms' count)", 4, 4, 2, 100, through]);
-    // Shopify's figures, not compared here: they say why rather than show a change.
-    expect(t.rows).toContainEqual(["Sales per unit of ad spend (MER)", 10, null, null, null, "Not compared: needs whole dates on both sides, with the store's orders imported for them."]);
+    // The answer still holds the dates before and the changes: none of it is a column.
+    expect(t.header).toEqual(["Measure", "Value", "Note"]);
+    expect(t.rows.every((r) => r.length === 3)).toBe(true);
+    expect(t.rows).toContainEqual(["Ad spend", 40, null]);
+    expect(t.rows).toContainEqual(["Impressions", 4000, null]);
+    expect(t.rows).toContainEqual(["Purchases (platforms' count)", 4, null]);
+    expect(t.rows).toContainEqual(["Sales per unit of ad spend (MER)", 10, null]);
+    expect(t.rows).toContainEqual(["Ads as share of sales", 0.1, null]);
     // AdSense without its days stored: Unavailable, never $0.
-    expect(t.rows).toContainEqual(["AdSense estimated earnings (money in, not ad spend)", "Unavailable", null, null, null, "No figures are stored for these dates yet."]);
+    expect(t.rows).toContainEqual(["AdSense estimated earnings (money in, not ad spend)", "Unavailable", "No figures are stored for these dates yet."]);
     // Shopify's sales are named as Shopify's, the platforms' purchases as the platforms' own.
     expect(t.rows.map((r) => r[0])).toEqual(expect.arrayContaining(["Net sales (Shopify)", "Orders (Shopify)", "Purchase value (platforms' count)"]));
   });
@@ -99,14 +98,14 @@ describe("the Advertising area's reports", () => {
     const ads = { current: { ...totals, purchases: 5, purchaseValue: 180, roas: 4.5 }, compared: null, notCompared: "no_history", previous: {}, deltas: {}, claimsAddUp: false, byProvider: [meta, google] };
     const t = exportTable("ads_summary", { ads });
     const label = t.rows.map((r) => r[0]);
-    expect(t.rows).toContainEqual(["Ad spend", 40, null, null, null, "Not compared: no earlier data."]);
+    expect(t.rows).toContainEqual(["Ad spend", 40, null]);
     expect(label).not.toContain("Purchases (platforms' count)");
     expect(label).not.toContain("Return on ad spend (platforms' own)");
-    expect(t.rows).toContainEqual(["Purchases", "Each platform's own", null, null, null, "Meta Ads and Google Ads can both claim the same order, so their purchases, purchase value, ROAS and conversions are given per platform, never added up."]);
-    expect(t.rows).toContainEqual(["Meta Ads purchases (its own count)", 3, null, null, null, "Not compared: no earlier data."]);
-    expect(t.rows).toContainEqual(["Meta Ads return on ad spend (its own)", 4, null, null, null, "Not compared: no earlier data."]);
-    expect(t.rows).toContainEqual(["Google Ads purchase value (its own count)", 60, null, null, null, "Not compared: no earlier data."]);
-    expect(t.rows).toContainEqual(["Google Ads conversions (all conversion actions)", 5, null, null, null, "Not compared: no earlier data."]);
+    expect(t.rows).toContainEqual(["Purchases", "Each platform's own", "Meta Ads and Google Ads can both claim the same order, so their purchases, purchase value, ROAS and conversions are given per platform, never added up."]);
+    expect(t.rows).toContainEqual(["Meta Ads purchases (its own count)", 3, null]);
+    expect(t.rows).toContainEqual(["Meta Ads return on ad spend (its own)", 4, null]);
+    expect(t.rows).toContainEqual(["Google Ads purchase value (its own count)", 60, null]);
+    expect(t.rows).toContainEqual(["Google Ads conversions (all conversion actions)", 5, null]);
     // No figure anywhere is the sum of the two claims.
     expect(t.rows.some((r) => r[1] === 180 || r[1] === 4.5)).toBe(false);
 
@@ -114,7 +113,7 @@ describe("the Advertising area's reports", () => {
     const older = { ...ads, claimsAddUp: undefined };
     expect(exportTable("ads_summary", { ads: older }).rows).toEqual(t.rows);
     const one = exportTable("ads_summary", { ads: { ...older, byProvider: [meta] } });
-    expect(one.rows).toContainEqual(["Purchases (platforms' count)", 5, null, null, null, "Not compared: no earlier data."]);
+    expect(one.rows).toContainEqual(["Purchases (platforms' count)", 5, null]);
   });
 
   it("the summary names the accounts left out in another currency under the spend", () => {
@@ -132,14 +131,14 @@ describe("the Advertising area's reports", () => {
       },
     });
     const at = t.rows.findIndex((r) => r[0] === "Left out");
-    expect(t.rows[at]).toEqual(["Left out", "EU shop (EUR); 456 (currency not known yet)", null, null, null, "In another currency: their spend and purchases are in none of these figures."]);
+    expect(t.rows[at]).toEqual(["Left out", "EU shop (EUR); 456 (currency not known yet)", "In another currency: their spend and purchases are in none of these figures."]);
     expect(t.rows[at - 1]![0]).toBe("Link clicks");
     expect(exportTable("ads_summary", { ads: { current: totals, compared: null, notCompared: "no_history", previous: {}, deltas: {}, leftOut: [] } }).rows.some((r) => r[0] === "Left out")).toBe(false);
   });
 
-  it("the summary without a change says why, and with the days so far says up to when", () => {
+  it("the summary with the days so far says up to when", () => {
     const t = exportTable("ads_summary", { ads: { current: null, soFar: { from: "2026-10-13", to: "2026-10-18", totals }, compared: null, notCompared: "no_history", previous: {}, deltas: {} } });
-    expect(t.rows[0]).toEqual(["Ad spend", 40, null, null, null, "Up to 2026-10-18: the days after it aren't over yet. Not compared: no earlier data."]);
+    expect(t.rows[0]).toEqual(["Ad spend", 40, "Up to 2026-10-18: the days after it aren't over yet."]);
   });
 
   it("by day: each platform's days, a day without figures said so rather than 0", () => {
@@ -153,7 +152,7 @@ describe("the Advertising area's reports", () => {
     ]);
   });
 
-  it("campaigns: every one, with its account and its change where the totals are compared", () => {
+  it("campaigns: every one, with its account, and no figure for other dates", () => {
     const t = exportTable("ads_campaigns", {
       ads: {
         campaigns: [
@@ -178,9 +177,10 @@ describe("the Advertising area's reports", () => {
       },
     });
     expect(t.header.slice(0, 9)).toEqual(["Platform", "Account", "Campaign", "Status", "Primary status (Google)", "Primary status reasons (Google)", "Campaign type (Google)", "Budget", "Budget period"]);
-    expect(t.header.slice(-5)).toEqual(["Spend before", "Spend change (%)", "ROAS before", "ROAS change (%)", "Complete"]);
-    expect(t.rows[0]).toEqual(["Meta Ads", "act_1", "Spring", "ACTIVE", null, null, null, null, null, 40, 4000, 100, 80, 5, 200, 4, 180, 4.5, 20, 100, 3, 50, "yes"]);
-    expect(t.rows[1]!.slice(-5)).toEqual([null, null, null, null, "no"]);
+    expect(t.header.at(-1)).toBe("Complete");
+    expect(t.header.some((h) => /before|change/i.test(h))).toBe(false);
+    expect(t.rows[0]).toEqual(["Meta Ads", "act_1", "Spring", "ACTIVE", null, null, null, null, null, 40, 4000, 100, 80, 5, 200, 4, 180, 4.5, "yes"]);
+    expect(t.rows[1]!.at(-1)).toBe("no");
     // A status not read yet is an empty cell.
     expect(t.rows[1]![3]).toBeNull();
     // Google's primary status, its reasons, the campaign's type and its budget, as the last sync stored them.
