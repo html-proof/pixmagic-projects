@@ -2,9 +2,8 @@
 
 Conventions and layout: [docs/architecture.md](docs/architecture.md). The server's runbook:
 [docs/ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md](docs/ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md).
-What is left in AWS and why: [docs/ikorex-migration/LEAVING_AWS.md](docs/ikorex-migration/LEAVING_AWS.md)
-(once #397 is merged). [docs/aws-deployment.md](docs/aws-deployment.md) describes the AWS setup as
-it was; most of it is deleted.
+What is left in AWS and why: [docs/ikorex-migration/LEAVING_AWS.md](docs/ikorex-migration/LEAVING_AWS.md).
+[docs/aws-deployment.md](docs/aws-deployment.md) describes the AWS setup as it was; most of it is deleted.
 
 ## Production runs on the iKorex server (since 2026-11-13)
 

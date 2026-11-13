@@ -21,8 +21,10 @@ cleanup
 mkdir -p "$DIR/data" "$SOCK"
 chmod 700 "$DIR/data"
 
-log "restoring the newest backup"
-pgbackrest --stanza="$STANZA" --pg1-path="$DIR/data" --type=immediate --target-action=promote --archive-mode=off --delta restore
+# RESTORE_TEST_REPO=2 tests the copy on this server's disk; unset, pgBackRest takes the first
+# repository that has a backup (repo1, the bucket).
+log "restoring the newest backup${RESTORE_TEST_REPO:+ of repo$RESTORE_TEST_REPO}"
+pgbackrest --stanza="$STANZA" ${RESTORE_TEST_REPO:+--repo="$RESTORE_TEST_REPO"} --pg1-path="$DIR/data" --type=immediate --target-action=promote --archive-mode=off --delta restore
 pg_ctl -D "$DIR/data" -w -t 600 -l "$DIR/restore.log" \
   -o "-p $PORT -c listen_addresses='' -c unix_socket_directories=$SOCK -c archive_mode=off -c shared_preload_libraries='' -c shared_buffers=128MB" start
 

@@ -17,7 +17,7 @@ the real copy is step 3 of the cutover (stage D).
 | User passwords | Cognito, and the app's own `auth_accounts` | n/a | Those who moved over to the app's own sign-in (`AUTH_MODE=migrating`): argon2id hashes in `auth_accounts`, part of this copy. The rest stay at Cognito, which still checks them until stage F (decision 2) |
 | The coordinator's items (rate limits, locks) | DynamoDB `coord` | Small, short-lived | Cutover step 4: `admin import-coord` |
 | Queued jobs | SQS | Drained to empty before the copy (cutover step 2; the copy refuses otherwise) | Not moved |
-| SMS delivery events | — | — | Nothing to move: Customer Messaging (SMS) was removed from the app on 2026-11-13, with the `smsEvents` queue and the bridge that read it. The `sms_*` tables, read by nothing, come over with `app` until a later migration drops them |
+| SMS delivery events | — | — | Nothing to move: Customer Messaging (SMS) was removed from the app on 2026-11-13, with the `smsEvents` queue and the bridge that read it. The `sms_*` tables came over with `app` and were dropped on the server by migration `20261113180000_drop_sms_and_email_module_tables` |
 
 ## How: `infra/ikorex/scripts/copy-db.mjs` and `copy-db.sh`
 

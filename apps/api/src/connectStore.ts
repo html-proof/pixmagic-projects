@@ -121,8 +121,7 @@ async function attach(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInp
       // from a clean slate: its synced data, and what the merchant
       // entered for it (costs and business events, which a Disconnect keeps). Customer data
       // requests still to be answered follow the store, and so does the alert asking to answer
-      // them; their email hash is keyed to the old workspace, and the new one holds no email data
-      // for it yet. The old workspace's other alerts about the store go.
+      // them. The old workspace's other alerts about the store go.
       await purgeStoreData(existing.id, deps.fetchImpl);
       await systemDb.$transaction([
         systemDb.storeExpense.deleteMany({ where: { storeId: existing.id } }),
@@ -131,7 +130,7 @@ async function attach(deps: Pick<Deps, "queues" | "fetchImpl">, input: AttachInp
         systemDb.businessEvent.deleteMany({ where: { storeId: existing.id } }),
       ]);
       await systemDb.syncJob.deleteMany({ where: { storeId: existing.id } });
-      await systemDb.dataRequest.updateMany({ where: { storeId: existing.id }, data: { workspaceId, emailHash: null } });
+      await systemDb.dataRequest.updateMany({ where: { storeId: existing.id }, data: { workspaceId } });
       await systemDb.alert.updateMany({ where: { storeId: existing.id, code: "privacy_request", resolvedAt: null }, data: { workspaceId } });
       await systemDb.alert.deleteMany({ where: { storeId: existing.id, workspaceId: { not: workspaceId } } });
       await dropEmptyShopWorkspace(existing.workspaceId);
