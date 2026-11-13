@@ -156,12 +156,12 @@ counting. Receipt attachments are not implemented.
 
 ## Analytics and reports
 
-- KPI cards (each with its explanation and update time; the answer also carries the previous
-  comparable value and the change, which the page doesn't show): total
+- KPI cards (each with its explanation and update time): total
   and active staff, working now, hours today/this week/this month, regular and overtime hours,
   payroll cost today/week/month/year, amount paid, still to pay, waiting for approval, average
-  hourly rate. In the answer, "This week/month/year" compare with the same elapsed part of the
-  previous one, and today with yesterday up to the same time.
+  hourly rate. Each figure is for its own dates only: since 2026-11-13 the answer carries no
+  earlier value, no change and no period before (removed at the owner's request), and the
+  period before is no longer read.
 - Ranges: Live, Today, Yesterday, This/Last week, This/Last month, This/Last year, Custom (up to
   ~3 years). Buckets: hour, day, week, month, quarter, year. All in the organization's time zone.
 - Charts: working hours, payroll cost, cost per employee, regular vs overtime, attendance
@@ -244,7 +244,7 @@ Stated plainly, because the request asked for these where possible:
 
 | Suite | File | Covers |
 | --- | --- | --- |
-| Unit | `packages/shared/test/staff.test.ts` | money and rounding, currencies' minor units, DST and half-hour zones, daily/weekly/double-time overtime, overnight and DST shifts, holidays, overlapping sessions, effective-dated rates, breaks and the stale cap, pay cycles, report ranges and comparisons, flags, live status, permissions, password policy |
+| Unit | `packages/shared/test/staff.test.ts` | money and rounding, currencies' minor units, DST and half-hour zones, daily/weekly/double-time overtime, overnight and DST shifts, holidays, overlapping sessions, effective-dated rates, breaks and the stale cap, pay cycles, report ranges, flags, live status, permissions, password policy |
 | Unit | `packages/core/test/staffFiles.test.ts` | CSV formula-injection guard, XLSX structure, ZIP CRCs, PDF cross-reference table and text encoding |
 | Integration | `apps/api/test/staff.test.ts` | the onboarding/invitation flow (incl. invalid, expired, revoked, reused, copied links, existing accounts), clocking with server time and a refresh, breaks, concurrency and idempotency, deactivation, overnight and DST shifts, overtime, approval, payroll workflow, locking and freeze triggers, rate changes preserving history, payments (partial, overpayment, duplicates, references, reversal), analytics presets, CSV/XLSX/PDF/payslip/statement downloads, employee data isolation, staff roles, organization isolation including RLS |
 | End to end | `apps/web/e2e/staff.spec.ts` | the browser journey: add employee → invitation email → set password → portal → clock in → refresh → break → clock out → manager approves → payroll → payment |

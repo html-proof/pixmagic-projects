@@ -13,21 +13,18 @@ import {
   daysBetweenInclusive,
   dailyRate,
   daysOfStock,
-  delta,
   depletionDay,
   eachDay,
   fastMovers,
   inventoryTurnover,
   localDay,
-  localTime,
   restockQuantity,
   sellThrough,
   VELOCITY_DAYS,
-  type Comparison,
   type DateRange,
   type StockQuery,
 } from "@app/shared";
-import { escapeLike, ITEM_SALES, localMoment, SALE_UNITS, SALE_VALUE } from "../reports/common.js";
+import { escapeLike, ITEM_SALES, SALE_UNITS, SALE_VALUE } from "../reports/common.js";
 import type { StoreInventorySettings } from "./settings.js";
 import { soldCte, STATUS, variantStockCte, type StockScope } from "./stock.js";
 import { livePassWhere } from "./sync.js";
@@ -35,11 +32,6 @@ import { livePassWhere } from "./sync.js";
 const num = (v: unknown) => (v === null || v === undefined ? 0 : Number(v));
 const numOrNull = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 const r2 = (n: number) => Math.round(n * 100) / 100;
-/** The relative change from `prev` (0.12 = 12% up; `delta` in @app/shared), as the dashboard's figures give it. */
-const pct = (cur: number | null, prev: number | null) => {
-  const d = delta(cur, prev);
-  return d === null ? null : Math.round(d * 10_000) / 10_000;
-};
 
 export interface SeeOpts {
   /** Cost per item, cost and retail stock value, margin and turnover (inventory.costs). */
@@ -139,26 +131,18 @@ async function totals(tx: Tx, scope: StockScope, sold30From: string, today: stri
   return t!;
 }
 
-/**
- * Items sold on `from`..`to` (store-local days) from Shopify's sales records, returns taken off
- * (`SALE_UNITS`); the last day counted up to `until` ("HH:MM:SS") when given.
- */
-async function unitsSold(tx: Tx, store: Pick<Store, "id" | "workspaceId" | "timezone">, from: string, to: string, until?: string): Promise<number> {
-  const cut = until ? Prisma.sql`AND (s.local_day < ${to} OR s.happened_at <= ${localMoment(to, until, store.timezone)})` : Prisma.empty;
+/** Items sold on `from`..`to` (store-local days) from Shopify's sales records, returns taken off (`SALE_UNITS`). */
+async function unitsSold(tx: Tx, store: Pick<Store, "id" | "workspaceId">, from: string, to: string): Promise<number> {
   const [r] = await tx.$queryRaw<Array<{ units: number | null }>>`
     SELECT SUM(${SALE_UNITS})::int AS units
     FROM order_sales s
     WHERE s.workspace_id = ${store.workspaceId} AND s.store_id = ${store.id} AND ${ITEM_SALES}
-      AND s.local_day BETWEEN ${from} AND ${to} ${cut}`;
+      AND s.local_day BETWEEN ${from} AND ${to}`;
   return num(r?.units);
 }
 
 export interface StockKpi {
   value: number | null;
-  /** The value it is compared with (the end of the comparison period, or the same span before). */
-  previous: number | null;
-  /** % change from `previous`; null without one. */
-  change: number | null;
   /** Why the value is null, or what it leaves out. */
   note?: string;
   /** Cost value only: false when some stock has no cost recorded. */
@@ -191,12 +175,12 @@ async function turnover(tx: Tx, scope: StockScope, range: DateRange): Promise<{ 
   return { value: value === null ? null : r2(value), ...(value === null ? { note: "The stock held over the period was worth nothing at cost." } : {}), cogs, averageValue };
 }
 
-/** The overview: every figure on the Inventory overview, with what it's compared with. */
+/** The overview: every figure on the Inventory overview, as of now; turnover is over `range`. */
 export async function inventoryOverview(
   tx: Tx,
   store: Pick<Store, "id" | "workspaceId" | "timezone">,
   scope: StockScope,
-  dates: { range: DateRange; previous: Comparison },
+  range: DateRange,
   sales: SalesWindow,
   now: Date,
   see: SeeOpts,
@@ -205,37 +189,14 @@ export async function inventoryOverview(
   const t = await totals(tx, scope, addDays(today, -(VELOCITY_DAYS - 1)), today);
   const levels = scope.source === "levels";
 
-  // The stock at the end of the comparison period (its day's-end record), when there is one.
-  const prevDay = dates.previous.to < today ? dates.previous.to : addDays(today, -1);
-  const prev = await tx.inventorySnapshot.findUnique({ where: { storeId_day_locationKey: { storeId: store.id, day: prevDay, locationKey: "all" } } });
-  const noRecord = prev ? undefined : "No stock recorded at the start of the period to compare with yet.";
-  const stockKpi = (value: number | null, previous: number | null | undefined, note?: string): StockKpi => ({
-    value,
-    previous: previous ?? null,
-    change: pct(value, previous ?? null),
-    ...(note ? { note } : previous === undefined || previous === null ? (noRecord ? { note: noRecord } : {}) : {}),
-    basis: "stock",
-  });
+  const stockKpi = (value: number | null, note?: string): StockKpi => ({ value, ...(note ? { note } : {}), basis: "stock" });
   const needsLevels = "Needs stock-level access in Shopify (Inventory → Stock settings).";
   // Without stock levels the units on hand aren't known: stock value counts the units available.
   const availableBasis = "Counted on available units: on-hand stock needs stock-level access.";
 
-  // Units sold today and this month, each against the same span before, up to the same time of day.
-  const time = localTime(now, store.timezone);
-  const yesterday = addDays(today, -1);
+  // Units sold today and this month so far.
   const monthStart = `${today.slice(0, 8)}01`;
-  const prevMonthStart = `${addDays(monthStart, -1).slice(0, 8)}01`;
-  const prevMonthEnd = addDays(monthStart, -1);
-  const sameDay = addDays(prevMonthStart, daysBetweenInclusive(monthStart, today) - 1);
-  const prevMonthTo = sameDay > prevMonthEnd ? prevMonthEnd : sameDay;
-  const [uToday, uYesterday, uMonth, uPrevMonth] = await Promise.all([
-    unitsSold(tx, store, today, today),
-    unitsSold(tx, store, yesterday, yesterday, time),
-    unitsSold(tx, store, monthStart, today),
-    unitsSold(tx, store, prevMonthStart, prevMonthTo, prevMonthTo === sameDay ? time : undefined),
-  ]);
-  const ordersCover = (from: string) => !!sales.historyFrom && sales.historyFrom <= from;
-  const notImported = "The orders of the span it's compared with aren't all imported.";
+  const [uToday, uMonth] = await Promise.all([unitsSold(tx, store, today, today), unitsSold(tx, store, monthStart, today)]);
 
   // Fast- and slow-moving, from the last 30 days of sales.
   const rows = await tx.$queryRaw<Array<{ variant_id: string; units: number }>>`
@@ -246,45 +207,37 @@ export async function inventoryOverview(
 
   const costValue = t.with_cost ? numOrNull(t.cost_value) : null;
   const kpis = {
-    products: { value: t.products, previous: null, change: null, basis: "stock" } as StockKpi,
-    variants: stockKpi(t.variants, prev ? prev.trackedVariants + prev.untrackedVariants : undefined),
-    available: stockKpi(t.available, prev?.available),
-    onHand: levels ? stockKpi(t.on_hand, prev?.onHand) : stockKpi(null, null, needsLevels),
-    committed: levels ? stockKpi(t.committed, prev?.committed) : stockKpi(null, null, needsLevels),
-    incoming: levels ? stockKpi(t.incoming, prev?.incoming) : stockKpi(null, null, needsLevels),
-    lowStock: stockKpi(t.low, prev?.lowStock),
-    outOfStock: stockKpi(t.out, prev?.outOfStock),
+    products: stockKpi(t.products),
+    variants: stockKpi(t.variants),
+    available: stockKpi(t.available),
+    onHand: levels ? stockKpi(t.on_hand) : stockKpi(null, needsLevels),
+    committed: levels ? stockKpi(t.committed) : stockKpi(null, needsLevels),
+    incoming: levels ? stockKpi(t.incoming) : stockKpi(null, needsLevels),
+    lowStock: stockKpi(t.low),
+    outOfStock: stockKpi(t.out),
     costValue: see.costs
       ? {
           ...stockKpi(
             costValue,
-            prev?.costValue ? Number(prev.costValue) : undefined,
             [t.with_cost < t.in_stock ? `Incomplete: ${t.in_stock - t.with_cost} of ${t.in_stock} items in stock have no cost per item.` : "", levels ? "" : availableBasis].filter(Boolean).join(" ") || undefined,
           ),
           complete: t.with_cost === t.in_stock,
         }
       : null,
-    retailValue: see.costs ? stockKpi(numOrNull(t.retail_value), prev ? Number(prev.retailValue) : undefined, levels ? undefined : availableBasis) : null,
-    unitsToday: ordersCover(yesterday)
-      ? ({ value: uToday, previous: uYesterday, change: pct(uToday, uYesterday), basis: "orders" } as StockKpi)
-      : ({ value: uToday, previous: null, change: null, note: notImported, basis: "orders" } as StockKpi),
-    unitsMonth: ordersCover(prevMonthStart)
-      ? ({ value: uMonth, previous: uPrevMonth, change: pct(uMonth, uPrevMonth), basis: "orders" } as StockKpi)
-      : ({ value: uMonth, previous: null, change: null, note: notImported, basis: "orders" } as StockKpi),
-    fastMoving: { value: fast, previous: null, change: null, basis: "orders", ...(fast === null ? { note: "Needs at least 14 days of imported orders." } : {}) } as StockKpi,
-    slowMoving: { value: sales.days >= VELOCITY_DAYS ? t.slow : null, previous: null, change: null, basis: "orders", ...(sales.days < VELOCITY_DAYS ? { note: "Needs 30 days of imported orders." } : {}) } as StockKpi,
-    turnover: see.costs ? await turnoverKpi(tx, scope, dates) : null,
+    retailValue: see.costs ? stockKpi(numOrNull(t.retail_value), levels ? undefined : availableBasis) : null,
+    unitsToday: { value: uToday, basis: "orders" } as StockKpi,
+    unitsMonth: { value: uMonth, basis: "orders" } as StockKpi,
+    fastMoving: { value: fast, basis: "orders", ...(fast === null ? { note: "Needs at least 14 days of imported orders." } : {}) } as StockKpi,
+    slowMoving: { value: sales.days >= VELOCITY_DAYS ? t.slow : null, basis: "orders", ...(sales.days < VELOCITY_DAYS ? { note: "Needs 30 days of imported orders." } : {}) } as StockKpi,
+    turnover: see.costs ? await turnoverKpi(tx, scope, range) : null,
     daysOfStock: {
       value: left === null ? null : Math.round(left),
-      previous: null,
-      change: null,
       basis: "orders",
       ...(left === null ? { note: rate === null ? "Needs at least 14 days of imported orders." : "Nothing sold in the last 30 days." } : {}),
     } as StockKpi,
   };
   return {
     today,
-    comparedWith: prevDay,
     kpis,
     untracked: { variants: t.untracked, onHand: t.untracked_on_hand },
     tracked: t.tracked,
@@ -292,9 +245,9 @@ export async function inventoryOverview(
   };
 }
 
-async function turnoverKpi(tx: Tx, scope: StockScope, dates: { range: DateRange; previous: Comparison }): Promise<StockKpi> {
-  const [cur, prev] = await Promise.all([turnover(tx, scope, dates.range), turnover(tx, scope, dates.previous)]);
-  return { value: cur.value, previous: prev.value, change: pct(cur.value, prev.value), basis: "orders", ...(cur.note ? { note: cur.note } : {}) };
+async function turnoverKpi(tx: Tx, scope: StockScope, range: DateRange): Promise<StockKpi> {
+  const cur = await turnover(tx, scope, range);
+  return { value: cur.value, basis: "orders", ...(cur.note ? { note: cur.note } : {}) };
 }
 
 // ---------------------------------------------------------------------------

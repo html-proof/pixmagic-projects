@@ -138,10 +138,7 @@ export interface KpiData {
   label: string;
   unit: "hours" | "money" | "count" | "rate";
   value: number | string | null;
-  previous: number | string | null;
-  change: number | null;
   help: string;
-  compareLabel: string | null;
 }
 
 export function formatKpi(k: Pick<KpiData, "unit">, v: number | string | null, currency: string | null) {

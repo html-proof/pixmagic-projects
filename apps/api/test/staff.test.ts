@@ -512,6 +512,9 @@ describe("payroll", () => {
     for (const preset of ["this_week", "last_week", "this_month", "last_month", "this_year", "last_year"]) {
       const k = ok(await call("GET", `/workspaces/${ws}/staff/analytics?preset=${preset}`, h));
       expect(k.kpis.length).toBeGreaterThanOrEqual(16);
+      // The dates' own figures only: no period before, no earlier value or change on any figure.
+      for (const f of ["previous", "inProgress"]) expect(k, preset).not.toHaveProperty(f);
+      for (const x of k.kpis) for (const f of ["previous", "change", "compareLabel"]) expect(x, `${preset} ${x.key}`).not.toHaveProperty(f);
     }
     const lastWeek = ok(await call("GET", `/workspaces/${ws}/staff/analytics?preset=last_week`, h));
     const kpi = (key: string) => lastWeek.kpis.find((x: { key: string }) => x.key === key);

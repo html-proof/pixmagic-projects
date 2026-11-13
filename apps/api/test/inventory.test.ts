@@ -138,6 +138,12 @@ describe("what the overview and the stock list show", () => {
     // A day's orders aren't enough history to forecast from.
     expect(o.kpis.daysOfStock.value).toBeNull();
     expect(o.kpis.turnover.value).toBeNull();
+    // The figures as they are now: nothing of an earlier day, on the answer or on any figure.
+    for (const f of ["previous", "comparedWith"]) expect(o).not.toHaveProperty(f);
+    for (const [id, k] of Object.entries(o.kpis)) for (const f of ["previous", "change"]) expect(k, id).not.toHaveProperty(f);
+    // And no note about a comparison that can't be made (no day's-end record, orders not imported that far).
+    expect(o.kpis.available).toEqual({ value: 61, basis: "stock" });
+    expect(o.kpis.unitsToday).toEqual({ value: 3, basis: "orders" });
     expect(o.outOfStock.rows.map((r: { variantId: string }) => r.variantId)).toEqual(["12"]);
     expect(o.lowStock.rows.map((r: { variantId: string }) => r.variantId)).toEqual(["21"]);
   });
