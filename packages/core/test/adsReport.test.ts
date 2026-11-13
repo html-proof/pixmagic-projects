@@ -46,10 +46,9 @@ const row = (c: AdConn, day: string, over: Partial<AdDayRow> = {}): AdDayRow & {
 /** Every day of `from`..`to` for `c`, one row each. */
 const daily = (c: AdConn, from: string, to: string, over: Partial<AdDayRow> = {}) => eachDay(from, to).map((day) => row(c, day, over));
 
-/** "Last 7 days" on the 19th: compared with the 7 before, until the same time of day. */
+/** "Last 7 days" on the 19th. */
 const week = (over: Partial<AdsAsk> = {}): AdsAsk => ({
   range: { from: d(-6), to: TODAY },
-  previous: { from: d(-13), to: d(-7), until: "12:00:00" },
   storeCurrency: "USD",
   storeTimeZone: "UTC",
   netSales: 1000,
@@ -58,19 +57,18 @@ const week = (over: Partial<AdsAsk> = {}): AdsAsk => ({
 });
 
 describe("ad figures cover only the days the accounts have stored", () => {
-  it("adds up an account that covers every day, and compares whole days only: through yesterday on both sides", () => {
+  it("adds up an account that covers every day, the week alone: nothing of the week before", () => {
     const a = conn({ id: "a" });
     const rows = daily(a, d(-13), TODAY);
     const m = adsFigures([a], rows, week())!;
     expect(m.coverage).toEqual({ from: d(-89), through: TODAY, complete: true });
     expect(m.current).toMatchObject({ spend: 70, linkClicks: 140, purchases: 7, purchaseValue: 280, roas: 4 });
     expect(m.partial).toBeNull();
-    // Today is still running: 13–18 Oct against 6–11 Oct, six whole days each.
-    expect(m.compared).toMatchObject({ current: { from: d(-6), to: d(-1), totals: { spend: 60 } }, previous: { from: d(-13), to: d(-8), totals: { spend: 60 } }, trimmed: 1 });
-    // What's shown as "before" is what was compared.
-    expect(m.previous).toMatchObject({ from: d(-13), to: d(-8), spend: 60, linkClicks: 120, purchases: 6, imported: true });
-    expect(m.deltas).toEqual({ spend: 0, linkClicks: 0, conversions: 0, purchases: 0, purchaseValue: 0, roas: 0 });
-    expect(m.notCompared).toBeNull();
+    // The rows of 6–12 Oct are given too, and count in nothing: no figure is set against other dates.
+    for (const k of ["compared", "notCompared", "previous", "deltas", "imported"]) {
+      expect(m).not.toHaveProperty(k);
+      expect(m.byProvider[0]).not.toHaveProperty(k);
+    }
     expect(m.shareOfSales).toBe(0.07);
     expect(m.updatedAt).toBe("2026-10-19T11:00:00.000Z");
     expect(m.byProvider).toEqual([expect.objectContaining({ provider: "meta", spend: 70, current: expect.objectContaining({ spend: 70 }), accounts: ["a"] })]);
@@ -90,9 +88,6 @@ describe("ad figures cover only the days the accounts have stored", () => {
     expect(m.current).toBeNull();
     expect(m.partial).toBeNull();
     expect(m.coverage).toEqual({ from: null, through: null, complete: false });
-    expect(m.compared).toBeNull();
-    expect(m.notCompared).toBe("incomplete");
-    expect(Object.values(m.deltas).every((v) => v === null)).toBe(true);
     expect(m.shareOfSales).toBeNull();
     expect(m.updatedAt).toBeNull();
     expect(m.series.every((s) => s.spend === null)).toBe(true);
@@ -100,11 +95,11 @@ describe("ad figures cover only the days the accounts have stored", () => {
     const [metaP, googleP] = m.byProvider;
     // Meta: both accounts have 13–16 Oct, so that part is known; the whole week isn't. The ended
     // account's days won't come by themselves, so the part isn't shown as the week so far.
-    expect(metaP).toMatchObject({ provider: "meta", spend: null, current: null, partial: { from: d(-6), to: d(-3), totals: { spend: 60 } }, soFar: null, notCompared: "incomplete" });
+    expect(metaP).toMatchObject({ provider: "meta", spend: null, current: null, partial: { from: d(-6), to: d(-3), totals: { spend: 60 } }, soFar: null });
     expect(m.soFar).toBeNull();
     expect(metaP!.coverage).toEqual({ from: d(-89), through: d(-3), complete: false });
     // Google: nothing yet. Its own entry says so; nothing reads as $0.
-    expect(googleP).toMatchObject({ provider: "google", spend: null, current: null, partial: null, coverage: { from: null, through: null, complete: false }, notCompared: "incomplete", updatedAt: null });
+    expect(googleP).toMatchObject({ provider: "google", spend: null, current: null, partial: null, coverage: { from: null, through: null, complete: false }, updatedAt: null });
     // Meta's days: known up to the 16th, then missing.
     const metaDays = m.seriesByProvider.find((s) => s.provider === "meta")!.series.map((s) => s.spend);
     expect(metaDays).toEqual([15, 15, 15, 15, null, null, null]);
@@ -123,17 +118,15 @@ describe("ad figures cover only the days the accounts have stored", () => {
       ["act_e", false],
     ]);
 
-    // Dates the ended account still covered compare and add up as usual.
-    const earlier = adsFigures([meta, ended], rows, week({ range: { from: d(-6), to: d(-4) }, previous: { from: d(-9), to: d(-7) } }))!;
+    // Dates the ended account still covered add up as usual.
+    const earlier = adsFigures([meta, ended], rows, week({ range: { from: d(-6), to: d(-4) } }))!;
     expect(earlier.current?.spend).toBe(45);
-    expect(earlier.previous.spend).toBe(45);
-    expect(earlier.deltas.spend).toBe(0);
   });
 
-  it("gives what it holds of a year asked for, the days before its history missing, and no change before it", () => {
+  it("gives what it holds of a year asked for, the days before its history missing", () => {
     const a = conn({ id: "a" });
     const rows = daily(a, d(-89), TODAY, { spend: 1 });
-    const year = week({ range: { from: d(-365), to: TODAY }, previous: { from: d(-731), to: d(-366), until: "12:00:00" } });
+    const year = week({ range: { from: d(-365), to: TODAY } });
     const m = adsFigures([a], rows, year)!;
     expect(m.series).toHaveLength(366);
     expect(m.series.filter((s) => s.spend === null)).toHaveLength(276);
@@ -142,8 +135,6 @@ describe("ad figures cover only the days the accounts have stored", () => {
     expect(m.current).toBeNull();
     expect(m.coverage).toEqual({ from: d(-89), through: TODAY, complete: false });
     expect(m.partial).toEqual({ from: d(-89), to: TODAY, totals: expect.objectContaining({ spend: 90 }) });
-    expect(m.notCompared).toBe("no_history");
-    expect(m.previous).toMatchObject({ spend: null, imported: false });
     expect(m.historyFrom).toBe(d(-89));
   });
 
@@ -153,10 +144,9 @@ describe("ad figures cover only the days the accounts have stored", () => {
     const google = conn({ id: "g", provider: "google", accountId: "123", timezone: "America/Los_Angeles", syncedThrough: d(-1) });
     const meta = conn({ id: "m", timezone: "Australia/Sydney" });
     const rows = [...daily(google, d(-13), d(-1)), ...daily(meta, d(-13), TODAY)];
-    const ask = (range: { from: string; to: string }, previous: { from: string; to: string; until?: string }) =>
-      adsFigures([google, meta], rows, { range, previous, storeCurrency: "USD", storeTimeZone: "Australia/Melbourne", netSales: null, now })!;
+    const ask = (range: { from: string; to: string }) => adsFigures([google, meta], rows, { range, storeCurrency: "USD", storeTimeZone: "Australia/Melbourne", netSales: null, now })!;
 
-    const today = ask({ from: TODAY, to: TODAY }, { from: d(-1), to: d(-1), until: "11:30:00" });
+    const today = ask({ from: TODAY, to: TODAY });
     expect(today.accounts.map((a) => [a.id, a.timezone, a.otherTimeZone, a.today, a.coversRange])).toEqual([
       ["g", "America/Los_Angeles", true, d(-1), false],
       ["m", "Australia/Sydney", false, TODAY, true],
@@ -164,16 +154,14 @@ describe("ad figures cover only the days the accounts have stored", () => {
     // Google's 19th hasn't begun: unavailable, not $0. Meta's is there, so far.
     expect(today.current).toBeNull();
     const [g, m] = today.byProvider;
-    expect(g).toMatchObject({ provider: "google", current: null, partial: null, notCompared: "running" });
-    expect(m).toMatchObject({ provider: "meta", spend: 10, notCompared: "running" });
+    expect(g).toMatchObject({ provider: "google", current: null, partial: null });
+    expect(m).toMatchObject({ provider: "meta", spend: 10 });
     expect(today.seriesByProvider.find((s) => s.provider === "google")!.series[0]!.spend).toBeNull();
 
-    // Yesterday is still running in Los Angeles: Google's figure for it is so far, so no change for it.
-    const yesterday = ask({ from: d(-1), to: d(-1) }, { from: d(-2), to: d(-2) });
+    // Yesterday is still running in Los Angeles: Google's figure for it is so far.
+    const yesterday = ask({ from: d(-1), to: d(-1) });
     expect(yesterday.current).toMatchObject({ spend: 20 });
-    expect(yesterday.notCompared).toBe("running");
-    expect(yesterday.byProvider.find((p) => p.provider === "google")!.notCompared).toBe("running");
-    expect(yesterday.byProvider.find((p) => p.provider === "meta")).toMatchObject({ notCompared: null, deltas: { spend: 0 } });
+    expect(yesterday.byProvider.find((p) => p.provider === "meta")).toMatchObject({ spend: 10, current: { spend: 10 } });
   });
 
   it("shows the dates so far while the only days missing aren't over yet, and Unavailable for a real gap", () => {
@@ -182,17 +170,13 @@ describe("ad figures cover only the days the accounts have stored", () => {
     const google = conn({ id: "g", provider: "google", accountId: "123", timezone: "America/Los_Angeles", syncedThrough: d(-1) });
     const rows = daily(google, d(-89), d(-1));
     const month = (c: AdConn[], over: Partial<AdsAsk> = {}) =>
-      adsFigures(c, rows, { range: { from: d(-29), to: TODAY }, previous: { from: d(-59), to: d(-30), until: "10:00:00" }, storeCurrency: "USD", storeTimeZone: "Australia/Melbourne", netSales: 1000, now, ...over })!;
+      adsFigures(c, rows, { range: { from: d(-29), to: TODAY }, storeCurrency: "USD", storeTimeZone: "Australia/Melbourne", netSales: 1000, now, ...over })!;
 
     // The store's 19th hasn't begun in Los Angeles: everything up to now is there, through the 18th.
     const m = month([google]);
     expect(m.current).toBeNull();
     expect(m.soFar).toEqual({ from: d(-29), to: d(-1), totals: expect.objectContaining({ spend: 290 }) });
     expect(m.partial).toEqual(m.soFar);
-    // The change compares whole days on both sides (through the 17th, the last day over in both zones), and is given.
-    expect(m.compared).toMatchObject({ current: { from: d(-29), to: d(-2), totals: { spend: 280 } }, previous: { from: d(-59), to: d(-32), totals: { spend: 280 } }, trimmed: 2 });
-    expect(m.notCompared).toBeNull();
-    expect(m.deltas.spend).toBe(0);
     // Set against the store's sales up to now it would leave a day out: not given.
     expect(m.shareOfSales).toBeNull();
     expect(m.byProvider[0]).toMatchObject({ provider: "google", spend: null, soFar: { to: d(-1) } });
@@ -212,31 +196,29 @@ describe("ad figures cover only the days the accounts have stored", () => {
     // History that starts inside the dates: missing days at the start, never "so far".
     expect(month([{ ...google, historyFrom: d(-10) }]).soFar).toBeNull();
     // Today alone, not begun in Los Angeles: nothing to show yet.
-    expect(month([google], { range: { from: TODAY, to: TODAY }, previous: { from: d(-1), to: d(-1), until: "10:00:00" } })).toMatchObject({ current: null, partial: null, soFar: null });
+    expect(month([google], { range: { from: TODAY, to: TODAY } })).toMatchObject({ current: null, partial: null, soFar: null });
     // Every day there: the whole range, as before.
     expect(month([{ ...google, timezone: "Australia/Melbourne", syncedThrough: TODAY }]).soFar).toBeNull();
   });
 
-  it("compares each platform from its own history, reading the comparison when only one platform reaches back", () => {
-    // Google connected long ago, Meta ten days ago: "Last 90 days" against the 90 before.
+  it("reads the dates' days only, whichever platform's history reaches back before them", () => {
+    // Google connected long ago, Meta ten days ago: "Last 90 days".
     const google = conn({ id: "g", provider: "google", accountId: "123", historyFrom: "2025-01-01" });
     const meta = conn({ id: "m", historyFrom: d(-9) });
-    const ask = week({ range: { from: d(-89), to: TODAY }, previous: { from: d(-179), to: d(-90), until: "12:00:00" } });
-    // Both platforms' coverage taken together starts with Meta's: the comparison is read for Google all the same.
-    expect(daysToRead([google, meta], ask).OR).toEqual([{ day: { gte: d(-89), lte: TODAY } }, { day: { gte: d(-179), lte: d(-90) } }]);
-    // Before every platform's history: not read at all.
-    expect(daysToRead([meta], ask).OR).toEqual([{ day: { gte: d(-89), lte: TODAY } }]);
+    const ask = week({ range: { from: d(-89), to: TODAY } });
+    // The 90 days before are stored for Google, and aren't read.
+    expect(daysToRead([google, meta], ask)).toEqual({ ids: ["g", "m"], day: { gte: d(-89), lte: TODAY } });
+    expect(daysToRead([meta], ask)).toEqual({ ids: ["m"], day: { gte: d(-89), lte: TODAY } });
 
     const rows = [...daily(google, d(-179), TODAY, { spend: 2 }), ...daily(meta, d(-9), TODAY)];
     const m = adsFigures([google, meta], rows, ask)!;
     const g = m.byProvider.find((p) => p.provider === "google")!;
-    // Whole days on both sides: 89 each.
-    expect(g).toMatchObject({ notCompared: null, previous: { from: d(-179), to: d(-91), spend: 178, imported: true }, deltas: { spend: 0 } });
-    expect(m.byProvider.find((p) => p.provider === "meta")).toMatchObject({ notCompared: "no_history", previous: { spend: null, imported: false } });
-    expect(m).toMatchObject({ notCompared: "no_history", previous: { spend: null } });
-    // Told the comparison's days weren't read, nothing compares: never a "before" of $0.
-    const unread = adsFigures([google, meta], rows.filter((r) => r.day >= d(-89)), { ...ask, previousRead: false })!;
-    expect(unread.byProvider.find((p) => p.provider === "google")).toMatchObject({ notCompared: "no_history", compared: null, previous: { spend: null }, deltas: { spend: null } });
+    // Google's 90 days whole; Meta's start inside them, so its total and the two together aren't given.
+    expect(g).toMatchObject({ spend: 180, current: { spend: 180 }, historyFrom: "2025-01-01" });
+    expect(m.byProvider.find((p) => p.provider === "meta")).toMatchObject({ current: null, partial: { from: d(-9), to: TODAY, totals: { spend: 100 } }, historyFrom: d(-9) });
+    expect(m).toMatchObject({ current: null, historyFrom: d(-9) });
+    // The same answer whether or not the rows of the days before were handed over.
+    expect(adsFigures([google, meta], rows.filter((r) => r.day >= d(-89)), ask)).toEqual(m);
   });
 
   it("adds up only accounts in one currency, and lists the others as left out", () => {
@@ -303,9 +285,8 @@ describe("AdSense figures", () => {
     expect(m.sitesLeftOut.map((x) => [x.site, x.earnings])).toEqual([["blog.example.com", 35]]);
     expect(m.vsSales).toBe(0.014);
     expect(m.accounts[0]).toMatchObject({ provider: "adsense", sites: ["shop.example.com"] });
-    // Through yesterday on both sides.
-    expect(m.previous).toMatchObject({ from: d(-13), to: d(-8), earnings: 12, imported: true });
-    expect(m.deltas.earnings).toBe(0);
+    // The week before's earnings are in no figure.
+    for (const k of ["compared", "notCompared", "previous", "deltas", "imported"]) expect(m).not.toHaveProperty(k);
     // No sites chosen: every site is the store's.
     expect(adsenseFigures([sense()], rows, week())!.current?.earnings).toBe(49);
   });
@@ -317,7 +298,6 @@ describe("AdSense figures", () => {
     expect(m.vsSales).toBeNull();
     expect(m.partial).toEqual({ from: d(-4), to: d(-2), totals: expect.objectContaining({ earnings: 3 }) });
     expect(m.series.map((x) => x.earnings)).toEqual([null, null, 1, 1, 1, null, null]);
-    expect(m.notCompared).toBe("no_history");
     expect(m.accounts[0]).toMatchObject({ coversRange: false, coverage: { from: d(-4), through: d(-2) } });
   });
 
@@ -335,13 +315,11 @@ describe("AdSense figures", () => {
     expect(m.series.every((x) => x.earnings === null)).toBe(true);
     expect(m.accounts[0]).toMatchObject({ unsplitThrough: TODAY, coverage: { from: null, through: null }, coversRange: false });
 
-    // Split again from the 10th on (AdSense started reporting by site): the week is the store's site alone,
-    // and the comparison, from before, can't be told apart.
+    // Split again from the 10th on (AdSense started reporting by site): the week is the store's site alone.
     const later = [...eachDay(d(-13), d(-10)).map((x) => day(s, "", x, 5)), ...eachDay(d(-9), TODAY).flatMap((x) => [day(s, "shop.example.com", x, 2), day(s, "blog.example.com", x, 3)])];
     const recovered = adsenseFigures([s], later, week())!;
     expect(recovered.current).toMatchObject({ earnings: 14 });
     expect(recovered.sitesLeftOut.map((x) => [x.site, x.earnings])).toEqual([["blog.example.com", 21]]);
-    expect(recovered.notCompared).toBe("no_history");
     expect(recovered.accounts[0]).toMatchObject({ unsplitThrough: d(-10), coverage: { from: d(-9), through: TODAY }, coversRange: true });
 
     // No sites chosen: every site is the store's, split or not.
@@ -349,17 +327,15 @@ describe("AdSense figures", () => {
     expect(adsenseFigures([sense()], unsplit, week())!.accounts[0]!.unsplitThrough).toBeNull();
   });
 
-  it("has no change for Today, which is still running", () => {
+  it("gives Today, which is still running, as it stands", () => {
     const s = sense();
-    const m = adsenseFigures([s], [day(s, "", TODAY, 3), day(s, "", d(-1), 9)], week({ range: { from: TODAY, to: TODAY }, previous: { from: d(-1), to: d(-1), until: "12:00:00" } }))!;
+    const m = adsenseFigures([s], [day(s, "", TODAY, 3), day(s, "", d(-1), 9)], week({ range: { from: TODAY, to: TODAY } }))!;
     expect(m.current?.earnings).toBe(3);
-    expect(m.notCompared).toBe("running");
-    expect(m.previous).toMatchObject({ from: null, to: null, earnings: null });
-    expect(m.deltas.earnings).toBeNull();
+    expect(m).not.toHaveProperty("previous");
   });
 
   describe("estimated or final", () => {
-    const september = (over: Partial<AdsAsk> = {}) => week({ range: { from: "2026-09-01", to: "2026-09-30" }, previous: { from: "2026-08-01", to: "2026-08-30", until: "23:59:59" }, ...over });
+    const september = (over: Partial<AdsAsk> = {}) => week({ range: { from: "2026-09-01", to: "2026-09-30" }, ...over });
 
     it("calls a month final once AdSense finalized it and the sync read it again; this month's days stay estimated", () => {
       // Synced on the 19th: September, the month before, was re-read through the 10th.
@@ -380,7 +356,7 @@ describe("AdSense figures", () => {
       const at = new Date("2026-11-10T12:00:00Z");
       const nz = sense({ id: "nz", timezone: "Pacific/Auckland", lastSyncedAt: at, historyFrom: "2026-08-01", syncedThrough: "2026-11-10" });
       const utc = sense({ id: "utc", lastSyncedAt: at, historyFrom: "2026-08-01", syncedThrough: "2026-11-10" });
-      const october = { range: { from: "2026-10-01", to: "2026-10-31" }, previous: { from: "2026-09-01", to: "2026-09-30", until: "23:59:59" }, now: at };
+      const october = { range: { from: "2026-10-01", to: "2026-10-31" }, now: at };
       const rows = (c: AdConn) => eachDay("2026-08-01", "2026-11-10").map((x) => day(c, "", x, 1));
       expect(adsenseFigures([nz], rows(nz), week(october))!).toMatchObject({ finalThrough: "2026-10-31", final: true });
       const both = adsenseFigures([nz, utc], [...rows(nz), ...rows(utc)], week(october))!;
@@ -411,7 +387,7 @@ describe("AdSense figures", () => {
       expect(sept).toMatchObject({ current: { earnings: 30 }, finalThrough: "2026-09-30", final: true });
       expect(sept.accounts.map((a) => a.finalThrough)).toEqual(["2026-09-30", "2026-07-31"]);
       // August holds its estimated days: estimated.
-      const august = week({ range: { from: "2026-08-01", to: "2026-08-31" }, previous: { from: "2026-07-01", to: "2026-07-31", until: "23:59:59" } });
+      const august = week({ range: { from: "2026-08-01", to: "2026-08-31" } });
       expect(adsenseFigures([live, closed], rows, august)!).toMatchObject({ current: { earnings: 51 }, finalThrough: "2026-07-31", final: false });
       // Closed once every day it stored was final (read again on 15 Sep, after August was finalized): final through its today.
       const settled = sense({ id: "old", accountId: "pub-2", status: "unavailable", errorCode: "account_closed", accountStatus: "closed", lastSyncedAt: new Date("2026-09-15T11:00:00Z"), historyFrom: "2026-07-01", syncedThrough: "2026-08-31" });
@@ -449,27 +425,17 @@ describe("a refresh someone asked for", () => {
 });
 
 describe("the store's own sales next to the ad spend", () => {
-  it("sets Shopify's net sales and orders against the spend, with the change only on whole ranges", () => {
+  it("sets Shopify's net sales and orders against the spend, for the dates alone", () => {
     const meta = conn({ id: "m" });
-    // Seven whole days, ended yesterday, compared with the seven before: $70 spent each time.
-    const ended = week({ range: { from: d(-7), to: d(-1) }, previous: { from: d(-14), to: d(-8) }, netSales: 1400, orders: 70, before: { netSales: 700, orders: 50 } });
+    // Seven whole days, ended yesterday: $70 spent.
+    const ended = week({ range: { from: d(-7), to: d(-1) }, netSales: 1400, orders: 70 });
     const m = adsFigures([meta], daily(meta, d(-14), d(-1)), ended)!;
-    expect(m.sales).toMatchObject({
-      netSales: 1400,
-      orders: 70,
-      salesPerSpend: 20,
-      shareOfSales: 0.05,
-      costPerOrder: 1,
-      previous: { netSales: 700, orders: 50, salesPerSpend: 10, costPerOrder: 1.4 },
-      deltas: { netSales: 1, orders: 0.4, salesPerSpend: 1 },
-    });
-    expect(m.sales!.deltas.costPerOrder).toBeCloseTo(-0.2857, 3);
+    expect(m.sales).toEqual({ netSales: 1400, orders: 70, salesPerSpend: 20, shareOfSales: 0.05, costPerOrder: 1 });
     expect(m.shareOfSales).toBe(0.05);
 
-    // Today in the range: the ads' change stops at yesterday, which the store's whole-range figures don't match, so no change.
-    const running = adsFigures([meta], daily(meta, d(-13), TODAY), week({ orders: 60, before: { netSales: 500, orders: 40 } }))!;
-    expect(running.compared?.trimmed).toBe(1);
-    expect(running.sales).toMatchObject({ netSales: 1000, orders: 60, salesPerSpend: 14.29, costPerOrder: 1.17, previous: null, deltas: { netSales: null, salesPerSpend: null, costPerOrder: null } });
+    // Today in the range: the same, on what the week has so far.
+    const running = adsFigures([meta], daily(meta, d(-13), TODAY), week({ orders: 60 }))!;
+    expect(running.sales).toEqual({ netSales: 1000, orders: 60, salesPerSpend: 14.29, shareOfSales: 0.07, costPerOrder: 1.17 });
 
     // Not known, another currency, or days missing (no total to set them against): nothing.
     const rows = daily(meta, d(-13), TODAY);
@@ -499,7 +465,7 @@ describe("the store's own sales next to the ad spend", () => {
 });
 
 describe("every campaign, for the campaign comparison", () => {
-  it("lists every campaign with its change on the totals' whole days, a campaign new in the range unchanged rather than up from $0", () => {
+  it("lists every campaign of the dates, each with its own figures and nothing of the week before", () => {
     const meta = conn({ id: "m" });
     const google = conn({ id: "g", provider: "google", accountId: "111" });
     const rows = [
@@ -517,23 +483,11 @@ describe("every campaign, for the campaign comparison", () => {
 
     const all = adsFigures([meta, google], rows, week({ allCampaigns: true }))!;
     expect(all.campaigns).toHaveLength(13);
+    // Spring's week: $20 a day. The $10 a day of the week before isn't in it.
     const spring = all.campaigns.find((c) => c.name === "Spring")!;
-    // Today is still running: both sides stop at yesterday, as the totals' change does.
-    expect(spring.change).toEqual({
-      from: d(-13),
-      to: d(-8),
-      previous: { spend: 60, linkClicks: 120, purchases: 6, purchaseValue: 240, roas: 4 },
-      deltas: { spend: 1, linkClicks: 0, purchases: 0, purchaseValue: 1.5, roas: 0.25 },
-    });
+    expect(spring).toMatchObject({ spend: 140, purchaseValue: 700, complete: true });
     const brand = all.campaigns.find((c) => c.name === "Brand")!;
-    expect(brand.change).toMatchObject({ previous: { spend: 0, roas: null }, deltas: { spend: null, roas: null } });
-  });
-
-  it("gives no campaign a change when the totals have none: never against days that aren't stored", () => {
-    // Its history starts in the range: the dates compared with aren't stored.
-    const meta = conn({ id: "m", historyFrom: d(-6) });
-    const m = adsFigures([meta], daily(meta, d(-6), TODAY), week({ allCampaigns: true }))!;
-    expect(m.notCompared).toBe("no_history");
-    expect(m.campaigns).toEqual([expect.objectContaining({ name: "Spring", spend: 70, change: null })]);
+    expect(brand).toMatchObject({ provider: "google", spend: 35 });
+    for (const c of all.campaigns) expect(c).not.toHaveProperty("change");
   });
 });

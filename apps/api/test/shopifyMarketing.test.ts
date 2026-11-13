@@ -53,22 +53,24 @@ const overview = (headers: Record<string, string>, ws: string, storeId: string, 
 const marketingJobs = () => ctx.deps.queues.sent.sync.filter((j) => (j as { kind?: string }).kind === "shopify_marketing");
 
 describe("ad spend reported to Shopify on the dashboard", () => {
-  it("gives Meta's spend from its app's report while Meta isn't connected, compared with the days before", async () => {
+  it("gives Meta's spend from its app's report while Meta isn't connected, for the dates alone", async () => {
     const { a, ws, store } = await owner();
     await keep(store, [
       { ...META, day: "2026-09-01", spend: 40, impressions: 10000, clicks: 200, orders: 4, sales: 320 },
       { ...META, day: "2026-09-02", spend: 60, impressions: 15000, clicks: 300, orders: 6, sales: 480 },
       { ...META, day: "2026-09-02", campaign: "Back to school", spend: 60, clicks: 300, sales: 480 },
       { ...META, day: "2026-08-30", spend: 50, clicks: 250, sales: 300 },
-      // Outside the dates: neither counted nor compared.
+      // Outside the dates (the 30th before them too): not counted.
       { ...META, day: "2026-09-10", spend: 999 },
     ]);
     const res = await overview(a.headers, ws, store.id, `${RANGE}&parts=advertising`);
     expect(res.statusCode).toBe(200);
     const m = res.json().modules;
-    expect(m.shopify_marketing).toMatchObject({ status: "ready", currency: "USD", reportedSpend: 100, compared: { from: "2026-08-29", to: "2026-08-31" }, from: "2026-09-01", through: "2026-09-03" });
+    expect(m.shopify_marketing).toMatchObject({ status: "ready", currency: "USD", reportedSpend: 100, from: "2026-09-01", through: "2026-09-03" });
+    expect(m.shopify_marketing).not.toHaveProperty("compared");
     const [meta, google] = m.shopify_marketing.platforms;
-    expect(meta).toMatchObject({ availability: "reported", totals: { spend: 100, clicks: 500, sales: 800, roas: 8 }, previous: { spend: 50 }, deltas: { spend: 1 } });
+    expect(meta).toMatchObject({ availability: "reported", totals: { spend: 100, clicks: 500, sales: 800, roas: 8 } });
+    for (const k of ["previous", "deltas"]) expect(meta).not.toHaveProperty(k);
     expect(meta.campaigns).toEqual([{ campaign: "Back to school", spend: 60, impressions: null, clicks: 300, orders: null, sales: 480, roas: 8 }]);
     expect(meta.daily.map((d: { spend: number | null }) => d.spend)).toEqual([40, 60, 0]);
     expect(google).toMatchObject({ availability: "unavailable", totals: null });
@@ -114,14 +116,14 @@ describe("ad spend reported to Shopify on the dashboard", () => {
     expect(marketingJobs()).toHaveLength(1);
   });
 
-  it("doesn't compare a range still running, nor with days not read back that far", async () => {
+  it("gives the dates' spend whether or not the days before them were read", async () => {
     const { a, ws, store } = await owner();
     await keep(store, [{ ...META, day: "2026-09-01", spend: 40 }], { coveredFrom: "2026-09-01" });
     const m = (await overview(a.headers, ws, store.id)).json().modules.shopify_marketing;
-    expect(m.compared).toBeNull();
-    expect(m.platforms[0].previous).toBeNull();
+    expect(m.platforms[0]).toMatchObject({ availability: "reported", totals: { spend: 40 } });
+    expect(m).not.toHaveProperty("compared");
     const today = (await overview(a.headers, ws, store.id, "preset=today")).json().modules.shopify_marketing;
-    expect(today.compared).toBeNull();
+    expect(today).not.toHaveProperty("compared");
   });
 
   it("isn't there for a store that hasn't granted its Shopify reports: the capability says what's missing", async () => {

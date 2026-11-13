@@ -105,14 +105,13 @@ export interface DateRange {
 }
 
 /**
- * The dates a range is compared with: the period just before it (`comparisonDays`). While the
- * range picked is still running (it ends on the store's today), the comparison stops at the same
- * time of day on its last day, as Shopify's
- * Analytics compares "like for like": today until 4:44 pm against yesterday until 4:44 pm, never
- * against the whole of yesterday, which made every day look down until it was nearly over.
+ * The dates asked about, and nothing else: no answer is set against other dates (the period just
+ * before them was worked out here too until 2026-11-13). `until`: while they still run (they end
+ * on the store's today), the store-local "HH:MM:SS" it is now. Shopify's own report figures for the dates, and ours checked
+ * against them, are counted up to that moment of the last day; absent: whole days.
  */
-export interface Comparison extends DateRange {
-  /** Store-local "HH:MM:SS" that the comparison's last day is counted up to; absent: whole days. */
+export interface ReportDates {
+  range: DateRange;
   until?: string;
 }
 
@@ -300,38 +299,9 @@ function presetRange(preset: DatePreset, today: string, custom: DateRange | unde
   }
 }
 
-/** 1 January to 31 December of one year. */
-const isCalendarYear = (r: DateRange) => r.from.endsWith("-01-01") && r.to === `${r.from.slice(0, 4)}-12-31`;
-
 /**
- * The whole days `range` is compared with: the period just before it, as many days, immediately
- * before; this week against the same days of the week before, last month against the whole month
- * before it, a calendar year against the whole year before it. They may reach back before the
- * store's first day (`limits`): the API then says the orders don't reach back to them.
- */
-function comparisonDays(range: DateRange, preset: DatePreset): DateRange {
-  if (preset === "wtd") {
-    // The same days of the week before, Monday on: Monday to Wednesday against Monday to
-    // Wednesday, never against the Friday to Sunday just before, whose trade is another kind.
-    return { from: addDays(range.from, -7), to: addDays(range.to, -7) };
-  }
-  if (preset === "lastmonth") {
-    // The whole month before, whatever its length.
-    const prevLast = addDays(range.from, -1);
-    return { from: `${prevLast.slice(0, 8)}01`, to: prevLast };
-  }
-  if (preset === "lastyear" || isCalendarYear(range)) {
-    // The whole year before, leap or not (Last year, or a calendar year picked as custom dates).
-    const year = String(Number(range.from.slice(0, 4)) - 1).padStart(4, "0");
-    return { from: `${year}-01-01`, to: `${year}-12-31` };
-  }
-  const len = daysBetweenInclusive(range.from, range.to);
-  return { from: addDays(range.from, -len), to: addDays(range.from, -1) };
-}
-
-/**
- * The dates a preset reports on in the store's zone, and the period just before them, which they
- * are compared with. Throws, with a message the API answers 400 `invalid_range` with, on custom
+ * The dates a preset reports on in the store's zone, and while they still run the time of day it is
+ * there (`ReportDates`). Throws, with a message the API answers 400 `invalid_range` with, on custom
  * dates that can't be reported on: longer than 12 months, or (`limits`, the store's
  * `storeRangeLimits`) starting before the store's first day once Shopify's creation date is known.
  */
@@ -341,12 +311,11 @@ export function resolvePreset(
   timeZone: string,
   custom?: DateRange,
   limits: RangeLimits = {},
-): { range: DateRange; previous: Comparison } {
+): ReportDates {
   const today = localDay(now, timeZone);
   const range = presetRange(preset, today, custom, limits);
-  const previous = comparisonDays(range, preset);
-  // Today isn't over: whatever it is compared with is counted up to this moment of its own last day.
-  return { range, previous: range.to === today ? { ...previous, until: localTime(now, timeZone) } : previous };
+  // Today isn't over: Shopify's own figures for the dates, and ours checked against them, stop at this moment.
+  return range.to === today ? { range, until: localTime(now, timeZone) } : { range };
 }
 
 /** `historyStart` for a store whose whole order history was imported (read_all_orders). */
@@ -391,26 +360,3 @@ export function visitsHistoryStart(pixelInstalledAt: Date | null, timeZone: stri
   return firstWholeDay(pixelInstalledAt, timeZone);
 }
 
-/**
- * The first day every counted ad account has its figures from (ad_connections.history_from, each
- * account's own day): the latest of their starts, since a comparison before one account's start
- * would count that account in the dates picked and not in the dates compared with, a rise that
- * never happened. An account with no start yet has no figures stored, so it changes neither
- * period and is left out. Null when no account has a start.
- */
-export function adsHistoryStart(starts: Array<string | null>): string | null {
-  let latest: string | null = null;
-  for (const s of starts) if (s !== null && (latest === null || s > latest)) latest = s;
-  return latest;
-}
-
-/**
- * Whether the store's imported orders cover the whole comparison (`historyFrom` from
- * `historyStart`). Shopify shares 60 days of orders without read_all_orders, so a comparison
- * reaching back before the import would count a period mostly missing and show a fake drop (or
- * 0%): its changes are left out instead, as the month-by-month view does for months not fully
- * imported.
- */
-export function comparisonImported(previous: DateRange, historyFrom: string | null): boolean {
-  return historyFrom !== null && previous.from >= historyFrom;
-}

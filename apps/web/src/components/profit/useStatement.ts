@@ -41,7 +41,6 @@ export interface StatementAnswer {
   timezone: string;
   today: string;
   range: { from: string; to: string };
-  previous: { from: string; to: string };
   grain: StatementGrain;
   firstDay: string | null;
   historyFrom: string | null;
@@ -58,7 +57,6 @@ export interface StatementAnswer {
   };
   categories: CustomCategory[];
   total: ProfitLoss;
-  compare: ProfitLoss;
   columns: Array<ProfitLoss & { key: string }>;
   daily: Array<{ day: string; revenue: number | null; totalExpenses: number | null; netProfit: number | null; afterKnownCosts: number | null }>;
   lines: ExpenseLine[];

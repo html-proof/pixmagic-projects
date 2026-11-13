@@ -39,19 +39,15 @@ export interface CheckoutFigures {
 
 export interface AbandonedCheckoutsModule {
   status: CheckoutsStatus;
-  previousStatus: CheckoutsStatus;
   asOf: string | null;
   until: string | null;
   /** The first day Shopify shares checkouts for; null when the store granted older orders too. */
   visibleFrom: string | null;
   current: CheckoutFigures | null;
-  previous: CheckoutFigures | null;
-  deltas: { abandoned: number | null; value: number | null; recoveredRate: number | null };
 }
 
 export interface AbandonedCheckoutsAnswer {
   range: { from: string; to: string };
-  previous: { from: string; to: string; until?: string };
   module: AbandonedCheckoutsModule;
 }
 

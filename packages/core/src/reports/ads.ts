@@ -1,7 +1,6 @@
 import { toNumber, type Tx } from "@app/db";
 import {
   accountCoverage,
-  adComparisonWindows,
   adSeries,
   adsenseFinalThrough,
   adsenseSeries,
@@ -11,13 +10,11 @@ import {
   adTotals,
   campaignStatusGroup,
   campaignTotals,
-  canCompareFrom,
   claimsAddUp,
   commonCoverage,
   coverageAfter,
   coveredPart,
   coversDays,
-  delta,
   isClosedAdAccount,
   lastWholeAdDay,
   localDay,
@@ -29,7 +26,6 @@ import {
   type AdsenseDayRow,
   type AdSpendProvider,
   type AdTotals,
-  type Comparison,
   type DateRange,
 } from "@app/shared";
 import { campaignKeyOf, storedCampaigns, type StoredCampaign } from "../adConnections/campaigns.js";
@@ -77,7 +73,6 @@ export interface AdConn {
 /** The dates asked about, and the store they're asked for. */
 export interface AdsAsk {
   range: DateRange;
-  previous: Comparison;
   storeCurrency: string;
   /** The store's time zone: the dashboard's days. */
   storeTimeZone: string;
@@ -85,14 +80,10 @@ export interface AdsAsk {
   netSales: number | null;
   /** The store's orders for the range (Shopify's count; null: not known, or not the member's to see). */
   orders?: number | null;
-  /** The store's net sales and orders for the dates compared with (null: not imported, or not known). */
-  before?: { netSales: number | null; orders: number | null } | null;
   /** Orders Shopify's own visit record credits to each platform's ads, for the range (sourcedOrders; null: not read). */
   sourced?: SourcedOrders[] | null;
   now: Date;
-  /** False: the comparison's days weren't read (see `daysToRead`), so nothing is compared rather than set against $0. */
-  previousRead?: boolean;
-  /** Every campaign, each with its change (`campaignChanges`), rather than the 10 that spent most: the Advertising area's campaign comparison. */
+  /** Every campaign, rather than the 10 that spent most: the Advertising area's campaign comparison. */
   allCampaigns?: boolean;
   /**
    * Each campaign as its platform described it to the last sync (ad_campaigns): its status, and Google's
@@ -107,9 +98,6 @@ export interface SourcedOrders {
   orders: number;
   sales: number;
 }
-
-/** Why a change isn't given: only running days picked, a comparison before the figures start, or days missing on either side. */
-export type NotCompared = "running" | "no_history" | "incomplete";
 
 const SELECT = {
   id: true,
@@ -188,8 +176,8 @@ interface Window<T> {
 const keepsUp = (a: Pick<AccountView, "status" | "errorCode" | "accountStatus">) => a.status === "active" || isClosedAdAccount(a);
 
 /**
- * The figures of some accounts (all counted ones, or one platform's) for the range and its
- * comparison: totals only when every one of them covers every day they need.
+ * The figures of some accounts (all counted ones, or one platform's) for the range: totals only
+ * when every one of them covers every day they need.
  *
  * - `current`: the range's totals; null unless every account covers the whole range.
  * - `partial`: then, the part of the range they all cover and its totals (null when there's none).
@@ -198,11 +186,6 @@ const keepsUp = (a: Pick<AccountView, "status" | "errorCode" | "accountStatus">)
  *   short still syncs. That's the day still running before its next sync, or (an account in a time
  *   zone behind the store's) a store day it hasn't reached. The page shows it as the figure, dated
  *   "up to" its last day; the days after are never filled with 0. Null otherwise ("Unavailable").
- * - `compared`: the days each side of the change is worked out on and their totals. Platforms
- *   report whole days, so while the range reaches a day still running (the store's today, or an
- *   account's today in its own zone), both sides stop at the last day that is over everywhere
- *   ("through yesterday"); for running days only (Today) there is no change. Null with the reason
- *   in `notCompared`.
  * - `updatedAt`: when the least recently updated account last synced (null: one never has).
  */
 function figures<R extends { day: string }, T>(accounts: AccountView[], rows: R[], total: (rows: R[]) => T, ask: AdsAsk, storeToday: string) {
@@ -212,15 +195,7 @@ function figures<R extends { day: string }, T>(accounts: AccountView[], rows: R[
   const window = (w: DateRange): Window<T> => ({ from: w.from, to: w.to, totals: total(within(w)) });
   const part = complete ? null : coveredPart(cov, ask.range);
   const lastWhole = lastWholeAdDay(storeToday, accounts.map((a) => a.today));
-  const windows = adComparisonWindows(ask.range, ask.previous, lastWhole);
   const soFar = part && part.from === ask.range.from && part.to >= lastWhole && accounts.every((a) => a.coversRange || keepsUp(a)) ? part : null;
-  // The comparison starts where every account's figures do (the old "imported" rule), and its days were read.
-  const imported = ask.previousRead !== false && canCompareFrom(cov, ask.previous);
-  let notCompared: NotCompared | null = null;
-  if (!windows) notCompared = "running";
-  else if (cov.from === null) notCompared = "incomplete";
-  else if (!imported) notCompared = "no_history";
-  else if (!coversDays(cov, windows.current) || !coversDays(cov, windows.previous)) notCompared = "incomplete";
   const synced = accounts.map((a) => a.lastSyncedAt);
   const oldest = synced.length && synced.every((s): s is Date => s !== null) ? new Date(Math.min(...synced.map((s) => s.getTime()))) : null;
   const partial = part ? window(part) : null;
@@ -229,11 +204,8 @@ function figures<R extends { day: string }, T>(accounts: AccountView[], rows: R[
     current: complete ? total(within(ask.range)) : null,
     partial,
     soFar: soFar ? partial : null,
-    compared: windows && !notCompared ? { current: window(windows.current), previous: window(windows.previous), trimmed: windows.trimmed } : null,
-    notCompared,
     /** The first day every account has figures from (null: one has none yet). */
     historyFrom: cov.from,
-    imported,
     updatedAt: oldest ? oldest.toISOString() : null,
   };
 }
@@ -256,82 +228,18 @@ const NULL_AD_TOTALS: { [K in keyof AdTotals]: null } = {
   roas: null,
 };
 
-/** Ads figures with the comparison the page shows: the dates compared with and their totals, and the changes. */
-function adsBlock(f: ReturnType<typeof figures<AdDayRow, AdTotals>>) {
-  const now = f.compared?.current.totals ?? null;
-  const before = f.compared?.previous.totals ?? null;
-  const change = (k: "spend" | "linkClicks" | "conversions" | "purchases" | "purchaseValue" | "roas") => (now && before ? delta(now[k], before[k]) : null);
-  return {
-    ...f,
-    previous: {
-      from: f.compared?.previous.from ?? null,
-      to: f.compared?.previous.to ?? null,
-      spend: before?.spend ?? null,
-      linkClicks: before?.linkClicks ?? null,
-      conversions: before?.conversions ?? null,
-      conversionValue: before?.conversionValue ?? null,
-      purchases: before?.purchases ?? null,
-      purchaseValue: before?.purchaseValue ?? null,
-      roas: before?.roas ?? null,
-      imported: f.imported,
-    },
-    deltas: { spend: change("spend"), linkClicks: change("linkClicks"), conversions: change("conversions"), purchases: change("purchases"), purchaseValue: change("purchaseValue"), roas: change("roas") },
-  };
-}
-
 /** A campaign as campaignTotals gives it. */
 type CampaignFigures = ReturnType<typeof campaignTotals>[number];
 const campaignKey = (c: Pick<CampaignFigures, "provider" | "accountId" | "campaignId">) => `${c.provider}:${c.accountId}:${c.campaignId}`;
 
 /**
- * Each campaign's change, on the same whole days as the totals' (`compared`: both windows covered by
- * every counted account, so a campaign with no row in one of them spent nothing then, never a day
- * missing). Null for every campaign when the totals aren't compared.
- */
-function campaignChanges(rows: AdDayRow[], compared: { current: DateRange; previous: DateRange } | null) {
-  if (!compared) return () => null;
-  const on = (w: DateRange) => new Map(campaignTotals(rows.filter((r) => r.day >= w.from && r.day <= w.to), Number.POSITIVE_INFINITY).map((c) => [campaignKey(c), c]));
-  const now = on(compared.current);
-  const before = on(compared.previous);
-  return (c: CampaignFigures) => {
-    const n = now.get(campaignKey(c));
-    const b = before.get(campaignKey(c));
-    const pick = (t: CampaignFigures | undefined, k: "spend" | "linkClicks" | "purchases" | "purchaseValue" | "roas") => (t ? t[k] : k === "roas" ? null : 0);
-    const keys = ["spend", "linkClicks", "purchases", "purchaseValue", "roas"] as const;
-    return {
-      /** The days each side is worked out on (`compared`'s). */
-      from: compared.previous.from,
-      to: compared.previous.to,
-      previous: Object.fromEntries(keys.map((k) => [k, pick(b, k)])) as Record<(typeof keys)[number], number | null>,
-      deltas: Object.fromEntries(keys.map((k) => [k, delta(pick(n, k), pick(b, k))])) as Record<(typeof keys)[number], number | null>,
-    };
-  };
-}
-
-/**
  * The store's own sales set against the ad spend (adsVsSales in @app/shared): Shopify's net sales and
- * orders for the same dates, the sales per unit of spend (MER) and the cost per order, and their
- * change against the dates compared with. Same currency and every day of the spend known only; the
- * change only while both sides are whole ranges (no running day trimmed off the ads' comparison),
- * since the store's figures are for the whole of each.
+ * orders for the same dates, the sales per unit of spend (MER) and the cost per order. Same currency
+ * and every day of the spend known only.
  */
-function salesVsSpend(all: ReturnType<typeof adsBlock>, ask: AdsAsk, currency: string) {
+function salesVsSpend(all: ReturnType<typeof figures<AdDayRow, AdTotals>>, ask: AdsAsk, currency: string) {
   if (currency !== ask.storeCurrency || !all.current) return null;
-  const now = adsVsSales(all.current.spend, ask.netSales, ask.orders ?? null);
-  if (!now) return null;
-  const c = all.compared;
-  const before = c && c.trimmed === 0 && ask.before ? adsVsSales(c.previous.totals.spend, ask.before.netSales, ask.before.orders) : null;
-  return {
-    ...now,
-    /** The same for the dates compared with; null when they can't be compared. */
-    previous: before ? { netSales: before.netSales, orders: before.orders, salesPerSpend: before.salesPerSpend, costPerOrder: before.costPerOrder } : null,
-    deltas: {
-      netSales: delta(now.netSales, before?.netSales ?? null),
-      orders: delta(now.orders, before?.orders ?? null),
-      salesPerSpend: delta(now.salesPerSpend, before?.salesPerSpend ?? null),
-      costPerOrder: delta(now.costPerOrder, before?.costPerOrder ?? null),
-    },
-  };
+  return adsVsSales(all.current.spend, ask.netSales, ask.orders ?? null);
 }
 
 /**
@@ -374,12 +282,12 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
   const ids = new Set(counted.map((a) => a.id));
   const mine = rows.filter((r) => ids.has(r.connectionId));
   const storeToday = localDay(ask.now, ask.storeTimeZone);
-  const all = adsBlock(figures(counted, mine, adTotals, ask, storeToday));
+  const all = figures(counted, mine, adTotals, ask, storeToday);
   const providers = [...new Set(counted.map((a) => a.provider as AdSpendProvider))];
   const inRange = mine.filter((r) => r.day >= ask.range.from && r.day <= ask.range.to);
   const byProvider = providers.map((p) => {
     const own = counted.filter((a) => a.provider === p);
-    const f = adsBlock(figures(own, mine.filter((r) => r.provider === p), adTotals, ask, storeToday));
+    const f = figures(own, mine.filter((r) => r.provider === p), adTotals, ask, storeToday);
     return { provider: p, ...(f.current ?? NULL_AD_TOTALS), ...f, accounts: own.map((a) => a.id), /** Every account of this platform here is a demo: its card says so. */ demo: own.every((a) => a.demo) };
   });
   // Simulated figures are never set against the store's real sales, not even as part of a total: a demo
@@ -387,7 +295,6 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
   // the demo against a simulated store instead).
   const demo = counted.some((a) => a.demo);
   const covering = new Set(counted.filter((a) => a.coversRange).map((a) => `${a.provider}:${a.accountId}`));
-  const changeOf = ask.allCampaigns ? campaignChanges(mine, all.compared) : null;
   return {
     currency,
     accounts,
@@ -410,7 +317,7 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
     seriesByProvider: byProvider.map((p) => ({ provider: p.provider, series: adSeries(inRange.filter((r) => r.provider === p.provider), ask.range, p.coverage) })),
     byProvider,
     /**
-     * The campaigns that spent most (every one, with `allCampaigns`, each with its `change`); `complete`
+     * The campaigns that spent most (every one, with `allCampaigns`); `complete`
      * false: its account's figures stop before the range ends.
      */
     campaigns: campaignTotals(inRange, ask.allCampaigns ? Number.POSITIVE_INFINITY : 10).map((c) => {
@@ -432,12 +339,11 @@ export function adsFigures(conns: AdConn[], rows: Array<AdDayRow & { connectionI
          */
         budgetPeriod: s?.budgetPeriod ?? null,
         budgetAmount: s?.budgetAmount ?? null,
-        ...(changeOf ? { change: changeOf(c) } : {}),
       };
     }),
     /** Ad spend as a share of the store's net sales: same currency and every day known only. */
     shareOfSales: !demo && all.current && currency === ask.storeCurrency && ask.netSales !== null && ask.netSales > 0 ? all.current.spend / ask.netSales : null,
-    /** The store's own sales (Shopify's net sales and orders) set against the ad spend, with the change (salesVsSpend); null with a demo among the accounts. */
+    /** The store's own sales (Shopify's net sales and orders) set against the ad spend (salesVsSpend); null with a demo among the accounts. */
     sales: demo ? null : salesVsSpend(all, ask, currency),
     /** A demo account (simulated figures) is among the counted accounts: the page marks the figures and leaves the store's own out. */
     demo,
@@ -517,9 +423,6 @@ export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { co
   const others = mine.filter((r) => !adsenseSiteChosen(sitesOf.get(r.connectionId)!, r.site));
   const inRange = <R extends { day: string }>(list: R[]) => list.filter((r) => r.day >= ask.range.from && r.day <= ask.range.to);
   const f = figures(counted, chosen, adsenseTotals, ask, localDay(ask.now, ask.storeTimeZone));
-  const now = f.compared?.current.totals ?? null;
-  const before = f.compared?.previous.totals ?? null;
-  const change = (k: "earnings" | "pageViews" | "clicks" | "pageRpm") => (now && before ? delta(now[k], before[k]) : null);
   // The days of the figures given: the range's, else the part every account covers.
   const givenFrom = f.current ? ask.range.from : (f.partial?.from ?? null);
   const givenTo = f.current ? ask.range.to : (f.partial?.to ?? null);
@@ -537,16 +440,6 @@ export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { co
     finalThrough,
     /** Every day of the figures given (`current`, else `partial`, which `soFar` is) is final: "Final", else "Estimated". */
     final: givenTo !== null && finalThrough !== null && givenTo <= finalThrough,
-    previous: {
-      from: f.compared?.previous.from ?? null,
-      to: f.compared?.previous.to ?? null,
-      earnings: before?.earnings ?? null,
-      pageViews: before?.pageViews ?? null,
-      clicks: before?.clicks ?? null,
-      pageRpm: before?.pageRpm ?? null,
-      imported: f.imported,
-    },
-    deltas: { earnings: change("earnings"), pageViews: change("pageViews"), clicks: change("clicks"), pageRpm: change("pageRpm") },
     series: adsenseSeries(inRange(chosen), ask.range, f.coverage),
     /** The store's sites, biggest earner first. */
     sites: siteTotals(inRange(chosen), 10),
@@ -557,26 +450,11 @@ export function adsenseFigures(conns: AdConn[], rows: Array<AdsenseDayRow & { co
   };
 }
 
-/**
- * The days to read: the range, and the comparison too when some figures can be compared at all.
- * Each platform is compared on its own (`byProvider`), so the comparison is read when any counted
- * platform's figures reach back to it, even if another's start later; one from before every
- * platform's figures start isn't read.
- */
-export function daysToRead(conns: AdConn[], ask: AdsAsk) {
+/** The days to read: the range's, of the accounts that are added up (the ones in the currency chosen). */
+export function daysToRead(conns: AdConn[], ask: Pick<AdsAsk, "range" | "storeCurrency">) {
   const currency = chooseCurrency(conns, ask.storeCurrency);
   const counted = conns.filter((c) => (c.currency ?? currency) === currency);
-  const coverage = (list: AdConn[]) => commonCoverage(list.map((c) => accountCoverage(c, adToday(c, ask.now))));
-  const providers = [...new Set(counted.map((c) => c.provider))];
-  const compared = providers.some((p) => canCompareFrom(coverage(counted.filter((c) => c.provider === p)), ask.previous));
-  return {
-    ids: counted.map((c) => c.id),
-    /** Whether the comparison's days are read (`AdsAsk.previousRead`). */
-    compared,
-    // The comparison needn't sit just before the range (a year earlier, dates picked, even
-    // overlapping it): two windows, never one span from the comparison's start to the range's end.
-    OR: [{ day: { gte: ask.range.from, lte: ask.range.to } }, ...(compared ? [{ day: { gte: ask.previous.from, lte: ask.previous.to } }] : [])],
-  };
+  return { ids: counted.map((c) => c.id), day: { gte: ask.range.from, lte: ask.range.to } };
 }
 
 /** The store's time zone, when the caller didn't pass it. */
@@ -591,19 +469,18 @@ export interface AdsOptions {
   connections?: string[];
   /** Only this platform's accounts (Meta Ads or Google Ads; the ads module only). */
   provider?: AdSpendProvider;
-  /** Every campaign, each with its change (AdsAsk.allCampaigns). */
+  /** Every campaign (AdsAsk.allCampaigns). */
   allCampaigns?: boolean;
   timeZone?: string;
   now?: Date;
-  /** The store's orders for the range, and its net sales and orders for the dates compared with (AdsAsk). */
+  /** The store's orders for the range (AdsAsk). */
   orders?: number | null;
-  before?: { netSales: number | null; orders: number | null } | null;
   /** Read which orders Shopify credits to each platform's ads (sourcedOrders): when the store's traffic sources are read at all. */
   attribution?: boolean;
 }
 
 /** The ads module of the dashboard (see `adsFigures`): null when no ad account is shown on the store. */
-export async function adsModule(tx: Tx, scope: Scope, range: DateRange, previous: Comparison, storeCurrency: string, netSales: number | null, opts: AdsOptions = {}) {
+export async function adsModule(tx: Tx, scope: Scope, range: DateRange, storeCurrency: string, netSales: number | null, opts: AdsOptions = {}) {
   const { ws, storeId } = scope;
   const conns = await tx.adConnection.findMany({
     // Spend only: AdSense accounts earn money for the store and have their own module below.
@@ -614,18 +491,16 @@ export async function adsModule(tx: Tx, scope: Scope, range: DateRange, previous
   if (!conns.length) return null;
   const ask: AdsAsk = {
     range,
-    previous,
     storeCurrency,
     netSales,
     orders: opts.orders ?? null,
-    before: opts.before ?? null,
     sourced: opts.attribution ? await sourcedOrders(tx, scope, range) : null,
     now: opts.now ?? new Date(),
     storeTimeZone: opts.timeZone ?? (await storeTimeZone(tx, scope)),
     allCampaigns: opts.allCampaigns,
   };
   const read = daysToRead(conns, ask);
-  const raw = await tx.adCampaignDaily.findMany({ where: { workspaceId: ws, storeId, connectionId: { in: read.ids }, OR: read.OR } });
+  const raw = await tx.adCampaignDaily.findMany({ where: { workspaceId: ws, storeId, connectionId: { in: read.ids }, day: read.day } });
   const stored = await storedCampaigns(tx, { workspaceId: ws, storeId, connectionId: { in: conns.map((c) => c.id) } });
   ask.campaignSettings = new Map(stored.map((s) => [campaignKeyOf(s), s]));
   const rows = raw.map((r) => ({
@@ -645,11 +520,11 @@ export async function adsModule(tx: Tx, scope: Scope, range: DateRange, previous
     purchaseValue: r.purchaseValue === null ? null : toNumber(r.purchaseValue),
     leads: r.leads,
   }));
-  return adsFigures(conns, rows, { ...ask, previousRead: read.compared });
+  return adsFigures(conns, rows, ask);
 }
 
 /** The AdSense module of the dashboard (see `adsenseFigures`): null when no AdSense account is shown on the store. */
-export async function adsenseModule(tx: Tx, scope: Scope, range: DateRange, previous: Comparison, storeCurrency: string, netSales: number | null, opts: AdsOptions = {}) {
+export async function adsenseModule(tx: Tx, scope: Scope, range: DateRange, storeCurrency: string, netSales: number | null, opts: AdsOptions = {}) {
   const { ws, storeId } = scope;
   const conns = await tx.adConnection.findMany({
     where: { workspaceId: ws, storeId, enabled: true, provider: "adsense", ...(opts.connections ? { id: { in: opts.connections } } : {}) },
@@ -657,9 +532,9 @@ export async function adsenseModule(tx: Tx, scope: Scope, range: DateRange, prev
     orderBy: { createdAt: "asc" },
   });
   if (!conns.length) return null;
-  const ask: AdsAsk = { range, previous, storeCurrency, netSales, now: opts.now ?? new Date(), storeTimeZone: opts.timeZone ?? (await storeTimeZone(tx, scope)) };
+  const ask: AdsAsk = { range, storeCurrency, netSales, now: opts.now ?? new Date(), storeTimeZone: opts.timeZone ?? (await storeTimeZone(tx, scope)) };
   const read = daysToRead(conns, ask);
-  const raw = await tx.adsenseDaily.findMany({ where: { workspaceId: ws, storeId, connectionId: { in: read.ids }, OR: read.OR } });
+  const raw = await tx.adsenseDaily.findMany({ where: { workspaceId: ws, storeId, connectionId: { in: read.ids }, day: read.day } });
   const rows = raw.map((r) => ({
     connectionId: r.connectionId,
     accountId: r.accountId,
@@ -670,7 +545,7 @@ export async function adsenseModule(tx: Tx, scope: Scope, range: DateRange, prev
     impressions: r.impressions,
     clicks: r.clicks,
   }));
-  return adsenseFigures(conns, rows, { ...ask, previousRead: read.compared });
+  return adsenseFigures(conns, rows, ask);
 }
 
 export type AdsFigures = NonNullable<ReturnType<typeof adsFigures>>;

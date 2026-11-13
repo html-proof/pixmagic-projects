@@ -12,7 +12,7 @@ export async function productCheck(tx: Tx, store: Store, deps: ReportFetchDeps, 
   const window = range ?? { from: addDays(yesterday, -6), to: yesterday };
   // Validate operator-supplied dates with the same rules as the authenticated endpoint.
   const dates = resolvePreset("custom", now, store.timezone, window).range;
-  const ours = await productPerformance(tx, { ws: store.workspaceId, storeId: store.id }, store, dates, {}, now);
+  const ours = await productPerformance(tx, { ws: store.workspaceId, storeId: store.id }, store, dates);
   const metadata = { shop: store.shopDomain, range: dates, timezone: store.timezone, currency: store.currency,
     complete: ours.complete, products: ours.total, historyFrom: ours.historyFrom, historyRecorded: store.ordersHistoryFrom != null,
     pendingOrders: ours.pendingOrders, unmatchedSales: ours.unmatchedSales, unknownIdentitySales: ours.unknownIdentitySales, lastSyncedAt: ours.lastSyncedAt };

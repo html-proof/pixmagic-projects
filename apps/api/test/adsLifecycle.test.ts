@@ -895,11 +895,11 @@ describe("a Google grant that no longer covers reporting", () => {
   });
 });
 
-describe("the Google Ads report compared, and Google's daily allowance", () => {
+describe("the Google Ads report for its own dates, and Google's daily allowance", () => {
   const reportUrl = (connection: string, q: Record<string, string> = {}) =>
     `/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection, from: "2026-09-01", to: "2026-09-30", ...q })}`;
 
-  it("the comparison's dates asked of Google too, its figures by id; the operations counted like a sync's", async () => {
+  it("a link that still names dates to compare with: Google is asked for the report's dates only; the operations counted like a sync's", async () => {
     const seen = fresh();
     ctx.setFetch(googlePlatform(seen));
     await connect("google");
@@ -907,9 +907,12 @@ describe("the Google Ads report compared, and Google's daily allowance", () => {
     const before = await googleAdsOperationsToday(ctx.deps.coord);
     const res = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { cfrom: "2026-08-01", cto: "2026-08-31" }), headers });
     expect(res.statusCode).toBe(200);
-    expect(res.json().report.comparison).toMatchObject({ since: "2026-08-01", until: "2026-08-31", totals: { spend: 30 }, rows: [{ id: "7", spend: 30, cpc: 0.5 }] });
-    expect(res.json().report.comparison.rows[0].name).toBeUndefined();
-    expect(seen.reportQueries.some((q) => q.includes("BETWEEN '2026-08-01' AND '2026-08-31'"))).toBe(true);
+    expect(res.json().report).toMatchObject({ since: "2026-09-01", until: "2026-09-30", totals: { spend: 30 } });
+    expect(res.json().report).not.toHaveProperty("comparison");
+    // August is never asked of Google: none of its daily operations is spent on it.
+    expect(seen.reportQueries.length).toBeGreaterThan(0);
+    expect(seen.reportQueries.some((q) => q.includes("2026-08-"))).toBe(false);
+    expect(seen.reportQueries.every((q) => q.includes("BETWEEN '2026-09-01' AND '2026-09-30'"))).toBe(true);
     expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + seen.reportQueries.length);
   });
 
@@ -958,7 +961,7 @@ describe("the Google Ads report's keywords and search terms", () => {
   const reportUrl = (connection: string, q: Record<string, string> = {}) =>
     `/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection, from: "2026-09-01", to: "2026-09-30", ...q })}`;
 
-  it("are asked of Google only when opened, two operations a range, cached apart and for longer, compared by id", async () => {
+  it("are asked of Google only when opened, two operations a range, cached apart and for longer", async () => {
     const seen = fresh();
     ctx.setFetch(googlePlatform(seen));
     await connect("google");
@@ -995,17 +998,17 @@ describe("the Google Ads report's keywords and search terms", () => {
       expect.stringContaining("FROM campaign_search_term_view WHERE segments.date BETWEEN '2026-09-01' AND '2026-09-30' AND campaign.id = 7 AND metrics.impressions > 0"),
     ]);
 
-    // Compared: the same keyword's figures before, by id.
+    // A link that still names dates to compare with: the report's own, from the cache, and nothing read for August.
     const compared = await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, { level: "keyword", cfrom: "2026-08-01", cto: "2026-08-31" }), headers });
-    expect(compared.json().report.comparison).toMatchObject({ since: "2026-08-01", rows: [{ id: "55~9001", spend: 12, conversions: 2 }] });
-    // Only the comparison's range was read: the report's own came from the cache.
-    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 6);
+    expect(compared.json()).toMatchObject({ cached: true, report: { since: "2026-09-01", rows: [{ id: "55~9001", spend: 12, conversions: 2 }] } });
+    expect(compared.json().report).not.toHaveProperty("comparison");
+    expect(await googleAdsOperationsToday(ctx.deps.coord)).toBe(before + 4);
 
     // Search terms come by campaign, never by ad group; ids are Google's.
     for (const q of [{ level: "search_term", adGroup: "55" }, { level: "keyword", campaign: "7 OR 1=1" }, { level: "keyword", adGroup: "demo-c2-core" }] as Array<Record<string, string>>) {
       expect((await ctx.app.inject({ method: "GET", url: reportUrl(conn.id, q), headers })).statusCode).toBe(400);
     }
-    expect(seen.reportQueries).toHaveLength(6);
+    expect(seen.reportQueries).toHaveLength(4);
   });
 
   it("one ad account's are read from Google at most 25 times a day; cached ones and the other reports aren't held back", async () => {

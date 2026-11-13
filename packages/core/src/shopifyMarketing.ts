@@ -14,7 +14,7 @@
  * for a day (by store, day, channel, app and campaign), so reading a day twice never counts it twice.
  */
 import { systemDb, type Store, type Tx } from "@app/db";
-import { addDays, localDay, shopifyMarketing, storeStartDay, type Comparison, type DateRange, type MarketingRow, type MarketingSyncState } from "@app/shared";
+import { addDays, localDay, shopifyMarketing, storeStartDay, type DateRange, type MarketingRow, type MarketingSyncState } from "@app/shared";
 import type { Coord } from "./coord.js";
 import { env } from "./env.js";
 import { logger } from "./logger.js";
@@ -371,22 +371,15 @@ const num = (v: { toString(): string } | number | null): number | null => (v ===
 
 /**
  * The dashboard's Shopify marketing module for the dates, from what the worker kept: null while the
- * tables don't exist yet. The dates are compared only once they are over, with the dates compared
- * with read back that far: the figures are whole days, so a running day can't be set against the
- * same time of day before.
+ * tables don't exist yet.
  */
-export async function shopifyMarketingModule(tx: Tx, scope: { ws: string; storeId: string }, store: Pick<Store, "currency">, dates: { range: DateRange; previous: Comparison }, today: string) {
+export async function shopifyMarketingModule(tx: Tx, scope: { ws: string; storeId: string }, store: Pick<Store, "currency">, range: DateRange, today: string) {
   if (!(await marketingReady(tx))) return null;
   const { ws, storeId } = scope;
-  const { range, previous } = dates;
   const sync = await tx.shopifyMarketingSync.findFirst({ where: { workspaceId: ws, storeId } });
-  // Read with no day missing over the whole of them: from the first day read (or the history all in) to `synced_through`.
-  const covered = (r: DateRange) => !!sync?.coveredFrom && !!sync.syncedThrough && (sync.backfilled || r.from >= sync.coveredFrom) && r.to <= sync.syncedThrough;
-  const compare = range.to < today && covered(previous);
   const read = (r: DateRange) => tx.shopifyMarketingDay.findMany({ where: { workspaceId: ws, storeId, day: { gte: r.from, lte: r.to } } });
-  const [rows, previousRows, last, month] = await Promise.all([
+  const [rows, last, month] = await Promise.all([
     read(range),
-    compare ? read(previous) : null,
     tx.shopifyMarketingDay.groupBy({ by: ["channel", "app"], where: { workspaceId: ws, storeId, campaign: "" }, _max: { day: true } }),
     // Today's and this month's spend, whatever the dates: the month's whole days so far.
     tx.shopifyMarketingDay.findMany({ where: { workspaceId: ws, storeId, campaign: "", day: { gte: `${today.slice(0, 7)}-01`, lte: today } } }),
@@ -413,10 +406,8 @@ export async function shopifyMarketingModule(tx: Tx, scope: { ws: string; storeI
   };
   return shopifyMarketing({
     rows: rows.map(ours),
-    previousRows: previousRows?.map(ours) ?? null,
     lastDays: last.filter((l) => l._max.day).map((l) => ({ channel: l.channel, app: l.app || null, day: l._max.day! })),
     range,
-    compared: compare ? { from: previous.from, to: previous.to } : null,
     currency: store.currency,
     sync: state,
     current: { today, rows: month.map(ours) },

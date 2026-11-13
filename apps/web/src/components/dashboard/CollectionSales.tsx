@@ -22,8 +22,6 @@ export interface CollectionFigures {
   orders: number;
   productsSold: number;
   share: number | null;
-  previous: { netSales: number; units: number; orders: number } | null;
-  deltas: { netSales: number | null; units: number | null; orders: number | null };
 }
 
 export interface CollectionRow extends CollectionFigures {
@@ -33,9 +31,7 @@ export interface CollectionRow extends CollectionFigures {
 
 export interface CollectionSalesReport {
   range: { from: string; to: string };
-  previous: { from: string; to: string; until?: string };
   complete: boolean;
-  baseline: boolean;
   pendingOrders: number;
   unknownIdentitySales: number;
   historyFrom: string | null;
@@ -65,8 +61,8 @@ const LIVE_EVERY_MS = 15_000;
 export const collectionName = (c: { collectionId: string; title: string }) => c.title || `Collection ${c.collectionId}`;
 
 /**
- * The report for the dashboard's dates and what they are compared with, asked so that both sides
- * are the dashboard's own (collectionSalesParams). `shown` false (no product sales for this member
+ * The report for the dashboard's dates (collectionSalesParams).
+ * `shown` false (no product sales for this member
  * or store): nothing is asked.
  */
 export function useCollectionSales(ov: Overview, shown: boolean) {

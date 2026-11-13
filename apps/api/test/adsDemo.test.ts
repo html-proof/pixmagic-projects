@@ -284,8 +284,9 @@ describe("the demo's figures", () => {
     expect(a.combined.days).toHaveLength(30);
     expect(a.combined.totals.orders).toBeGreaterThanOrEqual(a.combined.totals.adOrders);
     expect(a.combined.note).toContain("Not your Shopify sales");
-    // Compared with the 30 days before, which the demo has as well.
-    expect(a.overview.previous).not.toBeNull();
+    // The 30 days alone: the demo has the 30 before as well, and they are in no figure.
+    expect(Object.keys(a.overview)).toEqual(["current"]);
+    expect(a).not.toHaveProperty("previous");
     // Its campaigns' types, statuses and budgets are the generator's; the sync stored the same facts, as it does a real account's.
     expect(a.campaignSettings).toEqual({ source: "generated", asOf: null });
     expect(a.campaigns.every((c: { primaryStatus: string | null; budgetPeriod: string | null }) => c.primaryStatus !== null && c.budgetPeriod === "DAILY")).toBe(true);
@@ -363,7 +364,7 @@ describe("the demo's figures", () => {
     expect(res.statusCode).toBe(200);
     const a = res.json();
     expect(a.overview.current).toMatchObject({ spend: 0, impressions: 0, clicks: 0, ctr: null, cpc: null, roas: null, conversionRate: null });
-    expect(a.overview.previous).toBeNull();
+    expect(a.overview).not.toHaveProperty("previous");
     expect(a.coverage.complete).toBe(false);
     expect(a.series.day).toHaveLength(7);
     expect(a.devices.every((d: { spend: number; share: number | null }) => d.spend === 0 && d.share === null)).toBe(true);

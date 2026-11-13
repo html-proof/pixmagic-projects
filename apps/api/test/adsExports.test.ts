@@ -215,7 +215,7 @@ describe("the Meta Ads report as CSV", () => {
     expect((await get(url(conn.id, { level: "adset", format: "csv" }))).statusCode).toBe(200);
   });
 
-  it("down from an ad set, with the dates compared: that ad set's own row on top, the dates compared with, each ad's change, and an ad not listed then said so", async () => {
+  it("down from an ad set: that ad set's own row on top, then each ad; a link that still names dates to compare with downloads the same file", async () => {
     const conn = await metaConnection();
     const figures = (spend: number, purchases: number) => ({
       spend,
@@ -237,7 +237,7 @@ describe("the Meta Ads report as CSV", () => {
       byWindow: { "1d_click": { purchases: 1, purchaseValue: 20, costPerPurchase: 10, roas: 2 }, "7d_click": { purchases: null, purchaseValue: null, costPerPurchase: null, roas: null }, "1d_view": { purchases: 0, purchaseValue: 0, costPerPurchase: null, roas: 0 } },
     });
     const ad = (id: string, name: string, spend: number, purchases: number) => ({ id, name, campaignId: "11", campaignName: "Spring", adsetId: "21", adsetName: "Lookalike", status: "ACTIVE", attribution: "7d_click", ...figures(spend, purchases) });
-    // The page's read left both ranges in the cache, where the download finds them.
+    // The page's read left the report in the cache, where the download finds it. August, left there by an earlier release, isn't looked for.
     const now = { level: "ad", since: "2026-09-01", until: "2026-09-30", totals: figures(10, 2), rows: [ad("31", "Video", 6, 2), ad("32", "Carousel", 4, 0)], truncated: false, attribution: ["7d_click"], campaigns: null };
     const before = { ...now, since: "2026-08-02", until: "2026-08-31", totals: figures(5, 1), rows: [ad("31", "Video", 3, 1)] };
     await ctx.deps.coord.put(`ads-report:v3:${conn.id}:ad:11:21:2026-09-01:2026-09-30`, JSON.stringify(now), 600);
@@ -246,18 +246,27 @@ describe("the Meta Ads report as CSV", () => {
     const res = await get(url(conn.id, { level: "ad", campaign: "11", adset: "21", cfrom: "2026-08-02", cto: "2026-08-31", format: "csv" }));
     expect(res.statusCode, res.body).toBe(200);
     expect(res.headers["content-disposition"]).toContain("bizinsights-meta-ads-act_1-ad-campaign-11-adset-21-2026-09-01-to-2026-09-30.csv");
-    const [header, top, was, video, carousel] = rowsOf(res.body);
+    const [header, top, video, carousel] = rowsOf(res.body);
     expect(header!.slice(0, 5)).toEqual(["Ad", "Meta id", "Campaign", "Ad set", "Status at Meta now"]);
-    expect(header!.slice(-4)).toEqual(["Spend before (USD)", "Spend change (%)", "Purchases before (Meta's count, each ad set's own setting)", "Purchases change (%)"]);
+    // The figures end the row: no "before" or change columns, no row of the dates before.
+    expect(header!.at(-1)).toBe("Purchase ROAS (1-day view)");
+    expect(header!.join(" ")).not.toMatch(/before|change \(%\)/i);
+    expect(res.body).not.toContain("Before (");
+    expect(res.body).not.toContain("Changes compare with");
     expect(top![0]).toBe("Whole ad set");
-    expect(top!.slice(-4)).toEqual(["5", "100", "1", "100"]);
-    expect(was![0]).toBe("Before (2026-08-02 to 2026-08-31)");
+    expect(top![header!.indexOf("Spend (USD)")]).toBe("10");
     // Reach Meta didn't give is said, never 0.
     expect(top![header!.indexOf("Reach")]).toBe("Not reported");
-    expect(video!.slice(-4)).toEqual(["3", "100", "1", "100"]);
-    expect(carousel!.slice(-4)).toEqual(["Not listed for the dates compared", "", "Not listed for the dates compared", ""]);
+    expect([video![0], video![header!.indexOf("Spend (USD)")]]).toEqual(["Video", "6"]);
+    expect([carousel![0], carousel![header!.indexOf("Spend (USD)")]]).toEqual(["Carousel", "4"]);
+    expect(top!.length).toBe(header!.length);
     expect(calls).toEqual([]);
-    expect((await exported())[0]!.metadata).toMatchObject({ platform: "meta", level: "ad", campaign: "11", adset: "21", cfrom: "2026-08-02", cto: "2026-08-31" });
+    const meta = (await exported())[0]!.metadata;
+    expect(meta).toMatchObject({ platform: "meta", level: "ad", campaign: "11", adset: "21", from: "2026-09-01", to: "2026-09-30" });
+    for (const k of ["cfrom", "cto"]) expect(meta).not.toHaveProperty(k);
+    // Without those dates in the link: the same file.
+    const plain = await get(url(conn.id, { level: "ad", campaign: "11", adset: "21", format: "csv" }));
+    expect(plain.body).toBe(res.body);
   });
 });
 
@@ -333,7 +342,7 @@ describe("a real Google Ads account's live report as CSV", () => {
   });
   const url = (connection: string, q: Record<string, string>) => `/workspaces/${ws}/stores/${storeId}/ads/google/report?${new URLSearchParams({ connection, ...q })}`;
 
-  it("compared with other dates: Google's own wording, the account's row, each campaign's change, and one not listed then said so; nothing asked of Google", async () => {
+  it("Google's own wording, the account's row, then each campaign; a link that still names dates to compare with downloads the same file; nothing asked of Google", async () => {
     const conn = await googleConnection();
     const now = report("2026-09-01", "2026-09-30", "campaign", g(90, 6), [
       { id: "7", name: "Brand", ...g(60, 4) },
@@ -347,21 +356,28 @@ describe("a real Google Ads account's live report as CSV", () => {
     expect(res.statusCode, res.body).toBe(200);
     expect(res.headers["content-disposition"]).toBe('attachment; filename="bizinsights-google-ads-1234567890-campaign-2026-09-01-to-2026-09-30.csv"');
     expect(res.body).not.toContain("G_ACCESS_SECRET");
-    const [header, top, was, brand, shopping, ...notes] = rowsOf(res.body);
+    const [header, top, brand, shopping, ...notes] = rowsOf(res.body);
     expect(header!.slice(0, 5)).toEqual(["Campaign", "Google id", "Campaign type", "Status at Google now", "Delivery at Google now"]);
     expect(header).toContain("Conversions (Google's count, all conversion actions)");
-    expect(header!.slice(-4)).toEqual(["Spend before (USD)", "Spend change (%)", "Conversions before (Google's count)", "Conversions change (%)"]);
+    // The figures end the row: no "before" or change columns, no row of the dates before.
+    expect(header!.at(-1)).toBe("Conversion value / cost");
+    expect(header!.join(" ")).not.toMatch(/before|change \(%\)/i);
+    expect(res.body).not.toContain("Before (");
     expect(top![0]).toBe("Whole ad account");
-    expect(top!.slice(-4)).toEqual(["45", "100", "3", "100"]);
-    expect(was![0]).toBe("Before (2026-08-02 to 2026-08-31)");
-    expect(brand!.slice(-4)).toEqual(["30", "100", "2", "100"]);
-    expect(shopping!.slice(-4)).toEqual(["Not listed for the dates compared", "", "Not listed for the dates compared", ""]);
+    expect(top![header!.indexOf("Spend (USD)")]).toBe("90");
+    expect([brand![0], brand![header!.indexOf("Spend (USD)")]]).toEqual(["Brand", "60"]);
+    expect([shopping![0], shopping![header!.indexOf("Spend (USD)")]]).toEqual(["Shopping", "30"]);
+    expect(top!.length).toBe(header!.length);
     const said = notes.filter((r) => r[0] === "Note").map((r) => r[1]);
     expect(said).toContain("Google's figures for 2026-09-01 to 2026-09-30, days in the ad account's time zone (UTC), as Google reported them.");
-    expect(said).toContain("Changes compare with 2026-08-02 to 2026-08-31, as Google reports those dates now.");
+    expect(said.join(" ")).not.toContain("Changes compare with");
     expect(said.join(" ")).not.toContain("still coming in");
     expect(calls).toEqual([]);
-    expect((await exported())[0]!.metadata).toMatchObject({ section: "ads_live_report", platform: "google", level: "campaign", account: conn.id, cfrom: "2026-08-02", cto: "2026-08-31" });
+    const meta = (await exported())[0]!.metadata;
+    expect(meta).toMatchObject({ section: "ads_live_report", platform: "google", level: "campaign", account: conn.id, from: "2026-09-01", to: "2026-09-30" });
+    for (const k of ["cfrom", "cto"]) expect(meta).not.toHaveProperty(k);
+    const plain = await get(url(conn.id, { from: "2026-09-01", to: "2026-09-30", format: "csv" }));
+    expect(plain.body).toBe(res.body);
   });
 
   it("down from a campaign, with today in the dates: its ad groups added up on top, said so, and today's figures still coming in", async () => {

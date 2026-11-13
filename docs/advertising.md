@@ -328,8 +328,8 @@ this report are the channel's own claim (its attribution), not the store's order
   reported), the other channels that reported spend, what every channel reported as spend together
   (`reportedSpend`: a platform whose own API is connected is in it, so it is never added to that API's
   spend), the sync state and the days of the dates read (`from`..`through`: every figure is of those days
-  only, a day not read yet is unknown, never 0). Compared with the dates before only once the dates are over
-  and those are read whole. Rates set against spend (CPC, CPM, ROAS, cost per order and per new customer)
+  only, a day not read yet is unknown, never 0). The dates' own figures: nothing of the dates before is read.
+  Rates set against spend (CPC, CPM, ROAS, cost per order and per new customer)
   use only the rows that reported spend.
   Built by `@app/shared/shopifyMarketing`. Team & Access: "View advertising analytics"; its campaigns also
   "View campaigns".
@@ -419,9 +419,8 @@ same header (`AdvertisingHeader`), with the demo's DEMO DATA badge and disclaime
 ## Rules the pages keep
 
 - A figure exists only for days every account behind it has stored; otherwise it is Unavailable, with
-  why, never 0 (the ad modules' rule). The pages show no change on the dates before; the API works
-  one out only on whole days, never against days an account hasn't stored (`compared`,
-  `canCompareFrom`), and otherwise gives the reason (`notCompared`).
+  why, never 0 (the ad modules' rule). Nothing is set against the dates before: the pages show no
+  change on them, and since 2026-11-13 the API neither reads those days nor works one out.
 - Purchases, purchase value and ROAS are each platform's own claim and are labelled so; they are never
   added to, or shown as, Shopify sales. Google's other conversions stay apart from purchases.
 - The store's sales are set against the whole spend only (MER, share of sales, cost per Shopify order):
@@ -461,10 +460,8 @@ per person), and is in the audit log as `report.exported`.
   answers `409 report_expired`, looked up before the download is counted, so it uses none of the person's
   30; the page then reads the report again, as a refresh would, shows it and downloads that. The file holds every row of the answer whatever the page's filters show, with the top
   row (**Whole ad account**, **Whole campaign**, **All ad groups in this campaign**...). A request that
-  names dates to compare with (`cfrom`, `cto`: the pages send none) adds a **Before** row and each row's
-  spend and purchases (Meta) or conversions (Google) then and their change. Meta's file has purchases under each ad set's own setting and under each fixed window
-  side by side (**Not reported** where Meta gave none, as is reach Meta didn't give); a row the dates
-  compared with don't list says **Not listed for the dates compared**. Statuses, budgets and Google's
+  still names dates to compare with (`cfrom`, `cto`, from older links) gets the same file: they are left aside. Meta's file has purchases under each ad set's own setting and under each fixed window
+  side by side (**Not reported** where Meta gave none, as is reach Meta didn't give). Statuses, budgets and Google's
   delivery and Quality Score are as the platform lists them now, labelled so; a keyword Google gives no
   Quality Score reads **Not rated by Google**. Dates reaching the ad account's today add the page's note
   that today's numbers are still coming in. Down from a campaign or ad group with none of its rows listed,

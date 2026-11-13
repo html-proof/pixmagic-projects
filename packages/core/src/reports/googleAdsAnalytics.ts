@@ -7,7 +7,6 @@ import {
   campaignAnalytics,
   conversionSeries,
   coversDays,
-  delta,
   DEMO_CAMPAIGNS,
   DEMO_DISCLAIMER,
   demoBreakdown,
@@ -17,7 +16,6 @@ import {
   demoStoreTotals,
   topConverting,
   type AdDayRow,
-  type AdsMetrics,
   type CampaignSettings,
   type DateRange,
   type DemoBreakdownRow,
@@ -45,10 +43,7 @@ export interface GoogleAdsAnalyticsOptions {
   campaigns?: boolean;
 }
 
-/** A change between the range's figures and the comparison's, per metric (null without a comparison or a before figure). */
-export type AdsDeltas = { [K in keyof AdsMetrics]: number | null };
-
-export async function googleAdsAnalytics(tx: Tx, conn: AdConnection, range: DateRange, previous: DateRange, opts: GoogleAdsAnalyticsOptions = {}) {
+export async function googleAdsAnalytics(tx: Tx, conn: AdConnection, range: DateRange, opts: GoogleAdsAnalyticsOptions = {}) {
   const now = opts.now ?? new Date();
   const demo = isDemoConnection(conn);
   const withCampaigns = opts.campaigns !== false;
@@ -57,7 +52,7 @@ export async function googleAdsAnalytics(tx: Tx, conn: AdConnection, range: Date
       workspaceId: conn.workspaceId,
       storeId: conn.storeId,
       connectionId: conn.id,
-      OR: [{ day: { gte: range.from, lte: range.to } }, { day: { gte: previous.from, lte: previous.to } }],
+      day: { gte: range.from, lte: range.to },
     },
   });
   const rows: AdDayRow[] = raw.map((r) => ({
@@ -76,8 +71,7 @@ export async function googleAdsAnalytics(tx: Tx, conn: AdConnection, range: Date
     purchaseValue: r.purchaseValue === null ? null : toNumber(r.purchaseValue),
     leads: r.leads,
   }));
-  const within = (w: DateRange) => rows.filter((r) => r.day >= w.from && r.day <= w.to);
-  const inRange = within(range);
+  const inRange = rows;
   const today = adToday(conn, now);
   const coverage = accountCoverage(conn, today);
   const ctx = demo ? demoContextOf(conn) : null;
@@ -109,9 +103,6 @@ export async function googleAdsAnalytics(tx: Tx, conn: AdConnection, range: Date
   }
   const campaigns = campaignAnalytics(inRange, range, settings);
   const current = adsMetrics(inRange);
-  // Compared only with days the connection has stored in full: a comparison from before its history would read as growth from nothing.
-  const before = coversDays(coverage, previous) ? adsMetrics(within(previous)) : null;
-  const deltas = Object.fromEntries((Object.keys(current) as Array<keyof AdsMetrics>).map((k) => [k, before ? delta(current[k], before[k]) : null])) as AdsDeltas;
   const split = (kind: "device" | "country" | "age" | "segment"): DemoBreakdownRow[] | null => (ctx ? demoBreakdown(ctx, kind, inRange) : null);
   const storeDays = ctx ? demoStoreDays(ctx, inRange, range) : null;
   return {
@@ -134,12 +125,11 @@ export async function googleAdsAnalytics(tx: Tx, conn: AdConnection, range: Date
       seed: demo ? conn.demoSeed : null,
     },
     range,
-    previous,
     today,
     /** The days the connection has stored without a gap, and whether they cover the range (a figure for days it lacks is a short count). */
     coverage: { from: coverage.from, through: coverage.through, complete: coversDays(coverage, range) },
     disclaimer: demo ? DEMO_DISCLAIMER : null,
-    overview: { current, previous: before, deltas },
+    overview: { current },
     series: { day: adsSeries(inRange, range, "day"), week: adsSeries(inRange, range, "week"), month: adsSeries(inRange, range, "month") },
     /** Every campaign with figures in the range (the campaigns endpoint searches, sorts and pages them). */
     campaigns: withCampaigns ? campaigns : null,

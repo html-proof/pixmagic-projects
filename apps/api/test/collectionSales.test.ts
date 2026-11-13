@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, withTenant } from "@app/db";
-import { addDays } from "@app/shared";
 import { collectionSales } from "@app/core/reports";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -16,7 +15,7 @@ beforeEach(async () => clean(ctx));
 
 const SCOPES = ["read_orders", "read_products"];
 type Store = Awaited<ReturnType<typeof createStore>>;
-// 8 and 9 March, compared with the two days just before them.
+// 8 and 9 March.
 const RANGE = "preset=custom&from=2026-03-08&to=2026-03-09";
 
 interface Line {
@@ -96,7 +95,7 @@ async function trade(store: Store) {
   await systemDb.orderSale.create({
     data: { workspaceId: store.workspaceId, storeId: store.id, orderId: o1.id, shopifyId: "o1-refund", localDay: "2026-03-09", happenedAt: new Date("2026-03-09T10:00:00Z"), actionType: "return", lineType: "product", lineItemShopifyId: "o1-0", quantity: 1, amount: -17.5, discount: 0, tax: 0 },
   });
-  // The dates compared with: one tee.
+  // The days just before the dates: one tee, which is none of the dates' sales.
   await seedOrder(store, "o0", "2026-03-06T12:00:00Z", [{ product: "tee", qty: 1, price: 20 }]);
 }
 
@@ -111,7 +110,9 @@ describe("sales by collection (GET .../analytics/collections/sales)", () => {
     const res = await get(a.headers, ws, store.id);
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json();
-    expect(body).toMatchObject({ complete: true, baseline: true, range: { from: "2026-03-08", to: "2026-03-09" }, previous: { from: "2026-03-06", to: "2026-03-07" }, total: 3 });
+    expect(body).toMatchObject({ complete: true, range: { from: "2026-03-08", to: "2026-03-09" }, total: 3 });
+    // The dates alone: nothing of the period before is named or worked out.
+    for (const k of ["previous", "baseline", "pendingBaselineOrders"]) expect(body).not.toHaveProperty(k);
     expect(body.items.map((c: { title: string }) => c.title)).toEqual(["Summer", "Sale", "Home"]);
     const [summer, sale, home] = body.items;
     // Tee 2 × 20 less 5, Hat 10, o5's tee sold and cancelled, one tee refunded the next day.
@@ -126,16 +127,11 @@ describe("sales by collection (GET .../analytics/collections/sales)", () => {
     // The gift is in no collection; Old's collections were never read: neither is guessed.
     expect(body.none).toMatchObject({ netSales: 8, units: 1, orders: 1 });
     expect(body.unknown).toMatchObject({ netSales: 7, units: 1, orders: 1 });
-    // Against 6 and 7 March: one tee in Summer and Sale, nothing in Home (no change worked out from 0).
-    expect(summer.previous).toEqual({ netSales: 20, units: 1, orders: 1 });
-    expect(summer.deltas).toEqual({ netSales: 0.375, units: 1, orders: 1 });
-    expect(home.previous).toEqual({ netSales: 0, units: 0, orders: 0 });
-    expect(home.deltas).toEqual({ netSales: null, units: null, orders: null });
-    expect(body.totals.previous).toEqual({ netSales: 20, units: 1, orders: 1 });
+    for (const f of [summer, home, body.totals, body.none, body.unknown]) for (const k of ["previous", "deltas"]) expect(f).not.toHaveProperty(k);
 
-    // The 9th alone, against a day only the tee sold on: only the refund, a negative sale of Summer and Sale, and no order.
+    // The 9th alone: only the refund, a negative sale of Summer and Sale, and no order.
     const fresh = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
-    const ninth = await withTenant(ws, (tx) => collectionSales(tx, { ws, storeId: store.id }, fresh, { range: { from: "2026-03-09", to: "2026-03-09" }, previous: { from: "2026-03-06", to: "2026-03-06" } }));
+    const ninth = await withTenant(ws, (tx) => collectionSales(tx, { ws, storeId: store.id }, fresh, { from: "2026-03-09", to: "2026-03-09" }));
     expect(ninth.items.map((c: { title: string; netSales: number; units: number; orders: number }) => [c.title, c.netSales, c.units, c.orders])).toEqual([
       ["Sale", -17.5, -1, 0],
       ["Summer", -17.5, -1, 0],
@@ -143,45 +139,46 @@ describe("sales by collection (GET .../analytics/collections/sales)", () => {
     expect(ninth.none).toBeNull();
   });
 
-  it("lists a collection that sold only in the dates compared with, and orders by net sales then title", async () => {
+  it("lists only the collections that sold in the dates, by net sales then title", async () => {
     const { a, ws, store } = await owner();
     await catalog(store);
     await seedOrder(store, "now", "2026-03-08T12:00:00Z", [{ product: "mug", qty: 2, price: 10 }, { product: "hat", qty: 2, price: 10 }]);
     await seedOrder(store, "then", "2026-03-06T12:00:00Z", [{ product: "tee", qty: 1, price: 30 }]);
     const body = (await get(a.headers, ws, store.id)).json();
+    // The tee (Sale, and Summer too) sold only two days before the dates: Sale isn't listed with $0.
     expect(body.items.map((c: { title: string; netSales: number }) => [c.title, c.netSales])).toEqual([
       ["Home", 20],
       ["Summer", 20],
-      ["Sale", 0],
     ]);
-    expect(body.items[2]).toMatchObject({ previous: { netSales: 30, units: 1, orders: 1 }, deltas: { netSales: -1, units: -1, orders: -1 } });
+    expect(body.total).toBe(2);
+    expect(body.totals).toMatchObject({ netSales: 40, units: 4, orders: 1 });
   });
 
-  it("compares with the days before only when their orders are imported; never a made-up change", async () => {
+  it("gives the dates' sales whether or not the days before them were imported", async () => {
     const { a, ws, store } = await owner();
-    // Shopify shared orders from the 7th on: the 6th, the first day compared with, isn't in.
+    // Shopify shared orders from the 7th on: the days just before the dates aren't all in.
     await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date("2026-03-07T00:00:00Z") } });
     await catalog(store);
     await trade(store);
     await systemDb.order.deleteMany({ where: { shopifyId: "o0" } });
+    // An order of the day before whose sales haven't been read yet doesn't hold the dates' figures back.
+    await seedOrder(store, "late-before", "2026-03-07T12:00:00Z", [{ product: "mug", qty: 1, price: 15 }], { pending: true });
     const res = await get(a.headers, ws, store.id);
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json();
-    expect(body).toMatchObject({ complete: true, baseline: false, previous: { from: "2026-03-06", to: "2026-03-07" }, historyFrom: "2026-03-07" });
-    expect(body.items[0]).toMatchObject({ title: "Summer", netSales: 27.5, previous: null, deltas: { netSales: null, units: null, orders: null } });
-    expect(body.totals.previous).toBeNull();
+    expect(body).toMatchObject({ complete: true, pendingOrders: 0, historyFrom: "2026-03-07" });
+    expect(body.items[0]).toMatchObject({ title: "Summer", netSales: 27.5 });
   });
 
-  it("answers a 366-day range against the 366 days before it, as the dashboard compares them", async () => {
-    // What the products page sends for a financial year with a 29 February in it: the 366 days
-    // before have none, so they run a day past 12 months (collectionDates.ts).
+  it("answers a 366-day range, and a preset by its name", async () => {
+    // What the products page sends for a financial year with a 29 February in it.
     const { a, ws, store } = await owner();
     const res = await get(a.headers, ws, store.id, "preset=custom&from=2023-07-01&to=2024-06-30");
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toMatchObject({ range: { from: "2023-07-01", to: "2024-06-30" }, previous: { from: "2022-06-30", to: "2023-06-30" } });
-    // A preset by its name, as the page sends the dashboard's own: this week against the same days last week.
-    const week = (await get(a.headers, ws, store.id, "preset=wtd")).json();
-    expect(week.previous).toMatchObject({ from: addDays(week.range.from, -7), to: addDays(week.range.to, -7) });
+    expect(res.json()).toMatchObject({ range: { from: "2023-07-01", to: "2024-06-30" } });
+    const week = await get(a.headers, ws, store.id, "preset=wtd");
+    expect(week.statusCode, week.body).toBe(200);
+    expect(week.json().range.from <= week.json().range.to).toBe(true);
   });
 
   it("withholds every figure until the dates' sales are all in", async () => {
@@ -200,18 +197,6 @@ describe("sales by collection (GET .../analytics/collections/sales)", () => {
     await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date(0) } });
     await seedOrder(store, "lost", "2026-03-08T18:00:00Z", [{ product: null, qty: 1, price: 5 }]);
     expect((await get(a.headers, ws, store.id)).json()).toMatchObject({ complete: false, unknownIdentitySales: 1, items: [], totals: null });
-  });
-
-  it("stops the last day compared with at the same time of day while the dates run", async () => {
-    const { ws, store } = await owner();
-    await catalog(store);
-    await seedOrder(store, "now", "2026-03-08T09:00:00Z", [{ product: "mug", qty: 1, price: 10 }]);
-    await seedOrder(store, "before", "2026-03-07T09:00:00Z", [{ product: "mug", qty: 1, price: 10 }]);
-    await seedOrder(store, "after", "2026-03-07T15:00:00Z", [{ product: "mug", qty: 5, price: 10 }]);
-    const fresh = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
-    const r = await withTenant(ws, (tx) => collectionSales(tx, { ws, storeId: store.id }, fresh, { range: { from: "2026-03-08", to: "2026-03-08" }, previous: { from: "2026-03-07", to: "2026-03-07", until: "12:00:00" } }));
-    expect(r.items).toHaveLength(1);
-    expect(r.items[0]).toMatchObject({ title: "Home", netSales: 10, previous: { netSales: 10, units: 1, orders: 1 }, deltas: { netSales: 0 } });
   });
 
   it("adds up more than 10,000 orders without a cap", async () => {

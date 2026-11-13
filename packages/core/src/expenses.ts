@@ -3,7 +3,6 @@ import {
   addDays,
   categorySection,
   customCategoryId,
-  delta,
   dueOccurrences,
   expenseInRange,
   expensesComplete,
@@ -15,7 +14,6 @@ import {
   nextDue,
   occurrences,
   sectionOfCost,
-  type Comparison,
   type CustomCategory,
   type CustomCategoryInput,
   type DateRange,
@@ -505,27 +503,22 @@ export async function expensesReady(tx: Tx): Promise<boolean> {
 
 /**
  * The dashboard's costs module for the dates: the store's costs for them, by category and section,
- * those of the dates they're compared with, and whether the list holds every cost for them. Null
+ * and whether the list holds every cost for them. Null
  * while the tables don't exist yet (expensesReady). In the store's currency: costs are entered in it.
  * `withTerms`: the Profit sheet's question, which adds every cost's terms (no names or notes) so the
  * sheet spreads them over its own columns.
  */
-export async function expensesModule(tx: Tx, scope: Scope, currency: string, range: DateRange, previous: Comparison | null, opts: { withTerms?: boolean } = {}) {
+export async function expensesModule(tx: Tx, scope: Scope, currency: string, range: DateRange, opts: { withTerms?: boolean } = {}) {
   if (!(await expensesReady(tx))) return null;
   const { costs, categories, completeFrom, operatingWeekdays } = await expenseTerms(tx, scope);
   const follows = costs.some((c) => (c.method ?? "amount") !== "amount");
-  const span = previous && previous.from < range.from ? { from: previous.from, to: range.to } : range;
-  const figures = follows ? await dayFigures(tx, scope, span) : undefined;
+  const figures = follows ? await dayFigures(tx, scope, range) : undefined;
   const current = expenseTotals(costs, range, operatingWeekdays, figures);
-  // Costs are counted by whole days, so a comparison cut at a time of day takes its days whole.
-  const before = previous ? expenseTotals(costs, previous, operatingWeekdays, figures) : null;
   return {
     currency,
     /** Every cost the store keeps, whether or not it falls in the dates. */
     count: costs.length,
     current,
-    previous: before ? { total: before.total } : null,
-    delta: before ? delta(current.total, before.total) : null,
     completeFrom,
     /** The list holds every cost for all of the dates (expensesComplete). */
     complete: expensesComplete(completeFrom, range),

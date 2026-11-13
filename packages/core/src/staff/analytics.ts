@@ -170,15 +170,10 @@ interface Sum {
   employees: Set<string>;
 }
 
-function sumChunks(work: Map<string, EmployeeWork>, range: DayRange, currency: string, cutoff?: { day: string; untilSec: number }): Sum {
+function sumChunks(work: Map<string, EmployeeWork>, range: DayRange, currency: string): Sum {
   const out: Sum = { worked: 0, regular: 0, overtime: 0, gross: 0n, employees: new Set() };
   for (const [id, w] of work) {
-    let chunks = w.chunks.filter((c) => c.day >= range.from && c.day <= range.to);
-    if (cutoff) {
-      chunks = chunks
-        .filter((c) => c.day !== cutoff.day || c.start < cutoff.untilSec)
-        .map((c) => (c.day === cutoff.day && c.end > cutoff.untilSec ? { ...c, end: cutoff.untilSec, seconds: cutoff.untilSec - c.start } : c));
-    }
+    const chunks = w.chunks.filter((c) => c.day >= range.from && c.day <= range.to);
     if (!chunks.length) continue;
     const p = priceWork(chunks, w.employee.rates, w.employee.currency);
     out.worked += workedSeconds(p);
@@ -190,23 +185,13 @@ function sumChunks(work: Map<string, EmployeeWork>, range: DayRange, currency: s
   return out;
 }
 
-const change = (cur: number | bigint, prev: number | bigint | null): number | null => {
-  if (prev === null) return null;
-  const p = Number(prev);
-  if (p === 0) return null;
-  return (Number(cur) - p) / Math.abs(p);
-};
-
 export interface Kpi {
   key: string;
   label: string;
   unit: "hours" | "money" | "count" | "rate";
   value: number | string | null;
-  previous: number | string | null;
-  change: number | null;
   /** Plain-language explanation of the figure. */
   help: string;
-  compareLabel: string | null;
 }
 
 export async function staffKpis(actor: StaffActor, input: { preset: RangePreset; from?: string; to?: string }) {
@@ -223,38 +208,24 @@ export async function staffKpis(actor: StaffActor, input: { preset: RangePreset;
   const wk = resolveRange("this_week", today, ws);
   const mo = resolveRange("this_month", today, ws);
   const yr = resolveRange("this_year", today, ws);
-  const earliest = [sel.previous.from, yr.previous.from, wk.previous.from, mo.previous.from].sort()[0]!;
+  // The earliest day any figure counts from: the range's first day, or the start of this week, month or year.
+  const earliest = [sel.range.from, yr.range.from, wk.range.from, mo.range.from].sort()[0]!;
   const latest = [sel.range.to, today].sort().reverse()[0]!;
-  // Today against yesterday up to the same time of day.
-  const elapsed = Math.floor((nowMs - startOfLocalDay(today, tz)) / 1000);
-  const yesterdayCut = { day: t.previous.from, untilSec: Math.floor(startOfLocalDay(t.previous.from, tz) / 1000) + elapsed };
 
   return withTenant(actor.workspaceId, async (tx) => {
     const scope = employeeScope(actor);
     const data = await loadWork(tx, settings, { from: earliest, to: latest, filter: "estimate", employeeWhere: scope });
     const work = computeWork(data, { from: earliest, to: latest }, nowMs);
-    const s = (r: DayRange, cut?: { day: string; untilSec: number }) => sumChunks(work, r, cur, cut);
-    const [sToday, sYesterday, sWeek, sPrevWeek, sMonth, sPrevMonth, sYear, sPrevYear, sSel, sPrevSel] = [
-      s(t.range),
-      s(t.previous, yesterdayCut),
-      s(wk.range),
-      s(wk.previous),
-      s(mo.range),
-      s(mo.previous),
-      s(yr.range),
-      s(yr.previous),
-      s(sel.range),
-      s(sel.previous),
-    ];
+    const s = (r: DayRange) => sumChunks(work, r, cur);
+    const [sToday, sWeek, sMonth, sYear, sSel] = [s(t.range), s(wk.range), s(mo.range), s(yr.range), s(sel.range)];
     const allEmployees = [...data.employees.values()];
     const onBooks = (day: string) => allEmployees.filter((e) => e.joinedOn <= day && (e.status !== "inactive" || (e.deactivatedAt && localDayOf(e.deactivatedAt.getTime(), tz) > day))).length;
-    const [open, pendingShifts, pendingCorrections, pendingPayroll, payments, prevPayments, owed] = await Promise.all([
+    const [open, pendingShifts, pendingCorrections, pendingPayroll, payments, owed] = await Promise.all([
       tx.attendanceSession.count({ where: { workspaceId: actor.workspaceId, clockOutAt: null, employee: scope } }),
       tx.attendanceSession.count({ where: { workspaceId: actor.workspaceId, approvalStatus: "pending", clockOutAt: { not: null }, employee: scope } }),
       tx.timesheetAdjustment.count({ where: { workspaceId: actor.workspaceId, status: "pending", employee: scope } }),
       pay ? tx.payrollPeriod.count({ where: { workspaceId: actor.workspaceId, status: "pending_approval" } }) : Promise.resolve(0),
       pay ? tx.payrollPayment.aggregate({ where: { workspaceId: actor.workspaceId, status: "completed", currency: cur, paidOn: { gte: sel.range.from, lte: sel.range.to } }, _sum: { amountMinor: true } }) : null,
-      pay ? tx.payrollPayment.aggregate({ where: { workspaceId: actor.workspaceId, status: "completed", currency: cur, paidOn: { gte: sel.previous.from, lte: sel.previous.to } }, _sum: { amountMinor: true } }) : null,
       pay ? tx.payrollItem.findMany({ where: { workspaceId: actor.workspaceId, currency: cur, period: { status: { in: [...PAYABLE_STATUSES] } } }, select: { netMinor: true, paidMinor: true } }) : [],
     ]);
     const outstanding = owed.reduce((a, i) => a + (i.netMinor > i.paidMinor ? i.netMinor - i.paidMinor : 0n), 0n);
@@ -269,31 +240,27 @@ export async function staffKpis(actor: StaffActor, input: { preset: RangePreset;
       return displayRate(formatScaled(roundDiv(total, BigInt(rates.length)), RATE_SCALE), cur);
     };
     const money = (v: bigint) => minorToString(v, cur);
-    const selLabel = sel.inProgress ? "vs the same part of the previous period" : "vs the previous period";
     const kpis: Kpi[] = [
-      { key: "total_staff", label: "Total staff", unit: "count", value: onBooks(sel.range.to), previous: onBooks(sel.previous.to), change: change(onBooks(sel.range.to), onBooks(sel.previous.to)), help: "Everyone on your books on the last day of the range (active or on leave).", compareLabel: "vs the end of the previous period" },
-      { key: "active_staff", label: "Active staff", unit: "count", value: sSel.employees.size, previous: sPrevSel.employees.size, change: change(sSel.employees.size, sPrevSel.employees.size), help: "People who worked at least one shift in this range.", compareLabel: selLabel },
-      { key: "working_now", label: "Working now", unit: "count", value: open, previous: null, change: null, help: "Clocked in right now (including anyone on a break).", compareLabel: null },
-      { key: "hours_today", label: "Hours today", unit: "hours", value: sToday.worked, previous: sYesterday.worked, change: change(sToday.worked, sYesterday.worked), help: "Paid time worked today so far, including shifts still running.", compareLabel: "vs yesterday at this time" },
-      { key: "hours_week", label: "Hours this week", unit: "hours", value: sWeek.worked, previous: sPrevWeek.worked, change: change(sWeek.worked, sPrevWeek.worked), help: "Paid time worked since the start of the week.", compareLabel: "vs the same days last week" },
-      { key: "hours_month", label: "Hours this month", unit: "hours", value: sMonth.worked, previous: sPrevMonth.worked, change: change(sMonth.worked, sPrevMonth.worked), help: "Paid time worked since the 1st.", compareLabel: "vs the same days last month" },
-      { key: "regular_hours", label: "Regular hours", unit: "hours", value: sSel.regular, previous: sPrevSel.regular, change: change(sSel.regular, sPrevSel.regular), help: "Hours paid at the normal rate in this range.", compareLabel: selLabel },
-      { key: "overtime_hours", label: "Overtime hours", unit: "hours", value: sSel.overtime, previous: sPrevSel.overtime, change: change(sSel.overtime, sPrevSel.overtime), help: "Hours past your overtime thresholds in this range.", compareLabel: selLabel },
-      { key: "pending_approvals", label: "Waiting for approval", unit: "count", value: pendingShifts + pendingCorrections + pendingPayroll, previous: null, change: null, help: `${pendingShifts} shifts, ${pendingCorrections} change requests${pay ? ` and ${pendingPayroll} payroll runs` : ""} need someone to review them.`, compareLabel: null },
+      { key: "total_staff", label: "Total staff", unit: "count", value: onBooks(sel.range.to), help: "Everyone on your books on the last day of the range (active or on leave)." },
+      { key: "active_staff", label: "Active staff", unit: "count", value: sSel.employees.size, help: "People who worked at least one shift in this range." },
+      { key: "working_now", label: "Working now", unit: "count", value: open, help: "Clocked in right now (including anyone on a break)." },
+      { key: "hours_today", label: "Hours today", unit: "hours", value: sToday.worked, help: "Paid time worked today so far, including shifts still running." },
+      { key: "hours_week", label: "Hours this week", unit: "hours", value: sWeek.worked, help: "Paid time worked since the start of the week." },
+      { key: "hours_month", label: "Hours this month", unit: "hours", value: sMonth.worked, help: "Paid time worked since the 1st." },
+      { key: "regular_hours", label: "Regular hours", unit: "hours", value: sSel.regular, help: "Hours paid at the normal rate in this range." },
+      { key: "overtime_hours", label: "Overtime hours", unit: "hours", value: sSel.overtime, help: "Hours past your overtime thresholds in this range." },
+      { key: "pending_approvals", label: "Waiting for approval", unit: "count", value: pendingShifts + pendingCorrections + pendingPayroll, help: `${pendingShifts} shifts, ${pendingCorrections} change requests${pay ? ` and ${pendingPayroll} payroll runs` : ""} need someone to review them.` },
     ];
     if (pay) {
       const paid = payments?._sum.amountMinor ?? 0n;
-      const prevPaid = prevPayments?._sum.amountMinor ?? 0n;
-      const ar = avgRate(sel.range.to);
-      const pr = avgRate(sel.previous.to);
       kpis.push(
-        { key: "cost_today", label: "Payroll cost today", unit: "money", value: money(sToday.gross), previous: money(sYesterday.gross), change: change(sToday.gross, sYesterday.gross), help: "Estimated wages earned today from recorded hours and pay rates.", compareLabel: "vs yesterday at this time" },
-        { key: "cost_week", label: "Payroll cost this week", unit: "money", value: money(sWeek.gross), previous: money(sPrevWeek.gross), change: change(sWeek.gross, sPrevWeek.gross), help: "Estimated wages earned since the start of the week.", compareLabel: "vs the same days last week" },
-        { key: "cost_month", label: "Payroll cost this month", unit: "money", value: money(sMonth.gross), previous: money(sPrevMonth.gross), change: change(sMonth.gross, sPrevMonth.gross), help: "Estimated wages earned since the 1st.", compareLabel: "vs the same days last month" },
-        { key: "cost_year", label: "Payroll cost this year", unit: "money", value: money(sYear.gross), previous: money(sPrevYear.gross), change: change(sYear.gross, sPrevYear.gross), help: "Estimated wages earned since 1 January.", compareLabel: "vs the same days last year" },
-        { key: "amount_paid", label: "Amount paid", unit: "money", value: money(paid), previous: money(prevPaid), change: change(paid, prevPaid), help: "Payments recorded with a payment date in this range.", compareLabel: selLabel },
-        { key: "outstanding", label: "Still to pay", unit: "money", value: money(outstanding), previous: null, change: null, help: "Approved payroll not yet paid, across all periods.", compareLabel: null },
-        { key: "average_rate", label: "Average hourly rate", unit: "rate", value: ar, previous: pr, change: ar && pr ? change(Number(ar), Number(pr)) : null, help: "The average base pay rate of your staff on the last day of the range.", compareLabel: "vs the end of the previous period" },
+        { key: "cost_today", label: "Payroll cost today", unit: "money", value: money(sToday.gross), help: "Estimated wages earned today from recorded hours and pay rates." },
+        { key: "cost_week", label: "Payroll cost this week", unit: "money", value: money(sWeek.gross), help: "Estimated wages earned since the start of the week." },
+        { key: "cost_month", label: "Payroll cost this month", unit: "money", value: money(sMonth.gross), help: "Estimated wages earned since the 1st." },
+        { key: "cost_year", label: "Payroll cost this year", unit: "money", value: money(sYear.gross), help: "Estimated wages earned since 1 January." },
+        { key: "amount_paid", label: "Amount paid", unit: "money", value: money(paid), help: "Payments recorded with a payment date in this range." },
+        { key: "outstanding", label: "Still to pay", unit: "money", value: money(outstanding), help: "Approved payroll not yet paid, across all periods." },
+        { key: "average_rate", label: "Average hourly rate", unit: "rate", value: avgRate(sel.range.to), help: "The average base pay rate of your staff on the last day of the range." },
       );
     }
     const otherCurrencies = [...new Set(allEmployees.filter((e) => e.currency !== cur).map((e) => e.currency))];
@@ -302,8 +269,6 @@ export async function staffKpis(actor: StaffActor, input: { preset: RangePreset;
       timezone: tz,
       currency: pay ? cur : null,
       range: sel.range,
-      previous: sel.previous,
-      inProgress: sel.inProgress,
       kpis,
       notes: [
         ...(pay ? ["Costs are estimates of gross wages from recorded hours. They don't include tax or other employer costs."] : []),

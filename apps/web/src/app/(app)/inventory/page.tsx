@@ -167,7 +167,7 @@ function fmtKpi(id: InventoryKpi, v: number | null, currency: string) {
   return fmtNum(v);
 }
 
-/** One of the sixteen figures (components/PageKit.tsx FigureTile): its definition behind the "?", the change, before, notes and how current it is. */
+/** One of the sixteen figures (components/PageKit.tsx FigureTile): its definition behind the "?", its notes and how current it is. */
 function KpiTile({ id, kpi, currency, data, rangeLabel }: { id: InventoryKpi; kpi: Kpi | null; currency: string; data: OverviewAnswer; rangeLabel: string }) {
   const info = KPI_INFO[id];
   const mark = <DefinedMark definition={info.definition} />;

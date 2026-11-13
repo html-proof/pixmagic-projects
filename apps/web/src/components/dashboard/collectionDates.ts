@@ -1,14 +1,9 @@
-import type { DatePreset } from "@app/shared/dates";
-
 /**
  * The dashboard's dates as Sales by collection asks for them (GET …/analytics/collections/sales):
- * as the dashboard itself was asked (`preset`, in its answer), so the route works out the same days
- * on both sides. "This week" is compared with the same days of the week before and "Last month"
- * with the whole month before, which the same days written out as custom dates are not.
- *
- * Custom dates, and an answer that doesn't say how it was asked, go as the dates themselves.
+ * the days the dashboard's answer is for, so the panel never shows other days than the figures
+ * above it. (While the panel's answer also held the period before, it asked by the preset's name,
+ * so that period was worked out as the dashboard's own.)
  */
-export function collectionSalesParams(ov: { preset?: DatePreset; range: { from: string; to: string } }): URLSearchParams {
-  if (ov.preset && ov.preset !== "custom") return new URLSearchParams({ preset: ov.preset });
+export function collectionSalesParams(ov: { range: { from: string; to: string } }): URLSearchParams {
   return new URLSearchParams({ preset: "custom", from: ov.range.from, to: ov.range.to });
 }

@@ -277,15 +277,17 @@ describe("pay periods and reporting ranges", () => {
     expect(periodContaining("2026-10-14", "daily", "2026-01-01")).toEqual({ from: "2026-10-14", to: "2026-10-14" });
   });
 
-  it("compares running periods with the same elapsed span", () => {
-    expect(resolveRange("this_month", "2026-03-31", 1)).toEqual({
-      range: { from: "2026-03-01", to: "2026-03-31" },
-      previous: { from: "2026-02-01", to: "2026-02-28" },
-      inProgress: true,
-    });
-    expect(resolveRange("this_week", "2026-10-14", 1).previous).toEqual({ from: "2026-10-05", to: "2026-10-07" });
+  it("resolves reporting ranges, running ones up to today, and names no period before them", () => {
+    const month = resolveRange("this_month", "2026-03-31", 1);
+    expect(month).toEqual({ range: { from: "2026-03-01", to: "2026-03-31" } });
+    for (const k of ["previous", "inProgress"]) expect(month).not.toHaveProperty(k);
+    const week = resolveRange("this_week", "2026-10-14", 1);
+    expect(week.range).toEqual({ from: "2026-10-12", to: "2026-10-14" });
+    expect(week).not.toHaveProperty("previous");
     expect(resolveRange("last_year", "2026-10-14", 1).range).toEqual({ from: "2025-01-01", to: "2025-12-31" });
-    expect(resolveRange("custom", "2026-10-14", 1, { from: "2026-10-01", to: "2026-10-10" }).previous).toEqual({ from: "2026-09-21", to: "2026-09-30" });
+    const custom = resolveRange("custom", "2026-10-14", 1, { from: "2026-10-01", to: "2026-10-10" });
+    expect(custom.range).toEqual({ from: "2026-10-01", to: "2026-10-10" });
+    expect(custom).not.toHaveProperty("previous");
     expect(() => resolveRange("custom", "2026-10-14", 1, { from: "2026-10-10", to: "2026-10-01" })).toThrow();
   });
 

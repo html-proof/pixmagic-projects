@@ -12,7 +12,7 @@ const row = (id: string, name: string, spend: number, extra: Partial<GoogleRepor
 
 describe("the Google Ads report's CSV", () => {
   it("a split of the whole account: no object columns, the account's row on top", () => {
-    const t = googleReportTable({ level: "device", since: "2026-09-01", until: "2026-09-30", totals: g(30), rows: [row("MOBILE", "Phones", 20), row("DESKTOP", "Computers", 10)], truncated: false }, null, {}, { currency: "EUR", timezone: "Europe/Paris" });
+    const t = googleReportTable({ level: "device", since: "2026-09-01", until: "2026-09-30", totals: g(30), rows: [row("MOBILE", "Phones", 20), row("DESKTOP", "Computers", 10)], truncated: false }, {}, { currency: "EUR", timezone: "Europe/Paris" });
     expect(t.header).toEqual([
       "Device",
       "Google id",
@@ -36,7 +36,7 @@ describe("the Google Ads report's CSV", () => {
 
   it("an ad group's ads, cut short: what the top row adds up, each ad's type, and that only the biggest are listed", () => {
     const ads = [row("9", "Responsive search ad 9", 5, { campaignName: "Brand", adGroupName: "Core", adType: "RESPONSIVE_SEARCH_AD", status: "ENABLED" })];
-    const t = googleReportTable({ level: "ad", since: "2026-09-01", until: "2026-09-30", totals: g(8), rows: ads, truncated: true }, null, { campaign: "1", adGroup: "2" }, { currency: null, timezone: null });
+    const t = googleReportTable({ level: "ad", since: "2026-09-01", until: "2026-09-30", totals: g(8), rows: ads, truncated: true }, { campaign: "1", adGroup: "2" }, { currency: null, timezone: null });
     expect(t.header.slice(0, 7)).toEqual(["Ad", "Google id", "Campaign", "Ad group", "Status at Google now", "Ad type", "Spend"]);
     expect(t.rows[0]![0]).toBe("All ads in this ad group");
     expect(t.rows[1]!.slice(0, 6)).toEqual(["Responsive search ad 9", "9", "Brand", "Core", "ENABLED", "Responsive search ad"]);
@@ -45,7 +45,7 @@ describe("the Google Ads report's CSV", () => {
 
   it("keywords Google gives no Quality Score for say so; down from a campaign, what its own row has beyond them is search traffic without a keyword", () => {
     const kw = [row("2~5", "running shoes", 4, { matchType: "PHRASE", qualityScore: null, status: "ENABLED" })];
-    const t = googleReportTable({ level: "keyword", since: "2026-09-01", until: "2026-09-30", totals: g(9), rows: kw, truncated: false }, null, { campaign: "1" }, { currency: "AUD", timezone: null });
+    const t = googleReportTable({ level: "keyword", since: "2026-09-01", until: "2026-09-30", totals: g(9), rows: kw, truncated: false }, { campaign: "1" }, { currency: "AUD", timezone: null });
     expect(t.rows[0]![0]).toBe("Whole campaign");
     expect(t.rows[1]![t.header.indexOf("Quality Score now (1 to 10)")]).toBe("Not rated by Google");
     expect(t.rows[1]![t.header.indexOf("Match type")]).toBe("Phrase match");
@@ -54,13 +54,13 @@ describe("the Google Ads report's CSV", () => {
     // Not blamed on campaign types an opened Search campaign can't be.
     expect(notes.join(" ")).not.toContain("(Shopping, Performance Max, Display, YouTube)");
     // The whole account's keywords: there, other campaign types are what has no keyword.
-    const account = googleReportTable({ level: "keyword", since: "2026-09-01", until: "2026-09-30", totals: g(9), rows: kw, truncated: false }, null, {}, { currency: "AUD", timezone: null });
+    const account = googleReportTable({ level: "keyword", since: "2026-09-01", until: "2026-09-30", totals: g(9), rows: kw, truncated: false }, {}, { currency: "AUD", timezone: null });
     expect(account.rows.map((r) => r[1]).join(" ")).toContain("(Shopping, Performance Max, Display, YouTube)");
   });
 
   it("the demo's file says it is simulated first, and calls none of its figures or facts Google's", () => {
     const kw = [row("2~5", "running shoes", 4, { matchType: "PHRASE", qualityScore: null, status: "ENABLED" })];
-    const t = googleReportTable({ level: "keyword", since: "2026-09-01", until: "2026-09-30", totals: g(9), rows: kw, truncated: false }, null, { campaign: "1" }, { currency: "AUD", timezone: null, demo: true });
+    const t = googleReportTable({ level: "keyword", since: "2026-09-01", until: "2026-09-30", totals: g(9), rows: kw, truncated: false }, { campaign: "1" }, { currency: "AUD", timezone: null, demo: true });
     expect(t.rows[0]![0]).toBe("Simulated data");
     expect(t.rows[1]![0]).toBe("Whole campaign");
     expect(t.header).toContain("Conversions (simulated, all conversion actions)");
@@ -74,22 +74,22 @@ describe("the Google Ads report's CSV", () => {
 
   it("dates reaching today say their figures are still coming in, as the page does; past dates don't", () => {
     const report = (until: string) => ({ level: "campaign" as const, since: "2026-10-01", until, totals: g(9), rows: [row("7", "Brand", 9)], truncated: false });
-    const notes = (until: string, today?: string) => googleReportTable(report(until), null, {}, { currency: "USD", timezone: "UTC", today }).rows.filter((r) => r[0] === "Note").map((r) => r[1]);
+    const notes = (until: string, today?: string) => googleReportTable(report(until), {}, { currency: "USD", timezone: "UTC", today }).rows.filter((r) => r[0] === "Note").map((r) => r[1]);
     expect(notes("2026-10-30", "2026-10-30")).toContainEqual(expect.stringMatching(/^Today's numbers are still coming in: Google/));
     expect(notes("2026-10-29", "2026-10-30").join(" ")).not.toContain("still coming in");
     expect(notes("2026-10-30").join(" ")).not.toContain("still coming in");
   });
 
   it("down from a campaign with no ad groups listed: what Google reported, never that the campaign didn't run", () => {
-    const t = googleReportTable({ level: "ad_group", since: "2026-09-01", until: "2026-09-30", totals: g(0), rows: [], truncated: false }, null, { campaign: "7" }, { currency: "USD", timezone: null });
+    const t = googleReportTable({ level: "ad_group", since: "2026-09-01", until: "2026-09-30", totals: g(0), rows: [], truncated: false }, { campaign: "7" }, { currency: "USD", timezone: null });
     const notes = t.rows.filter((r) => r[0] === "Note").map((r) => r[1]);
     expect(notes).toContain("Google reported no ad groups with any activity in this campaign for these dates.");
     expect(notes.join(" ")).not.toContain("shown to anyone");
     // The whole account's top row is its own: nothing there is nothing shown.
-    const none = googleReportTable({ level: "ad_group", since: "2026-09-01", until: "2026-09-30", totals: { ...g(0), impressions: 0 }, rows: [], truncated: false }, null, {}, { currency: "USD", timezone: null });
+    const none = googleReportTable({ level: "ad_group", since: "2026-09-01", until: "2026-09-30", totals: { ...g(0), impressions: 0 }, rows: [], truncated: false }, {}, { currency: "USD", timezone: null });
     expect(none.rows.map((r) => r[1])).toContain("Nothing in this ad account was shown to anyone in these dates.");
     // ...and an account that ran with no ad group listed says where its spend is.
-    const pmax = googleReportTable({ level: "ad_group", since: "2026-09-01", until: "2026-09-30", totals: g(30), rows: [], truncated: false }, null, {}, { currency: "USD", timezone: null });
+    const pmax = googleReportTable({ level: "ad_group", since: "2026-09-01", until: "2026-09-30", totals: g(30), rows: [], truncated: false }, {}, { currency: "USD", timezone: null });
     expect(pmax.rows.map((r) => r[1]).join(" ")).toContain("Performance Max campaigns have no ad groups");
   });
 });
@@ -107,7 +107,7 @@ describe("the Meta Ads report's CSV", () => {
       attribution: [],
       campaigns: null,
     };
-    const t = metaReportTable(report, null, {}, { currency: "USD", timezone: "UTC" });
+    const t = metaReportTable(report, {}, { currency: "USD", timezone: "UTC" });
     expect(t.header.slice(0, 4)).toEqual(["Age group", "Meta id", "Attribution setting", "Spend (USD)"]);
     expect(t.rows[0]!.slice(0, 7)).toEqual(["Whole ad account", null, null, 10, 500, "Not reported", "Not reported"]);
     // An answer without the windows (cached before they were read) has none of their figures: Not reported, never 0.
@@ -115,7 +115,7 @@ describe("the Meta Ads report's CSV", () => {
     expect(t.rows[1]![t.header.indexOf("Purchases (Meta's count, each ad set's own setting)")]).toBe(1);
     // Dates reaching the ad account's today: still coming in, as the page says.
     expect(t.rows.map((r) => r[1]).join(" ")).not.toContain("still coming in");
-    const live = metaReportTable({ ...report, until: "2026-10-30" }, null, {}, { currency: "USD", timezone: "UTC", today: "2026-10-30" });
+    const live = metaReportTable({ ...report, until: "2026-10-30" }, {}, { currency: "USD", timezone: "UTC", today: "2026-10-30" });
     expect(live.rows.filter((r) => r[0] === "Note").map((r) => r[1])).toContainEqual(expect.stringMatching(/^Today's numbers are still coming in: Meta/));
   });
 });
@@ -126,10 +126,9 @@ describe("the Google Ads analytics page's CSV", () => {
     ({
       account: { id: "c1", accountId: "123", name: "Shop", currency: "USD", timezone: "UTC", demo: false },
       range: { from: "2026-09-28", to: "2026-10-11" },
-      previous: { from: "2026-09-14", to: "2026-09-27" },
       today: "2026-10-30",
       coverage,
-      overview: { current: { ...zero, spend: 50 }, previous: null, deltas: {} },
+      overview: { current: { ...zero, spend: 50 } },
       series: {
         day: [],
         week: [

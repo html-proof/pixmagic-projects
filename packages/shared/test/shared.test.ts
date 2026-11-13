@@ -6,13 +6,10 @@ import {
   can,
   channelLabel,
   ALL_HISTORY,
-  adsHistoryStart,
   clampCustomRange,
-  comparisonImported,
   customRangeProblem,
   decrypt,
   eachDay,
-  delta,
   encrypt,
   expandScopes,
   firstWholeDay,
@@ -238,42 +235,42 @@ describe("dates & time zones", () => {
     expect(localDay(t, "Australia/Sydney")).toBe("2026-03-01");
   });
 
-  it("resolves presets with previous period of equal length", () => {
+  it("resolves presets to their dates, and to nothing else", () => {
     const now = new Date("2026-10-02T12:00:00Z");
-    const { range, previous } = resolvePreset("7d", now, "UTC");
-    expect(range).toEqual({ from: "2026-09-26", to: "2026-10-02" });
-    expect(previous).toEqual({ from: "2026-09-19", to: "2026-09-25", until: "12:00:00" });
+    const resolved = resolvePreset("7d", now, "UTC");
+    expect(resolved.range).toEqual({ from: "2026-09-26", to: "2026-10-02" });
+    // The dates asked about and, while they run, the time of day: no period before them.
+    expect(resolved).toEqual({ range: { from: "2026-09-26", to: "2026-10-02" }, until: "12:00:00" });
+    expect(resolved).not.toHaveProperty("previous");
     expect(resolvePreset("mtd", now, "UTC").range.from).toBe("2026-10-01");
     expect(() => resolvePreset("custom", now, "UTC", { from: "2026-10-02", to: "2026-10-01" })).toThrow();
   });
 
-  it("compares a range that is still running up to the same time of day, as Shopify does", () => {
+  it("says the time of day while a range is still running, and nothing once it is over", () => {
     // 17 Oct, 4:44:12 pm in Melbourne (AEDT, UTC+11).
     const now = new Date("2026-10-17T05:44:12Z");
     const tz = "Australia/Melbourne";
     expect(localTime(now, tz)).toBe("16:44:12");
-    // Today so far against yesterday until the same moment, not the whole of yesterday.
-    expect(resolvePreset("today", now, tz)).toEqual({ range: { from: "2026-10-17", to: "2026-10-17" }, previous: { from: "2026-10-16", to: "2026-10-16", until: "16:44:12" } });
-    expect(resolvePreset("7d", now, tz).previous).toEqual({ from: "2026-10-04", to: "2026-10-10", until: "16:44:12" });
+    // Today so far: what is checked against Shopify's own figures is counted up to this moment.
+    expect(resolvePreset("today", now, tz)).toEqual({ range: { from: "2026-10-17", to: "2026-10-17" }, until: "16:44:12" });
+    expect(resolvePreset("7d", now, tz).until).toBe("16:44:12");
     // A custom range ending today runs too; one that ended earlier doesn't.
-    expect(resolvePreset("custom", now, tz, { from: "2026-10-15", to: "2026-10-31" }).previous.until).toBe("16:44:12");
-    expect(resolvePreset("custom", now, tz, { from: "2026-10-01", to: "2026-10-16" }).previous.until).toBeUndefined();
-    // Finished days are compared whole.
-    for (const preset of ["yesterday", "lastmonth"] as const) expect(resolvePreset(preset, now, tz).previous.until, preset).toBeUndefined();
-    // Just after midnight: a few seconds of yesterday, on a 24-hour clock ("00", never "24").
-    expect(resolvePreset("today", new Date("2026-10-16T13:00:05Z"), tz).previous).toEqual({ from: "2026-10-16", to: "2026-10-16", until: "00:00:05" });
+    expect(resolvePreset("custom", now, tz, { from: "2026-10-15", to: "2026-10-31" }).until).toBe("16:44:12");
+    expect(resolvePreset("custom", now, tz, { from: "2026-10-01", to: "2026-10-16" }).until).toBeUndefined();
+    // Finished days are whole.
+    for (const preset of ["yesterday", "lastmonth"] as const) expect(resolvePreset(preset, now, tz).until, preset).toBeUndefined();
+    // Just after midnight: a few seconds of the day, on a 24-hour clock ("00", never "24").
+    expect(resolvePreset("today", new Date("2026-10-16T13:00:05Z"), tz)).toEqual({ range: { from: "2026-10-17", to: "2026-10-17" }, until: "00:00:05" });
   });
 
-  it("resolves last month as the whole calendar month, against the whole month before it", () => {
+  it("resolves last month as the whole calendar month", () => {
     expect(resolvePreset("lastmonth", new Date("2026-10-02T12:00:00Z"), "UTC")).toEqual({
       range: { from: "2026-09-01", to: "2026-09-30" },
-      previous: { from: "2026-08-01", to: "2026-08-31" },
     });
-    // January looks back across the year; March compares with a short February.
+    // January looks back across the year.
     expect(resolvePreset("lastmonth", new Date("2026-01-15T12:00:00Z"), "UTC").range).toEqual({ from: "2025-12-01", to: "2025-12-31" });
     expect(resolvePreset("lastmonth", new Date("2026-04-01T12:00:00Z"), "UTC")).toEqual({
       range: { from: "2026-03-01", to: "2026-03-31" },
-      previous: { from: "2026-02-01", to: "2026-02-28" },
     });
     // The store's own calendar: 1 Nov in Sydney is still October in UTC.
     expect(resolvePreset("lastmonth", new Date("2026-10-31T20:00:00Z"), "Australia/Sydney").range).toEqual({ from: "2026-10-01", to: "2026-10-31" });
@@ -284,13 +281,13 @@ describe("dates & time zones", () => {
     const now = new Date("2026-10-29T05:44:12Z");
     const tz = "Australia/Melbourne";
     expect(WEEK_STARTS_ON).toBe(1);
-    // This week so far, against the same weekdays of the week before, up to the same time of day.
-    expect(resolvePreset("wtd", now, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-29" }, previous: { from: "2026-10-19", to: "2026-10-22", until: "16:44:12" } });
-    // Last week is over: the whole week, against the whole week before it.
-    expect(resolvePreset("lastweek", now, tz)).toEqual({ range: { from: "2026-10-19", to: "2026-10-25" }, previous: { from: "2026-10-12", to: "2026-10-18" } });
+    // This week so far.
+    expect(resolvePreset("wtd", now, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-29" }, until: "16:44:12" });
+    // Last week is over: the whole week.
+    expect(resolvePreset("lastweek", now, tz)).toEqual({ range: { from: "2026-10-19", to: "2026-10-25" } });
     // On a Monday, this week is that one day, and last week is the Monday-to-Sunday just ended.
     const monday = new Date("2026-10-26T01:00:00Z");
-    expect(resolvePreset("wtd", monday, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-26" }, previous: { from: "2026-10-19", to: "2026-10-19", until: "12:00:00" } });
+    expect(resolvePreset("wtd", monday, tz)).toEqual({ range: { from: "2026-10-26", to: "2026-10-26" }, until: "12:00:00" });
     expect(resolvePreset("lastweek", monday, tz).range).toEqual({ from: "2026-10-19", to: "2026-10-25" });
     // On a Sunday, still the week that began on the Monday before; across a year's end too.
     expect(resolvePreset("wtd", new Date("2026-11-01T01:00:00Z"), tz).range).toEqual({ from: "2026-10-26", to: "2026-11-01" });
@@ -300,12 +297,12 @@ describe("dates & time zones", () => {
     expect(resolvePreset("wtd", new Date("2026-10-25T20:00:00Z"), "UTC").range).toEqual({ from: "2026-10-19", to: "2026-10-25" });
   });
 
-  it("resolves this year from 1 January, and last year as the whole calendar year against the year before it", () => {
+  it("resolves this year from 1 January, and last year as the whole calendar year", () => {
     const now = new Date("2026-10-22T12:00:00Z");
-    // This year so far, against as many days just before it, up to the same time of day.
-    expect(resolvePreset("ytd", now, "UTC")).toEqual({ range: { from: "2026-01-01", to: "2026-10-22" }, previous: { from: "2025-03-12", to: "2025-12-31", until: "12:00:00" } });
-    // A whole year is over: compared whole, with the whole year before, leap years included.
-    expect(resolvePreset("lastyear", now, "UTC")).toEqual({ range: { from: "2025-01-01", to: "2025-12-31" }, previous: { from: "2024-01-01", to: "2024-12-31" } });
+    // This year so far.
+    expect(resolvePreset("ytd", now, "UTC")).toEqual({ range: { from: "2026-01-01", to: "2026-10-22" }, until: "12:00:00" });
+    // A whole year is over.
+    expect(resolvePreset("lastyear", now, "UTC")).toEqual({ range: { from: "2025-01-01", to: "2025-12-31" } });
     expect(resolvePreset("lastyear", new Date("2029-02-01T12:00:00Z"), "UTC").range).toEqual({ from: "2028-01-01", to: "2028-12-31" });
     // The store's own calendar: 1 Jan in Sydney is still December in UTC.
     expect(resolvePreset("ytd", new Date("2026-12-31T20:00:00Z"), "Australia/Sydney").range).toEqual({ from: "2027-01-01", to: "2027-01-01" });
@@ -314,7 +311,7 @@ describe("dates & time zones", () => {
   it("only treats a finished, in-order custom range as one to report on", () => {
     const now = new Date("2026-10-02T12:00:00Z");
     expect(customRangeProblem({ from: "2026-09-01", to: "2026-09-15" })).toBeNull();
-    expect(resolvePreset("custom", now, "UTC", { from: "2026-09-01", to: "2026-09-15" }).previous).toEqual({ from: "2026-08-17", to: "2026-08-31" });
+    expect(resolvePreset("custom", now, "UTC", { from: "2026-09-01", to: "2026-09-15" })).toEqual({ range: { from: "2026-09-01", to: "2026-09-15" } });
     expect(customRangeProblem({ from: "2026-09-01", to: "" })).toBe("incomplete");
     expect(customRangeProblem({})).toBe("incomplete");
     // What Chrome reports while "2026" is typed into the year, one digit at a time.
@@ -352,12 +349,12 @@ describe("dates & time zones", () => {
     const today = localDay(now, sydney);
     expect(today).toBe("2026-10-09");
 
-    // 1–31 Oct is reported as 1–9 Oct and compared with the 9 days before, not with 31.
+    // 1–31 Oct is reported as 1–9 Oct.
     expect(customRangeProblem({ from: "2026-10-01", to: "2026-10-31" }, today)).toBeNull();
-    // The 9th is still running (01:00), so the 30th counts up to 01:00.
+    // The 9th is still running (01:00).
     expect(resolvePreset("custom", now, sydney, { from: "2026-10-01", to: "2026-10-31" })).toEqual({
       range: { from: "2026-10-01", to: "2026-10-09" },
-      previous: { from: "2026-09-22", to: "2026-09-30", until: "01:00:00" },
+      until: "01:00:00",
     });
     expect(clampCustomRange({ from: "2026-10-01", to: "2026-10-05" }, today)).toEqual({ from: "2026-10-01", to: "2026-10-05" });
 
@@ -375,30 +372,11 @@ describe("dates & time zones", () => {
   });
 });
 
-describe("what the dates are compared with", () => {
-  // 17 Oct 2026, 4:44:12 pm in Melbourne (AEDT, UTC+11).
-  const now = new Date("2026-10-17T05:44:12Z");
-  const tz = "Australia/Melbourne";
-
-  it("compares with the period just before, whatever the dates", () => {
-    expect(resolvePreset("30d", now, tz).previous).toEqual({ from: "2026-08-19", to: "2026-09-17", until: "16:44:12" });
-    expect(resolvePreset("mtd", now, tz).previous).toEqual({ from: "2026-09-14", to: "2026-09-30", until: "16:44:12" });
-    expect(resolvePreset("lastmonth", now, tz).previous).toEqual({ from: "2026-08-01", to: "2026-08-31" });
-    expect(resolvePreset("custom", now, tz, { from: "2026-03-01", to: "2026-03-14" }).previous).toEqual({ from: "2026-02-15", to: "2026-02-28" });
-  });
-
+describe("where a store's figures start", () => {
   it("maps 29 February to the 28th a year earlier", () => {
     expect(yearEarlier("2028-02-29")).toBe("2027-02-28");
     expect(yearEarlier("2028-03-01")).toBe("2027-03-01");
     expect(yearEarlier("2029-02-28")).toBe("2028-02-28");
-  });
-
-  it("knows when the imported orders don't reach back to the comparison", () => {
-    expect(comparisonImported({ from: "2026-08-18", to: "2026-09-16" }, "2026-08-18")).toBe(true);
-    // Partly before the first imported order: a period mostly missing, not a drop.
-    expect(comparisonImported({ from: "2026-08-17", to: "2026-09-16" }, "2026-08-18")).toBe(false);
-    expect(comparisonImported({ from: "2025-10-17", to: "2025-10-17" }, "2026-08-18")).toBe(false);
-    expect(comparisonImported({ from: "2026-10-16", to: "2026-10-16" }, null)).toBe(false);
   });
 
   it("starts the imported history where the import window did, not at a quiet store's first order", () => {
@@ -408,12 +386,6 @@ describe("what the dates are compared with", () => {
     const window = new Date("2026-08-18T00:00:00Z");
     // A quiet store: its first order came on 25 Aug, but 19 to 24 Aug were imported too (no orders).
     expect(historyStart(window, tz, "2026-08-25")).toBe("2026-08-19");
-    const lastThirty = { from: "2026-08-19", to: "2026-09-17" };
-    expect(comparisonImported(lastThirty, historyStart(window, tz, "2026-08-25"))).toBe(true);
-    // What the first order alone used to say about the same comparison.
-    expect(comparisonImported(lastThirty, "2026-08-25")).toBe(false);
-    // Still not before the window: that is what Shopify didn't share.
-    expect(comparisonImported({ from: "2026-08-18", to: "2026-09-16" }, historyStart(window, tz, "2026-08-25"))).toBe(false);
     // A window from the store's midnight covers that whole day.
     expect(historyStart(new Date("2026-08-18T14:00:00Z"), tz, null)).toBe("2026-08-19");
     expect(historyStart(new Date("2026-08-18T14:00:01Z"), tz, null)).toBe("2026-08-20");
@@ -424,9 +396,8 @@ describe("what the dates are compared with", () => {
     expect(historyStart(null, tz, null)).toBeNull();
     // Imported, no orders at all: the window is still known, and its days hold no sales.
     expect(historyStart(window, tz, null)).toBe("2026-08-19");
-    // read_all_orders: the whole history, so no comparison is "before the import".
+    // read_all_orders: the whole history, so no day is "before the import".
     expect(historyStart(new Date(0), tz, "2026-08-25")).toBe(ALL_HISTORY);
-    expect(comparisonImported({ from: "2019-01-01", to: "2019-01-31" }, historyStart(new Date(0), tz, "2026-08-25"))).toBe(true);
   });
 
   it("counts store visits from the first whole day after the pixel was put in place", () => {
@@ -445,22 +416,8 @@ describe("what the dates are compared with", () => {
     // No install recorded: the first visit's day.
     expect(visitsHistoryStart(null, tz, "2026-08-25")).toBe("2026-08-25");
     expect(visitsHistoryStart(null, tz, null)).toBeNull();
-    // The last 30 days on 17 Oct reach back before a pixel added at noon on 1 Oct: not compared.
-    const added = visitsHistoryStart(new Date("2026-10-01T02:00:00Z"), tz, "2026-10-01");
-    expect(added).toBe("2026-10-02");
-    expect(comparisonImported({ from: "2026-09-17", to: "2026-10-16" }, added)).toBe(false);
-    expect(comparisonImported({ from: "2026-10-02", to: "2026-10-09" }, added)).toBe(true);
-  });
-
-  it("compares ad figures from the latest start among the accounts counted", () => {
-    // Two accounts connected two months apart: only from the later one's start are both in.
-    expect(adsHistoryStart(["2026-05-01", "2026-07-20"])).toBe("2026-07-20");
-    expect(adsHistoryStart(["2026-07-20", "2026-05-01"])).toBe("2026-07-20");
-    // One not synced yet holds no figures, so it changes neither period: left out.
-    expect(adsHistoryStart(["2026-05-01", null])).toBe("2026-05-01");
-    expect(adsHistoryStart([null])).toBeNull();
-    expect(adsHistoryStart([])).toBeNull();
-    expect(comparisonImported({ from: "2026-07-19", to: "2026-08-17" }, adsHistoryStart(["2026-05-01", "2026-07-20"]))).toBe(false);
+    // A pixel added at noon on 1 Oct counts whole days from the 2nd.
+    expect(visitsHistoryStart(new Date("2026-10-01T02:00:00Z"), tz, "2026-10-01")).toBe("2026-10-02");
   });
 });
 
@@ -657,7 +614,5 @@ describe("KPIs", () => {
     expect(s.averageOrderValue).toBeNull();
     expect(s.refundRate).toBeNull();
     expect(summarizeJourney([], []).conversionRate).toBeNull();
-    expect(delta(10, 0)).toBeNull();
-    expect(delta(15, 10)).toBe(0.5);
   });
 });

@@ -8,10 +8,6 @@ import { fmtNum, fmtPct } from "@/lib/api";
 import { FunnelSection, segmentLabel } from "./FunnelUi";
 import { STAGES } from "./stageGuide";
 
-/** The observations the page words: where most visits stop, and a segment or a product against the others. */
-type ShownInsight = Extract<FunnelInsight, { kind: "largest_drop" | "segment_gap" | "product_interest" }>;
-const isShown = (i: FunnelInsight): i is ShownInsight => i.kind === "largest_drop" || i.kind === "segment_gap" || i.kind === "product_interest";
-
 interface Worded {
   title: string;
   /** The measured difference, with the figures behind it. */
@@ -27,7 +23,7 @@ interface Worded {
 const name = (s: FunnelStep) => `“${STAGES[s].name}”`;
 
 /** One observation in words. Measured differences only: the reasons are offered as things to check. */
-function word(i: ShownInsight): Worded {
+function word(i: FunnelInsight): Worded {
   switch (i.kind) {
     case "largest_drop":
       return {
@@ -71,7 +67,7 @@ const TONE: Record<FunnelInsight["tone"], { label: string; Icon: typeof Info; cl
 
 /** "Shopping Funnel Insights": what stands out, by how much, over which dates, why it may matter and what to do, each only where the numbers support it. */
 export function FunnelInsights({ f, period, onOpen }: { f: FunnelPageModule; period: ReactNode; onOpen: (step: FunnelStep) => void }) {
-  const insights = f.insights.filter(isShown);
+  const insights = f.insights;
   const go = (link: Worded["link"]) => {
     if (link.step) onOpen(link.step);
     else if (link.anchor) document.getElementById(link.anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });

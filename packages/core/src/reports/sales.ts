@@ -1,5 +1,5 @@
-import { Prisma, toNumber, type Tx } from "@app/db";
-import { addDays, eachDay, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
+import { toNumber, type Tx } from "@app/db";
+import { addDays, eachDay, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { dayTotals } from "../persist.js";
 import { localMoment, r2, type Scope } from "./common.js";
 
@@ -30,12 +30,12 @@ export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r:
 }
 
 /**
- * The day rows of the period a range is compared with. A comparison that stops at a time of day
- * (`until`: the range picked is still running) has its last day worked out from the orders and
- * sales placed before that moment, by the same query that fills daily_store_metrics, whose rows
- * only ever hold whole days.
+ * The day rows of dates that may stop at a time of day (`until`: the range picked is still running,
+ * and is checked against Shopify's own figures up to that moment). Their last day is then worked
+ * out from the orders and sales placed before that moment, by the same query that fills
+ * daily_store_metrics, whose rows only ever hold whole days.
  */
-export async function comparisonRows(tx: Tx, workspaceId: string, storeId: string, c: Comparison, timeZone: string): Promise<DailyMetricsRow[]> {
+export async function dailyRowsUntil(tx: Tx, workspaceId: string, storeId: string, c: DateRange & { until?: string }, timeZone: string): Promise<DailyMetricsRow[]> {
   if (!c.until) return dailyRows(tx, workspaceId, storeId, c);
   const whole = c.from < c.to ? await dailyRows(tx, workspaceId, storeId, { from: c.from, to: addDays(c.to, -1) }) : [];
   type Column =
@@ -88,13 +88,9 @@ export async function comparisonRows(tx: Tx, workspaceId: string, storeId: strin
  * already held one (`orders.is_returning_customer`, settled from Shopify's own position of the
  * order), `firstTime` those with their very first purchase in the range; a customer who bought
  * for the first time and again in the same range is in both. The rate is returning ÷ customers
- * (Shopify's "returning customer rate"), null without customers. With `until` (a comparison that
- * stops at a time of day) the last day counts only the orders placed before that moment.
+ * (Shopify's "returning customer rate"), null without customers.
  */
-export async function customerCounts(tx: Tx, { ws, storeId }: Scope, r: DateRange & { until?: string | null }, timeZone: string) {
-  const cut = r.until
-    ? Prisma.sql`AND (local_day < ${r.to} OR COALESCE(shopify_processed_at, shopify_created_at) < ${localMoment(r.to, r.until, timeZone)})`
-    : Prisma.empty;
+export async function customerCounts(tx: Tx, { ws, storeId }: Scope, r: DateRange) {
   // A customer who bought only gift cards isn't one of Shopify's customers for the range.
   const [row] = await tx.$queryRaw<Array<{ customers: number; returning: number; first_time: number }>>`
     SELECT COUNT(DISTINCT customer_key)::int AS customers,
@@ -102,7 +98,7 @@ export async function customerCounts(tx: Tx, { ws, storeId }: Scope, r: DateRang
            (COUNT(DISTINCT customer_key) FILTER (WHERE NOT is_returning_customer))::int AS first_time
     FROM orders
     WHERE workspace_id = ${ws} AND store_id = ${storeId} AND customer_key IS NOT NULL AND NOT gift_card_only
-      AND local_day BETWEEN ${r.from} AND ${r.to} ${cut}`;
+      AND local_day BETWEEN ${r.from} AND ${r.to}`;
   const customers = row?.customers ?? 0;
   const returning = row?.returning ?? 0;
   return { customers, returningCustomers: returning, newCustomers: row?.first_time ?? 0, returningCustomerRate: customers > 0 ? returning / customers : null };

@@ -1,6 +1,5 @@
 import type { Store, Tx } from "@app/db";
 import {
-  addDays,
   autoStatementGrain,
   eachDay,
   expenseTotals,
@@ -13,7 +12,6 @@ import {
   resolveCapabilities,
   statementPeriods,
   STATEMENT_GRAINS,
-  type Comparison,
   type DateRange,
   type ProfitDay,
   type ProfitSetup,
@@ -67,10 +65,8 @@ async function profitInputs(tx: Tx, store: Store, span: DateRange, now: Date, se
     dailyRows(tx, scope.ws, scope.storeId, span),
     expenseTerms(tx, scope),
     sees.productCosts && productsShared ? productCostsByDay(tx, scope, span) : null,
-    // Spend only, whole days; nothing is compared, so the comparison is the day before.
-    ...adRanges.map((r) =>
-      sees.ads ? adsModule(tx, scope, r, { from: addDays(r.from, -1), to: addDays(r.from, -1) }, store.currency, null, { timeZone: store.timezone, now }) : Promise.resolve(null as AdsAnswer),
-    ),
+    // Spend only, whole days.
+    ...adRanges.map((r) => (sees.ads ? adsModule(tx, scope, r, store.currency, null, { timeZone: store.timezone, now }) : Promise.resolve(null as AdsAnswer))),
   ]);
 
   // Ad spend is set against the store's sales only as the dashboard does: in its currency, no account
@@ -206,25 +202,19 @@ function fittingGrain(range: DateRange, grain: StatementGrain): StatementGrain {
 
 /**
  * The Profit & Loss page's statement (docs/kpis.md "Profit and loss"), laid out as the owner's own
- * workbook is: the dates picked as a whole and the dates they're compared with, a column per day,
- * week, month or year (`grain`, or one that fits the dates; never more than MAX_STATEMENT_COLUMNS),
- * each day's figures for the trend, and the owner's costs in the dates a line each (expenseLines).
- * Every figure is `profitAndLoss`'s, from `profitInputs`: nothing is estimated, and a figure an input
- * is missing for is null with its reasons. The comparison is whole days (a running day is compared
- * whole, not up to the same time of day).
+ * workbook is: the dates picked as a whole, a column per day, week, month or year (`grain`, or one
+ * that fits the dates; never more than MAX_STATEMENT_COLUMNS), each day's figures for the trend, and
+ * the owner's costs in the dates a line each (expenseLines). Every figure is `profitAndLoss`'s, from
+ * `profitInputs`: nothing is estimated, and a figure an input is missing for is null with its reasons.
  */
-export async function profitStatement(tx: Tx, store: Store, dates: { range: DateRange; previous: Comparison }, now: Date, sees: ProfitSees, grain?: StatementGrain | null) {
+export async function profitStatement(tx: Tx, store: Store, range: DateRange, now: Date, sees: ProfitSees, grain?: StatementGrain | null) {
   const today = localDay(now, store.timezone);
-  const range = dates.range;
-  const previous = { from: dates.previous.from, to: dates.previous.to };
-  const span = { from: previous.from < range.from ? previous.from : range.from, to: previous.to > range.to ? previous.to : range.to };
   const [inputs, lines] = await Promise.all([
-    profitInputs(tx, store, span, now, sees, [range, previous]),
+    profitInputs(tx, store, range, now, sees, [range]),
     expenseLines(tx, { ws: store.workspaceId, storeId: store.id }, range, today),
   ]);
   const { data, days, costs, ads, states, setupOf, providers } = inputs;
   const setup = setupOf(states[0]!);
-  const before = setupOf(states[1]!);
   const within = (r: DateRange) => days.filter((d) => d.day >= r.from && d.day <= r.to);
   const g = fittingGrain(range, grain ?? autoStatementGrain(range));
   const shown = within(range);
@@ -233,7 +223,6 @@ export async function profitStatement(tx: Tx, store: Store, dates: { range: Date
     timezone: store.timezone,
     today,
     range,
-    previous,
     grain: g,
     /** The store's first day (the earliest dates the page offers), and the first with every order imported. */
     firstDay: data.startDay,
@@ -251,7 +240,6 @@ export async function profitStatement(tx: Tx, store: Store, dates: { range: Date
     /** The store's own categories, for their names. */
     categories: costs.categories,
     total: profitAndLoss(shown, setup),
-    compare: profitAndLoss(within(previous), before),
     columns: statementPeriods(range, g).map((p) => ({ key: p.key, ...profitAndLoss(within(p), setup) })),
     /** Each day's sales, costs and profit, for the trend. */
     daily: shown.map((d) => {

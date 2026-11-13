@@ -227,7 +227,7 @@ export function adsGoogleDemoRoutes(app: App, deps: Deps) {
     // Days in the ad account's own time zone: that is what its figures are stored by.
     const dates = resolveQueryDates(query, now, conn.timezone || "UTC");
     const campaigns = allows(access.access, "marketing.campaigns");
-    const analytics: GoogleAdsAnalytics = await withTenant(ws, (tx) => googleAdsAnalytics(tx, conn, dates.range, dates.previous, { now, campaigns }));
+    const analytics: GoogleAdsAnalytics = await withTenant(ws, (tx) => googleAdsAnalytics(tx, conn, dates.range, { now, campaigns }));
     return { conn, campaigns, analytics, q: query };
   }
 
@@ -304,7 +304,7 @@ export function adsGoogleDemoRoutes(app: App, deps: Deps) {
   for (const path of paths("/overview")) {
     app.get(path, async (c) => {
       const { analytics: x } = await asked(c, parse(c));
-      return c.json({ account: x.account, range: x.range, previous: x.previous, today: x.today, coverage: x.coverage, disclaimer: x.disclaimer, overview: x.overview, series: x.series });
+      return c.json({ account: x.account, range: x.range, today: x.today, coverage: x.coverage, disclaimer: x.disclaimer, overview: x.overview, series: x.series });
     });
   }
   for (const path of paths("/campaigns")) {

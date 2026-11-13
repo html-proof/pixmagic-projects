@@ -81,7 +81,6 @@ import {
   daysBetweenInclusive,
   GOOGLE_REPORT_LEVELS,
   googleParentFits,
-  googleReportMetrics,
   isAdAccountStatus,
   isAdErrorCode,
   isDay,
@@ -92,7 +91,6 @@ import {
   MAX_CUSTOM_DAYS,
   META_REPORT_VIEWS,
   metaParentFits,
-  metaReportMetrics,
   randomToken,
   safeEqual,
   sha256Hex,
@@ -499,14 +497,14 @@ function reportFailure(err: unknown, provider: AdProvider, connectionId: string)
 
 const day = z.string().refine(isDay, "must be a YYYY-MM-DD day");
 
-/** A report's dates, and the optional comparison's (cfrom, cto): each a real range of up to a year. */
+/**
+ * A report's dates: a real range of up to a year. A link that still names dates to compare with
+ * (`cfrom`, `cto`, from while a report could be compared) is answered as if it didn't.
+ */
 const reportDates = z
-  .object({ connection: z.string().min(1).max(64), from: day, to: day, cfrom: day.optional(), cto: day.optional() })
+  .object({ connection: z.string().min(1).max(64), from: day, to: day })
   .refine((v) => v.from <= v.to, "from is after to")
-  .refine((v) => daysBetweenInclusive(v.from, v.to) <= MAX_CUSTOM_DAYS, "Pick up to a year at a time")
-  .refine((v) => (v.cfrom === undefined) === (v.cto === undefined), "cfrom and cto go together")
-  .refine((v) => !v.cfrom || !v.cto || v.cfrom <= v.cto, "cfrom is after cto")
-  .refine((v) => !v.cfrom || !v.cto || daysBetweenInclusive(v.cfrom, v.cto) <= MAX_CUSTOM_DAYS, "Compare up to a year at a time");
+  .refine((v) => daysBetweenInclusive(v.from, v.to) <= MAX_CUSTOM_DAYS, "Pick up to a year at a time");
 
 /**
  * A drill-down's ids in a report's query: Meta's campaign and ad set ids (digits); Google Ads' campaign
@@ -522,19 +520,13 @@ const parentKey = (...ids: Array<string | undefined>) => ids.map((id) => id ?? "
 interface ReportRange {
   from: string;
   to: string;
-  /** The comparison's: read for its figures only (Meta: no delivery statuses), so cached apart from a report of the same dates. */
-  compare?: boolean;
 }
 
-/** The ranges a report request asks for: its own, then the comparison's when there is one. */
-const rangesOf = (q: { from: string; to: string; cfrom?: string; cto?: string }): ReportRange[] => [
-  { from: q.from, to: q.to },
-  ...(q.cfrom && q.cto ? [{ from: q.cfrom, to: q.cto, compare: true }] : []),
-];
+/** The range a report request asks for. */
+const rangesOf = (q: { from: string; to: string }): ReportRange[] => [{ from: q.from, to: q.to }];
 
 /**
- * Read a report's ranges, each from the cache or the platform (all at once, so a comparison takes no
- * longer than one range), and cache what was read: days that are over change little, today's keep
+ * Read a report's ranges, each from the cache or the platform, and cache what was read: days that are over change little, today's keep
  * coming in. The first failure is thrown once every read has ended, the ranges that worked cached.
  * `opts.ttl`: how long a range is kept, when not the usual 10 minutes with today and an hour without;
  * `opts.onMiss`: run once before anything is read, only when some range must be (a guard that throws).
@@ -610,12 +602,12 @@ export async function sendCsv(c: Ctx, deps: Deps, a: WorkspaceAccess, storeId: s
 }
 
 /** A live report's download's name and audit entry: the platform, account, level, what it was opened from and the dates. */
-function liveReportFile(platform: "meta" | "google", conn: AdConnection, level: string, parent: Record<string, string | undefined>, q: { from: string; to: string; cfrom?: string; cto?: string }) {
+function liveReportFile(platform: "meta" | "google", conn: AdConnection, level: string, parent: Record<string, string | undefined>, q: { from: string; to: string }) {
   const demo = isDemoConnection(conn);
   const opened = Object.entries(parent).filter((e): e is [string, string] => e[1] !== undefined);
   return {
     name: ["bizinsights", platform === "meta" ? "meta-ads" : "google-ads", ...(demo ? ["demo-simulated"] : []), conn.accountId, level, ...opened.flat(), q.from, "to", q.to].join("-"),
-    metadata: { section: "ads_live_report", platform, level, account: conn.id, ...Object.fromEntries(opened), from: q.from, to: q.to, ...(q.cfrom && q.cto ? { cfrom: q.cfrom, cto: q.cto } : {}), ...(demo ? { demo: true } : {}) },
+    metadata: { section: "ads_live_report", platform, level, account: conn.id, ...Object.fromEntries(opened), from: q.from, to: q.to, ...(demo ? { demo: true } : {}) },
   };
 }
 
@@ -640,16 +632,6 @@ async function googleDetailAllowed(deps: Deps, connectionId: string): Promise<vo
     "This ad account's keywords and search terms have been read from Google as often as they can be today. Reports already read stay available; other dates can be read tomorrow.",
     "google_detail_limit",
   );
-}
-
-/** The figures of each platform's report (its totals and every row carry them). */
-const META_METRICS = Object.keys(metaReportMetrics({}));
-const GOOGLE_METRICS = Object.keys(googleReportMetrics({}));
-
-/** A comparison's figures beside a report: its dates, totals, and each row's figures by id (names and statuses are the report's own). */
-function comparisonOf(report: { since: string; until: string; totals: object; rows: Array<{ id: string }> }, metrics: string[]) {
-  const pick = (o: object) => Object.fromEntries(metrics.map((k) => [k, (o as Record<string, unknown>)[k] ?? null]));
-  return { since: report.since, until: report.until, totals: pick(report.totals), rows: report.rows.map((r) => ({ id: r.id, ...pick(r) })) };
 }
 
 /** A site's host name, as AdSense's DOMAIN_CODE spells it ("shop.example.com"). */
@@ -1074,10 +1056,9 @@ export function adsRoutes(app: App, deps: Deps) {
   /**
    * The Meta Ads report for one connected account and range: campaigns, ad sets or ads with reach,
    * frequency, link clicks, purchases and their value (by each ad set's own attribution setting, and
-   * under 1-day click, 7-day click and 1-day view), asked of Meta for exactly those dates; with
-   * cfrom/cto, the same for the comparison's dates. Read-only, and cached briefly so the dashboard's
-   * polling doesn't spend Meta's rate limit. Both ranges are read at once, within one deadline that
-   * fits the request's time. A drill-down: `campaign` (its ad sets or ads) and `adset` (its ads), each
+   * under 1-day click, 7-day click and 1-day view), asked of Meta for exactly those dates. Read-only,
+   * and cached briefly so the dashboard's polling doesn't spend Meta's rate limit, within a deadline
+   * that fits the request's time. A drill-down: `campaign` (its ad sets or ads) and `adset` (its ads), each
    * Meta's own id; the totals are then the campaign's or ad set's own (metaReport).
    *
    * `format=csv` downloads the answer on screen (cachedRanges, metaReportTable): every row, with each
@@ -1106,11 +1087,11 @@ export function adsRoutes(app: App, deps: Deps) {
     // The key's version moves whenever a report gains figures (v3: the rows' campaign and ad set ids, and the
     // purchases under each attribution window), so none cached without them is read back; a drill-down's
     // parent is part of what was asked.
-    const key = (r: ReportRange) => `ads-report:v3:${conn.id}:${q.level}:${parentKey(q.campaign, q.adset)}:${r.from}:${r.to}${r.compare ? ":figures" : ""}`;
+    const key = (r: ReportRange) => `ads-report:v3:${conn.id}:${q.level}:${parentKey(q.campaign, q.adset)}:${r.from}:${r.to}`;
     if (csv) {
-      const [report, compared] = await cachedRanges<MetaReport>(deps, rangesOf(q), key, "Meta Ads");
+      const [report] = await cachedRanges<MetaReport>(deps, rangesOf(q), key, "Meta Ads");
       return sendCsv(c, deps, access, storeId, async () => {
-        const table = metaReportTable(report!, compared ?? null, parent, { currency: conn.currency, timezone: conn.timezone, today });
+        const table = metaReportTable(report!, parent, { currency: conn.currency, timezone: conn.timezone, today });
         return { ...liveReportFile("meta", conn, q.level, parent, q), table };
       });
     }
@@ -1119,19 +1100,18 @@ export function adsRoutes(app: App, deps: Deps) {
       rangesOf(q),
       today,
       key,
-      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline, parent, ...(r.compare ? { statuses: false } : {}) }),
+      (r) => metaReportForConnection(conn, q.level, r.from, r.to, deps.fetchImpl, { coord: deps.coord, deadline, parent }),
       `rl:ads-report:${storeId}:${access.user?.id ?? clientIp(c)}`,
     ).catch((err: unknown) => {
       throw reportFailure(err, "meta", conn.id);
     });
-    const [report, compared] = reports;
-    return c.json({ account, today, cached, report: { ...report!, ...(compared ? { comparison: comparisonOf(compared, META_METRICS) } : {}) } });
+    return c.json({ account, today, cached, report: reports[0]! });
   });
 
   /**
    * The Google Ads report for one connected account and range: campaigns (with status, primary status
-   * and its reasons, type and budget), ad groups, devices or countries, asked of Google for exactly those dates; with
-   * cfrom/cto, the comparison's too. Read-only, cached briefly, and counted against bizinsights' daily
+   * and its reasons, type and budget), ad groups, devices or countries, asked of Google for exactly those dates.
+   * Read-only, cached briefly, and counted against bizinsights' daily
    * allowance of Google Ads API operations like the syncs. A drill-down: `campaign` (its ad groups, or a
    * Performance Max campaign's asset groups) and `adGroup` (its ads); one operation a range, with the
    * rows added up as the totals (googleReport).
@@ -1168,7 +1148,7 @@ export function adsRoutes(app: App, deps: Deps) {
     if (conn.status === "reconnect") throw new HttpError(409, ACCESS_ENDED.google, "reconnect");
     const account = { id: conn.id, accountId: conn.accountId, name: conn.accountName, currency: conn.currency, timezone: conn.timezone };
     const today = adToday(conn);
-    // Both ranges' calls end within one deadline, so the answer comes within the request's time.
+    // The calls end within one deadline, so the answer comes within the request's time.
     const deadline = Date.now() + AD_REPORT_BUDGET_MS;
     // Google finishes most of a day's numbers within about three hours, and still revises conversions after.
     // The key's version moves whenever a report gains figures (v4: the rows' match type and Quality Score, and
@@ -1177,9 +1157,9 @@ export function adsRoutes(app: App, deps: Deps) {
     const detail = isGoogleDetailLevel(q.level);
     const key = (r: ReportRange) => `ads-greport:v4:${conn.id}:${q.level}:${parentKey(q.campaign, q.adGroup)}:${r.from}:${r.to}`;
     if (csv) {
-      const [report, compared] = await cachedRanges<GoogleReport>(deps, rangesOf(q), key, "Google Ads");
+      const [report] = await cachedRanges<GoogleReport>(deps, rangesOf(q), key, "Google Ads");
       return sendCsv(c, deps, access, storeId, async () => {
-        const table = googleReportTable(report!, compared ?? null, parent, { currency: conn.currency, timezone: conn.timezone, today, demo: isDemoConnection(conn) });
+        const table = googleReportTable(report!, parent, { currency: conn.currency, timezone: conn.timezone, today, demo: isDemoConnection(conn) });
         return { ...liveReportFile("google", conn, q.level, parent, q), table };
       });
     }
@@ -1196,8 +1176,7 @@ export function adsRoutes(app: App, deps: Deps) {
     ).catch((err: unknown) => {
       throw reportFailure(err, "google", conn.id);
     });
-    const [report, compared] = reports;
-    return c.json({ account, today, cached, report: { ...report!, ...(compared ? { comparison: comparisonOf(compared, GOOGLE_METRICS) } : {}) } });
+    return c.json({ account, today, cached, report: reports[0]! });
   });
 
   /**

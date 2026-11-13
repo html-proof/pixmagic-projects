@@ -173,14 +173,15 @@ async function funnelStore() {
 }
 
 describe("the Shopping Funnel report (parts=funnel)", () => {
-  it("compares each step with the dates before, and works out every transition", async () => {
+  it("gives each step of the dates and works out every transition, with nothing of the dates before", async () => {
     const { page } = await funnelStore();
     const body = await page();
     // Only what the page shows is computed.
     expect(Object.keys(body.modules).sort()).toEqual(["channels", "funnel", "sales_overview", "traffic"]);
     const f = body.modules.funnel;
     expect(f.steps.map((s: { reached: number }) => s.reached)).toEqual([5, 4, 3, 2, 1]);
-    expect(f.previous).toMatchObject({ visits: 2, conversionRate: 0.5, imported: true, reached: [2, 1, 1, 1, 1] });
+    // The two visits of the day before are in no figure here.
+    for (const k of ["previous", "deltas", "stepDeltas"]) expect(f).not.toHaveProperty(k);
     expect(f.browsers).toBe(5);
     expect(f.transitions.map((t: { from: string; to: string; lost: number; progression: number }) => [t.from, t.to, t.lost, t.progression])).toEqual([
       ["visited", "viewed_product", 1, 0.8],
@@ -188,7 +189,7 @@ describe("the Shopping Funnel report (parts=funnel)", () => {
       ["added_to_cart", "started_checkout", 1, 2 / 3],
       ["started_checkout", "purchased", 1, 0.5],
     ]);
-    expect(f.transitions[0].previous).toEqual({ fromCount: 2, toCount: 1, progression: 0.5 });
+    expect(f.transitions[0]).toEqual({ from: "visited", to: "viewed_product", fromCount: 5, toCount: 4, lost: 1, progression: 0.8, dropOff: expect.closeTo(0.2, 10) });
     expect(f.daily).toEqual([{ day: DAY, reached: [5, 4, 3, 2, 1] }]);
     expect(f.detailsFrom).toBe(DAY);
     expect(f.sourcesFrom).toBe(DAY);
@@ -234,8 +235,6 @@ describe("the Shopping Funnel report (parts=funnel)", () => {
     const mobile = (await page("&device=mobile")).modules.funnel;
     expect(mobile.filter).toEqual({ device: "mobile" });
     expect(mobile.steps.map((s: { reached: number }) => s.reached)).toEqual([2, 2, 2, 1, 1]);
-    // Nobody on a phone the day before.
-    expect(mobile.previous.reached).toEqual([0, 0, 0, 0, 0]);
     expect(mobile.products.filter((p: { viewed: number | null }) => p.viewed).map((p: { handle: string; viewed: number; added: number }) => [p.handle, p.viewed, p.added])).toEqual([["tee", 2, 2]]);
     const returning = (await page("&visitor=returning")).modules.funnel;
     expect(returning.visits).toBe(1);

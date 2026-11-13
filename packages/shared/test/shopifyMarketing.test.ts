@@ -4,7 +4,6 @@ import { adPlatformSources, type AdSourceFacts } from "../src/adsFromShopify";
 import { marketingFigures, marketingPlatform, marketingReports, marketingSpendPeriod, shopifyMarketing, type MarketingRow, type MarketingSyncState } from "../src/shopifyMarketing";
 
 const range = { from: "2026-10-01", to: "2026-10-03" };
-const compared = { from: "2026-09-28", to: "2026-09-30" };
 const sync: MarketingSyncState = { lastSyncedAt: "2026-10-04T01:00:00.000Z", coveredFrom: "2026-07-06", syncedThrough: "2026-10-04", backfilled: false, error: null, lastAttemptAt: "2026-10-04T01:00:00.000Z" };
 
 const row = (over: Partial<MarketingRow>): MarketingRow => ({
@@ -42,7 +41,7 @@ const lastDays = [
 ];
 
 const ask = (over: Partial<Parameters<typeof shopifyMarketing>[0]> = {}) =>
-  shopifyMarketing({ rows, previousRows: null, lastDays, range, compared, currency: "AUD", sync, ...over });
+  shopifyMarketing({ rows, lastDays, range, currency: "AUD", sync, ...over });
 
 describe("which platform a Shopify marketing channel is", () => {
   it("knows Meta and Google by the channel Shopify names or the app that reported it", () => {
@@ -157,15 +156,10 @@ describe("the Shopify marketing module", () => {
     expect(ask({ sync: { ...sync, syncedThrough: "2026-09-30" } })).toMatchObject({ from: null, through: null, reportedSpend: null });
   });
 
-  it("compares with the dates before when given them", () => {
-    const before = [row({ day: "2026-09-29", spend: 50, clicks: 250, sales: 400 })];
-    const m = ask({ previousRows: before });
-    expect(m.compared).toEqual(compared);
-    expect(m.platforms[0]!.previous).toMatchObject({ spend: 50 });
-    expect(m.platforms[0]!.deltas.spend).toBeCloseTo(1);
-    expect(m.platforms[0]!.deltas.roas).toBeCloseTo(0);
-    expect(ask().compared).toBeNull();
-    expect(ask().platforms[0]!.deltas.spend).toBeNull();
+  it("is the dates' own: nothing of the dates before", () => {
+    const m = ask();
+    expect(m).not.toHaveProperty("compared");
+    for (const g of [...m.platforms, ...m.others]) for (const k of ["previous", "deltas"]) expect(g).not.toHaveProperty(k);
   });
 
   it("says why there are no figures: not read yet, or Shopify refused", () => {

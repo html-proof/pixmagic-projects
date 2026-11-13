@@ -42,8 +42,6 @@ export interface StatusAnswer {
 
 export interface Kpi {
   value: number | null;
-  previous: number | null;
-  change: number | null;
   note?: string;
   complete?: boolean;
   basis: "stock" | "orders";
@@ -103,11 +101,9 @@ export interface Facets {
 
 export interface OverviewAnswer {
   range: { from: string; to: string };
-  previous: { from: string; to: string };
   status: SyncStatus;
   source: StockSource;
   today: string;
-  comparedWith: string;
   kpis: Record<string, Kpi | null>;
   untracked: { variants: number; onHand: number | null };
   tracked: number;

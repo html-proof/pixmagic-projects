@@ -241,34 +241,32 @@ describe("year breakdown", () => {
     row("2026-10-02", 90),
   ];
 
-  it("leaves months before the imported history out, and compares only fully imported months", () => {
+  it("leaves months before the imported history out", () => {
     const y = yearBreakdown(rows, "2026-10-09", "2026-07-19");
     expect(y.year).toBe(2026);
     expect(y.months.map((m) => m.month)).toEqual(["2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"]);
-    expect(y.months.slice(0, 6).every((m) => m.coverage === "none" && m.netSales === 0 && m.change === null)).toBe(true);
+    expect(y.months.slice(0, 6).every((m) => m.coverage === "none" && m.netSales === 0)).toBe(true);
 
     const [jul, aug, sep, oct] = y.months.slice(6);
-    expect(jul).toMatchObject({ coverage: "partial", netSales: 140, orders: 2, change: null });
-    // August is whole, but July isn't, so there's nothing fair to compare it with.
-    expect(aug).toMatchObject({ coverage: "full", netSales: 200, change: null, comparedWith: null });
-    expect(sep).toMatchObject({ coverage: "full", netSales: 370, refunds: 30, orders: 2, averageOrderValue: 200, change: 0.85 });
-    expect(sep!.comparedWith).toEqual({ from: "2026-08-01", to: "2026-08-31" });
-    // October so far (1–9) against 1–9 September, not all of it.
-    expect(oct).toMatchObject({ current: true, from: "2026-10-01", to: "2026-10-09", netSales: 90, change: -0.25 });
-    expect(oct!.comparedWith).toEqual({ from: "2026-09-01", to: "2026-09-09" });
+    expect(jul).toMatchObject({ coverage: "partial", netSales: 140, orders: 2 });
+    expect(aug).toMatchObject({ coverage: "full", netSales: 200 });
+    expect(sep).toMatchObject({ coverage: "full", netSales: 370, refunds: 30, orders: 2, averageOrderValue: 200 });
+    // October so far (1–9).
+    expect(oct).toMatchObject({ current: true, from: "2026-10-01", to: "2026-10-09", netSales: 90 });
+    // A month carries its own figures only: nothing of the month before.
+    for (const m of y.months) for (const k of ["change", "comparedWith", "comparedLines"]) expect(m).not.toHaveProperty(k);
 
     expect(y.total).toBe(800);
     expect(y.orders).toBe(6);
   });
 
-  it("compares January with December, and a long month's end with a short month's", () => {
+  it("counts every month when the whole history is imported, the year before left out", () => {
     const all = yearBreakdown(rows, "2026-10-09", null);
-    expect(all.months[0]).toMatchObject({ coverage: "full", netSales: 0, change: -1 });
-    expect(all.months[0]!.comparedWith).toEqual({ from: "2025-12-01", to: "2025-12-31" });
+    expect(all.months[0]).toMatchObject({ month: "2026-01", coverage: "full", netSales: 0 });
+    expect(all.total).toBe(800);
 
     const march = yearBreakdown([row("2026-02-10", 100), row("2026-03-30", 50)], "2026-03-30", null).months.at(-1)!;
-    expect(march.comparedWith).toEqual({ from: "2026-02-01", to: "2026-02-28" });
-    expect(march.change).toBe(-0.5);
+    expect(march).toMatchObject({ month: "2026-03", from: "2026-03-01", to: "2026-03-30", netSales: 50 });
   });
 });
 
@@ -300,10 +298,9 @@ describe("the same months of the years before", () => {
 });
 
 describe("total sales month by month", () => {
-  it("compares a month's total sales on those of the dates it is compared with", () => {
+  it("measures a month by its total sales", () => {
     const y = yearBreakdown([row("2026-01-10", 100), row("2026-02-03", 150, { totalSales: 180 })], "2026-02-28", null);
     expect(y.months.map(TOTAL_SALES_MONTHS.value)).toEqual([100, 180]);
-    expect(TOTAL_SALES_MONTHS.change(y.months[1]!)).toBe(0.8);
     expect(yearFigures(y.months, TOTAL_SALES_MONTHS).total).toBe(280);
   });
 });
@@ -324,40 +321,31 @@ describe("the lines of total sales by month, and Custom sales from them", () => 
   const [aug, sep] = y.months.slice(7);
   const exclTax = { ...SHOPIFY_STANDARD, taxes: false };
 
-  it("adds up each month's lines, and the lines of the dates it is compared with", () => {
+  it("adds up each month's lines", () => {
     expect(aug).toMatchObject({ coverage: "full", netSales: 150.3, additionalFees: 0.7, duties: 1.3, shipping: 15.15, taxes: 16.54, totalSales: 183.99 });
-    // July wasn't imported, so August has nothing to compare with: no change, no lines for it.
-    expect(aug).toMatchObject({ change: null, comparedWith: null, comparedLines: null });
     expect(sep).toMatchObject({ current: true, netSales: 73, additionalFees: 0.1, duties: 0, shipping: 6.6, taxes: 7.3, totalSales: 87 });
-    // September so far (1–10) against 1–10 August, line by line.
-    expect(sep!.comparedWith).toEqual({ from: "2026-08-01", to: "2026-08-10" });
-    expect(sep!.comparedLines).toEqual({ netSales: 100.3, additionalFees: 0.2, duties: 0.3, shipping: 10.15, taxes: 11.04, totalSales: 121.99 });
     // The lines make total sales to the cent.
-    for (const m of [aug!, sep!, sep!.comparedLines!]) expect(splitTotal(m).unsplit).toBe(0);
+    for (const m of [aug!, sep!]) expect(splitTotal(m).unsplit).toBe(0);
   });
 
   it("keeps months before the imported history as not imported, with no lines", () => {
     const before = y.months.slice(0, 7);
-    expect(before.every((m) => m.coverage === "none" && m.comparedLines === null)).toBe(true);
+    expect(before.every((m) => m.coverage === "none")).toBe(true);
     expect(before.every((m) => m.netSales === 0 && m.totalSales === 0 && m.taxes === 0 && m.shipping === 0)).toBe(true);
     // The figures leave them out rather than count them as $0 months.
     const f = yearFigures(y.months, customSalesMonths(exclTax));
-    expect(f.months.slice(0, 7).every((m) => m.cumulative === null && m.change === null)).toBe(true);
+    expect(f.months.slice(0, 7).every((m) => m.cumulative === null)).toBe(true);
   });
 
-  it("works out Custom sales per month in cents, with a change of its own", () => {
+  it("works out Custom sales per month in cents", () => {
     const custom = customSalesMonths(exclTax);
     expect(custom.value(aug!)).toBe(167.45);
     expect(custom.value(sep!)).toBe(79.7);
-    expect(custom.change(sep!)).toBeCloseTo(79.7 / 110.95 - 1, 12);
-    expect(custom.change(aug!)).toBeNull();
-    // Net sales' own change stays Shopify's figure.
-    expect(sep!.change).toBeCloseTo(73 / 100.3 - 1, 12);
 
     const f = yearFigures(y.months, custom);
     expect(f.months.slice(7)).toEqual([
-      { month: "2026-08", value: 167.45, change: null, cumulative: 167.45 },
-      { month: "2026-09", value: 79.7, change: custom.change(sep!), cumulative: 247.15 },
+      { month: "2026-08", value: 167.45, cumulative: 167.45 },
+      { month: "2026-09", value: 79.7, cumulative: 247.15 },
     ]);
     expect(f.total).toBe(247.15);
     // Only finished, fully imported months make the average: August alone.
@@ -367,7 +355,7 @@ describe("the lines of total sales by month, and Custom sales from them", () => 
   it("gives net sales the same figures as the months carry", () => {
     const f = yearFigures(y.months, NET_SALES_MONTHS);
     expect(f.total).toBe(y.total);
-    expect(f.months.map((m) => m.change)).toEqual(y.months.map((m) => (m.coverage === "none" ? null : m.change)));
+    expect(f.months.map((m) => m.value)).toEqual(y.months.map((m) => (m.coverage === "none" ? 0 : m.netSales)));
     expect(f.months.at(-1)).toMatchObject({ value: 73, cumulative: 223.3 });
     // Every line counted is Shopify's total sales.
     expect(yearFigures(y.months, customSalesMonths(SHOPIFY_STANDARD)).total).toBe(270.99);

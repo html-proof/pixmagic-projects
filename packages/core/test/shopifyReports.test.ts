@@ -4,7 +4,7 @@ import { summarize } from "@app/shared";
 import { memoryCoord } from "../src/coord.js";
 import { memoryQueues, type Queues } from "../src/queues.js";
 import { parseReport, REPORT_QUEUED_MS, reportQuery, requestShopifyReports, windowKey, type ReportRequest, type ShopifyReportsJob } from "../src/shopifyReports.js";
-import { pickAnswers, quantizeUntil, reconcileSales, reportStale, reportWindows, shopifyModules } from "../src/reports/shopify.js";
+import { pickAnswers, quantizeUntil, reconcileSales, reportStale, reportWindow, shopifyModules } from "../src/reports/shopify.js";
 
 describe("ShopifyQL for Shopify's own report figures", () => {
   it("asks for whole days, or up to a time of day while the window runs", () => {
@@ -33,14 +33,11 @@ describe("ShopifyQL for Shopify's own report figures", () => {
 });
 
 describe("windows and staleness", () => {
-  it("stops a running range and its comparison at the same 5-minute mark", () => {
+  it("stops a running range at the last 5-minute mark", () => {
     expect(quantizeUntil("16:44:12")).toBe("16:40:00");
     expect(quantizeUntil("00:04:59")).toBe("00:00:00");
-    expect(reportWindows({ from: "2026-10-17", to: "2026-10-17" }, { from: "2026-10-16", to: "2026-10-16", until: "09:07:30" })).toEqual({
-      current: { from: "2026-10-17", to: "2026-10-17", until: "09:05:00" },
-      previous: { from: "2026-10-16", to: "2026-10-16", until: "09:05:00" },
-    });
-    expect(reportWindows({ from: "2026-09-01", to: "2026-09-30" }, { from: "2026-08-01", to: "2026-08-31" }).current).toEqual({ from: "2026-09-01", to: "2026-09-30" });
+    expect(reportWindow({ from: "2026-10-17", to: "2026-10-17" }, "09:07:30")).toEqual({ from: "2026-10-17", to: "2026-10-17", until: "09:05:00" });
+    expect(reportWindow({ from: "2026-09-01", to: "2026-09-30" })).toEqual({ from: "2026-09-01", to: "2026-09-30" });
   });
 
   it("asks again sooner for recent days and failed calls than for old days or refusals", () => {
@@ -128,7 +125,7 @@ describe("answers while the next mark is fetched", () => {
   const today = { from: "2026-10-17", to: "2026-10-17", until: "16:40:00" };
   const yesterday = { from: "2026-10-16", to: "2026-10-16", until: "16:40:00" };
 
-  it("keeps the latest earlier mark both windows have, so the comparison stays like for like", () => {
+  it("keeps the latest earlier mark every window asked about together has", () => {
     const rows = [
       kept("2026-10-17|2026-10-17|16:30:00", 1),
       kept("2026-10-16|2026-10-16|16:30:00", 2),
@@ -148,17 +145,17 @@ describe("answers while the next mark is fetched", () => {
 });
 
 describe("Shopify refusing a running range", () => {
-  // The 16:47 poll: today up to 16:45 against yesterday up to 16:45.
+  // The 16:47 poll: today up to 16:45.
   const now = new Date("2026-10-30T05:47:00Z");
   const today = "2026-10-30";
   const store = { id: "s1", workspaceId: "w1", timezone: "Australia/Melbourne" };
-  const running = { range: { from: today, to: today }, previous: { from: "2026-10-29", to: "2026-10-29", until: "16:47:30" } };
+  const running = { range: { from: today, to: today }, until: "16:47:30" };
   const ctx = { today, now, rangeRows: [], dataAsOf: null, waiting: 0 };
   const want = { sessions: true, profit: true, check: false };
   type Row = { dataset: string; window: string; values: unknown; error: string | null; fetchedAt: Date };
-  /** Both windows' answers for one dataset at an earlier mark, `min` minutes ago. */
+  /** The range's answer for one dataset at an earlier mark, `min` minutes ago. */
   const at = (dataset: string, mark: string, error: string | null, min: number): Row[] =>
-    [today, "2026-10-29"].map((day) => ({ dataset, window: `${day}|${day}|${mark}`, values: error ? null : { sessions: 5 }, error, fetchedAt: new Date(now.getTime() - min * 60_000) }));
+    [today].map((day) => ({ dataset, window: `${day}|${day}|${mark}`, values: error ? null : { sessions: 5 }, error, fetchedAt: new Date(now.getTime() - min * 60_000) }));
   /** A transaction holding these kept answers (keptReports' query is the one thing it is asked). */
   const tx = (rows: Row[]) => ({ shopifyReport: { findMany: async () => rows } }) as unknown as Tx;
   const asked = async (rows: Row[]) => (await shopifyModules(tx(rows), store, running, ctx, want)).refresh.map((r) => `${r.dataset}@${windowKey(r.window)}`);
@@ -172,28 +169,29 @@ describe("Shopify refusing a running range", () => {
   });
 
   it("asks again after 6 hours, and at each mark for figures, a failed call, or figures since the refusal", async () => {
-    const both = (dataset: string) => [`${dataset}@${today}|${today}|16:45:00`, `${dataset}@2026-10-29|2026-10-29|16:45:00`];
+    // The range's own window only: nothing of the day before is asked of Shopify.
+    const both = (dataset: string) => [`${dataset}@${today}|${today}|16:45:00`];
     expect(await asked(at("sessions", "10:40:00", "access_denied", 367))).toEqual([...both("sessions"), ...both("profit")]);
     expect(await asked(at("sessions", "16:40:00", null, 7))).toEqual([...both("sessions"), ...both("profit")]);
     expect(await asked(at("sessions", "16:40:00", "failed", 7))).toEqual([...both("sessions"), ...both("profit")]);
     expect(await asked([...at("sessions", "16:30:00", "access_denied", 17), ...at("sessions", "16:40:00", null, 7)])).toEqual([...both("sessions"), ...both("profit")]);
   });
 
-  it("holds the range and its comparison back together, from the answers still shown", async () => {
+  it("holds the range back from the answer still shown, whatever is kept for the day before", async () => {
     const one = (day: string, mark: string, error: string | null, min: number): Row => ({ dataset: "sessions", window: `${day}|${day}|${mark}`, values: error ? null : { sessions: 5 }, error, fetchedAt: new Date(now.getTime() - min * 60_000) });
     const sessions = async (rows: Row[]) => {
       const { modules, refresh } = await shopifyModules(tx(rows), store, running, ctx, { sessions: true, profit: false, check: false });
       return { asked: refresh.map((r) => windowKey(r.window)), status: (modules.shopify_sessions as { status: string }).status };
     };
-    const both = [`${today}|${today}|16:45:00`, "2026-10-29|2026-10-29|16:45:00"];
-    // Yesterday viewed a moment ago and refused as a whole day: no mark the two windows share, so
-    // both are asked at this one; once they are refused at a mark, nothing is asked and the refusal shows.
+    const both = [`${today}|${today}|16:45:00`];
+    // Yesterday viewed a moment ago and refused as a whole day: that says nothing of today, which is
+    // asked at this mark; once it is refused at a mark, nothing is asked and the refusal shows.
     const wholeDay = one("2026-10-29", "", "access_denied", 5);
     expect(await sessions([wholeDay])).toEqual({ asked: both, status: "loading" });
     expect(await sessions([wholeDay, ...at("sessions", "16:40:00", "access_denied", 7)])).toEqual({ asked: [], status: "access_denied" });
-    // Only the range refused: the card shows the refusal, held back with its comparison.
+    // The range refused: the card shows the refusal, held back, whatever the day before answered.
     expect(await sessions([one(today, "16:40:00", "access_denied", 7), one("2026-10-29", "16:40:00", null, 7)])).toEqual({ asked: [], status: "access_denied" });
-    // Only the comparison refused: the range's figures show, so both are asked at the new mark.
+    // The day before refused (kept by an earlier release): the range's figures show, and it is asked at the new mark.
     expect(await sessions([one(today, "16:40:00", null, 7), one("2026-10-29", "16:40:00", "access_denied", 7)])).toEqual({ asked: both, status: "ready" });
     // A refusal that came late for an earlier mark doesn't hold back the figures shown from a later one.
     expect(await sessions([...at("sessions", "16:40:00", null, 6), ...at("sessions", "16:35:00", "access_denied", 1)])).toEqual({ asked: both, status: "ready" });

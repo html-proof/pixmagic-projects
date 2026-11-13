@@ -75,8 +75,6 @@ export interface AnalyticsAccount {
   seed: number | null;
 }
 
-export type AdsDeltas = { [K in keyof AdsMetrics]: number | null };
-
 /** Where the campaigns' types, statuses and budgets come from: a demo's generator, or a real account's last sync (`asOf`: the latest it read). */
 export interface CampaignSettingsSource {
   source: "generated" | "synced";
@@ -87,11 +85,10 @@ export interface CampaignSettingsSource {
 export interface GoogleAdsAnalytics {
   account: AnalyticsAccount;
   range: { from: string; to: string };
-  previous: { from: string; to: string; until?: string };
   today: string;
   coverage: { from: string | null; through: string | null; complete: boolean };
   disclaimer: string | null;
-  overview: { current: AdsMetrics; previous: AdsMetrics | null; deltas: AdsDeltas };
+  overview: { current: AdsMetrics };
   series: { day: AdsPeriod[]; week: AdsPeriod[]; month: AdsPeriod[] };
   /** Null without "View campaigns". */
   campaigns: CampaignAnalytics[] | null;

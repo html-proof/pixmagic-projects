@@ -594,7 +594,7 @@ listed; bizinsights reads them through the manager (`login-customer-id`).
 ### The Google Ads report (dashboard → Ads → "Google Ads report")
 
 `GET /api/workspaces/:ws/stores/:storeId/ads/google/report?connection=&level=campaign|ad_group|device|country|asset_group|ad|keyword|search_term&from=&to=`
-(add `cfrom=&cto=` to compare with another range, which the pages don't send; `campaign=` / `adGroup=` to go down from one: below): spent, impressions, clicks, CTR, CPC, CPM, conversions, cost per
+(`campaign=` / `adGroup=` to go down from one: below; `cfrom` and `cto`, which older links may still carry, are left aside): spent, impressions, clicks, CTR, CPC, CPM, conversions, cost per
 conversion, conversion value and ROAS, with the account's totals on top. Campaigns show status, type and daily budget;
 countries are where the viewers were (`user_location_view`). Asked of Google for exactly those dates, in the account's
 time zone and currency, counted against the operations budget, cached 10 minutes (ranges including today) or an hour,
@@ -632,11 +632,9 @@ never by a sync, the worker, an export or Zapier, and nothing is stored.
 - **Limits of the figures**: Google lists only the terms enough people searched (its privacy threshold), and spend on
   Display, YouTube and other placements has no search term, so the terms add up to less than their campaign. Keywords
   are Search campaigns' only: Shopping, Performance Max and Display spend has none. The Quality Score is Google's rating
-  now (1 to 10), not for the dates; Google gives none with too little data (shown as nothing, never a 0). A
-  comparison (`cfrom`, `cto`) matches the same keyword or term by id: one not among the earlier range's 200 has no
-  row in the answer's `comparison`, so no change is worked out for it.
+  now (1 to 10), not for the dates; Google gives none with too little data (shown as nothing, never a 0).
 - **Top row**: Google's own row for the scope, `FROM customer`, `FROM campaign WHERE campaign.id = …` or `FROM ad_group
-  WHERE ad_group.id = …` for the same dates, so a read is **two operations** (four with a comparison), wherever it is.
+  WHERE ad_group.id = …` for the same dates, so a read is **two operations**, wherever it is.
 - **Guards** (real accounts; the demo has none, it costs nothing): checked only when a range isn't cached, after the
   usual 30 reports per 10 minutes. (1) Past **70%** of the day's allowance (`GOOGLE_ADS_DETAIL_SHARE`) the answer is
   503 `google_detail_paused`, Google asked nothing, so these screens never hold back the scheduled syncs (80%); while
@@ -691,11 +689,11 @@ not money paid.
 
 ## The Meta Ads report (dashboard → Ads → "Meta Ads report")
 
-`GET /api/workspaces/:ws/stores/:storeId/ads/meta/report?connection=&level=&from=&to=` (and `cfrom=&cto=` to compare, which the pages don't send; `campaign=` / `adset=` to go down from one: below):
+`GET /api/workspaces/:ws/stores/:storeId/ads/meta/report?connection=&level=&from=&to=` (`campaign=` / `adset=` to go down from one: below; `cfrom` and `cto`, which older links may still carry, are left aside):
 by **campaign, ad set or ad**, or the whole account split by **placement, device, country, age or gender**: spent,
 impressions, reach, frequency, link clicks, link click rate, cost per link click, CPM, purchases, cost per purchase,
 purchase value and ROAS, with each row's delivery status. Asked of Meta for exactly the dates picked (reach can't be
-summed by day), in the ad account's time zone; a comparison reads both ranges at once. Cached 10 minutes or an hour,
+summed by day), in the ad account's time zone. Cached 10 minutes or an hour,
 30 reports per store and user per 10 minutes. A report that doesn't finish in time says Meta is still preparing it.
 Expired or revoked access turns the account to Reconnect required at once.
 
@@ -729,8 +727,7 @@ aren't counted (`campaigns: null`). Rows now carry `campaignId` and `adsetId`; c
 
 The Ads panel sets the store's Shopify figures against the ad spend (`sales` on the ads module, `salesVsSpend` in
 `packages/core/src/reports/ads.ts`): net sales, orders, **sales per unit of ad spend** (MER, net sales ÷ spend), the
-spend's share of sales and the **cost per Shopify order** (spend ÷ every order). The answer also carries the same for
-the dates before and the changes, when the dates picked have ended (`previous`, `deltas`); the panel shows neither. A platform's ROAS (the purchase value it credits to its own ads ÷ what it
+spend's share of sales and the **cost per Shopify order** (spend ÷ every order). The answer carries them for the dates only. A platform's ROAS (the purchase value it credits to its own ads ÷ what it
 charged) and MER (every sale ÷ everything spent) are kept apart on every card and in every sentence.
 
 Beside them, two ways to credit a sale to ads: what each platform counts for itself, and what Shopify's record of the

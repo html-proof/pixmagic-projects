@@ -175,87 +175,71 @@ describe("the funnel page's abandoned checkouts module", () => {
   const kept = (window: string, v: unknown, error: string | null = null, fetchedAt = now): Row => ({ dataset: "abandoned_checkouts", window, values: v, error, fetchedAt });
   /** A transaction holding these kept answers (keptReports' query is the one thing it is asked). */
   const tx = (rows: Row[]) => ({ shopifyReport: { findMany: async () => rows } }) as unknown as Tx;
-  const october = { range: { from: "2026-10-01", to: "2026-10-28" }, previous: { from: "2026-09-03", to: "2026-09-30" } };
+  const october = { range: { from: "2026-10-01", to: "2026-10-28" } };
 
-  it("says it is asking Shopify, and asks for both windows, when nothing is kept", async () => {
+  it("says it is asking Shopify, and asks for the dates' window alone, when nothing is kept", async () => {
     const { module, refresh } = await abandonedCheckoutsModule(tx([]), store, october, { today, now });
-    expect(module).toMatchObject({ status: "loading", previousStatus: "loading", current: null, previous: null, visibleFrom: "2026-09-01" });
-    expect(refresh).toEqual([
-      { dataset: "abandoned_checkouts", window: { from: "2026-10-01", to: "2026-10-28" } },
-      { dataset: "abandoned_checkouts", window: { from: "2026-09-03", to: "2026-09-30" } },
-    ]);
+    expect(module).toMatchObject({ status: "loading", current: null, visibleFrom: "2026-09-01" });
+    // Nothing of the period before is asked of Shopify.
+    expect(refresh).toEqual([{ dataset: "abandoned_checkouts", window: { from: "2026-10-01", to: "2026-10-28" } }]);
   });
 
-  it("shows the kept figures with the recovered rate and the changes, asking nothing again while they're fresh", async () => {
+  it("shows the kept figures with the recovered rate, asking nothing again while they're fresh", async () => {
+    // An answer kept for the period before (by an earlier release) is neither read nor asked for again.
     const rows = [kept("2026-10-01|2026-10-28|", values(200, 30, 8000)), kept("2026-09-03|2026-09-30|", values(100, 10, 4000))];
     const { module, refresh } = await abandonedCheckoutsModule(tx(rows), store, october, { today, now });
     expect(refresh).toEqual([]);
-    expect(module).toMatchObject({ status: "ready", previousStatus: "ready", until: null, asOf: now.toISOString(), current: { abandoned: 200, recovered: 30, recoveredRate: 0.15, value: 8000 }, previous: { abandoned: 100, recoveredRate: 0.1 } });
-    expect(module.deltas.abandoned).toBe(1);
-    expect(module.deltas.value).toBe(1);
-    expect(module.deltas.recoveredRate).toBeCloseTo(0.5, 9);
-    expect(module.previous).not.toHaveProperty("days");
+    expect(module).toMatchObject({ status: "ready", until: null, asOf: now.toISOString(), current: { abandoned: 200, recovered: 30, recoveredRate: 0.15, value: 8000 } });
+    for (const k of ["previous", "deltas", "previousStatus"]) expect(module).not.toHaveProperty(k);
   });
 
-  it("has no exact change or rate for a count Shopify gives as a lower bound, and no value change without a value", async () => {
-    const rows = [kept("2026-10-01|2026-10-28|", values(10_000, 30, null, false)), kept("2026-09-03|2026-09-30|", values(100, 10, 4000))];
+  it("has no rate for a count Shopify gives as a lower bound", async () => {
+    const rows = [kept("2026-10-01|2026-10-28|", values(10_000, 30, null, false))];
     const { module } = await abandonedCheckoutsModule(tx(rows), store, october, { today, now });
     expect(module.current).toMatchObject({ abandonedExact: false, recoveredRate: null, value: null, valueGap: "too_many" });
-    expect(module.deltas).toEqual({ abandoned: null, value: null, recoveredRate: null });
-  });
-
-  it("never asks for a comparison older than Shopify shares, and says so", async () => {
-    const lastYear = { range: october.range, previous: { from: "2025-10-01", to: "2025-10-28" } };
-    const { module, refresh } = await abandonedCheckoutsModule(tx([kept("2026-10-01|2026-10-28|", values(200, 30, 8000))]), store, lastYear, { today, now });
-    expect(refresh).toEqual([]);
-    expect(module).toMatchObject({ status: "ready", previousStatus: "beyond_history", previous: null, deltas: { abandoned: null, value: null, recoveredRate: null } });
   });
 
   it("is beyond_history for dates older than Shopify shares, asking nothing", async () => {
-    const summer = { range: { from: "2026-07-01", to: "2026-07-31" }, previous: { from: "2026-06-01", to: "2026-06-30" } };
+    const summer = { range: { from: "2026-07-01", to: "2026-07-31" } };
     const { module, refresh } = await abandonedCheckoutsModule(tx([]), store, summer, { today, now });
     expect(refresh).toEqual([]);
-    expect(module).toMatchObject({ status: "beyond_history", previousStatus: "beyond_history", current: null });
+    expect(module).toMatchObject({ status: "beyond_history", current: null });
     // With older orders granted, Shopify is asked.
     const all = await abandonedCheckoutsModule(tx([]), { ...store, grantedScopes: ["read_orders", "read_all_orders"] }, summer, { today, now });
-    expect(all.refresh).toHaveLength(2);
+    expect(all.refresh).toHaveLength(1);
     expect(all.module).toMatchObject({ status: "loading", visibleFrom: null });
   });
 
   it("shows Shopify's refusal as such, and asks again for an answer kept in another shape", async () => {
-    const denied = await abandonedCheckoutsModule(tx([kept("2026-10-01|2026-10-28|", null, "access_denied"), kept("2026-09-03|2026-09-30|", null, "access_denied")]), store, october, { today, now });
+    const denied = await abandonedCheckoutsModule(tx([kept("2026-10-01|2026-10-28|", null, "access_denied")]), store, october, { today, now });
     expect(denied.module).toMatchObject({ status: "access_denied", current: null });
     expect(denied.refresh).toEqual([]);
-    const odd = await abandonedCheckoutsModule(tx([kept("2026-10-01|2026-10-28|", { abandoned: "lots" }), kept("2026-09-03|2026-09-30|", values(100, 10, 4000))]), store, october, { today, now });
+    const odd = await abandonedCheckoutsModule(tx([kept("2026-10-01|2026-10-28|", { abandoned: "lots" })]), store, october, { today, now });
     expect(odd.module).toMatchObject({ status: "loading", current: null });
     expect(odd.refresh.map((r) => r.window.from)).toEqual(["2026-10-01"]);
   });
 
-  it("keeps a running range like for like: both windows at the same mark", async () => {
-    const running = { range: { from: "2026-10-30", to: "2026-10-30" }, previous: { from: "2026-10-29", to: "2026-10-29", until: "13:07:42" } };
-    const rows = [kept("2026-10-30|2026-10-30|13:00:00", values(5, 1, 100), null, new Date(now.getTime() - 60_000)), kept("2026-10-29|2026-10-29|13:00:00", values(4, 1, 80))];
-    // 13:05 isn't kept yet: both are shown at 13:00 meanwhile, and 13:05 is asked for.
+  it("shows a running range at its last kept mark while the next one is fetched", async () => {
+    const running = { range: { from: "2026-10-30", to: "2026-10-30" }, until: "13:07:42" };
+    const rows = [kept("2026-10-30|2026-10-30|13:00:00", values(5, 1, 100), null, new Date(now.getTime() - 60_000))];
+    // 13:05 isn't kept yet: 13:00 is shown meanwhile, and 13:05 is asked for.
     const { module, refresh } = await abandonedCheckoutsModule(tx(rows), store, running, { today, now });
-    expect(module).toMatchObject({ status: "ready", until: "13:00:00", current: { abandoned: 5 }, previous: { abandoned: 4 } });
-    expect(refresh.map((r) => r.window.until)).toEqual(["13:05:00", "13:05:00"]);
-    // The range's 13:05 alone isn't shown against yesterday's 13:00.
+    expect(module).toMatchObject({ status: "ready", until: "13:00:00", current: { abandoned: 5 } });
+    expect(refresh.map((r) => `${r.window.from}@${r.window.until}`)).toEqual(["2026-10-30@13:05:00"]);
+    // Once the range's 13:05 is kept it is shown, whatever is kept for the day before.
     const one = await abandonedCheckoutsModule(tx([...rows, kept("2026-10-30|2026-10-30|13:05:00", values(6, 1, 120))]), store, running, { today, now });
-    expect(one.module).toMatchObject({ until: "13:00:00", current: { abandoned: 5 } });
-    const both = await abandonedCheckoutsModule(tx([...rows, kept("2026-10-30|2026-10-30|13:05:00", values(6, 1, 120)), kept("2026-10-29|2026-10-29|13:05:00", values(4, 2, 80))]), store, running, { today, now });
-    expect(both.module).toMatchObject({ until: "13:05:00", current: { abandoned: 6 }, previous: { recovered: 2 } });
+    expect(one.module).toMatchObject({ until: "13:05:00", current: { abandoned: 6 } });
+    expect(one.refresh).toEqual([]);
   });
 
   it("doesn't ask again at each new mark of a running range while Shopify's refusal is under 6 hours old", async () => {
-    const running = { range: { from: "2026-10-30", to: "2026-10-30" }, previous: { from: "2026-10-29", to: "2026-10-29", until: "13:07:42" } };
-    const denied = (minutes: number) => [
-      kept("2026-10-30|2026-10-30|13:00:00", null, "access_denied", new Date(now.getTime() - minutes * 60_000)),
-      kept("2026-10-29|2026-10-29|13:00:00", null, "access_denied", new Date(now.getTime() - minutes * 60_000)),
-    ];
+    const running = { range: { from: "2026-10-30", to: "2026-10-30" }, until: "13:07:42" };
+    const denied = (minutes: number) => [kept("2026-10-30|2026-10-30|13:00:00", null, "access_denied", new Date(now.getTime() - minutes * 60_000))];
     const recent = await abandonedCheckoutsModule(tx(denied(6)), store, running, { today, now });
-    expect(recent.module).toMatchObject({ status: "access_denied", previousStatus: "access_denied", current: null });
+    expect(recent.module).toMatchObject({ status: "access_denied", current: null });
     expect(recent.refresh).toEqual([]);
     // After 6 hours it is asked again, at this mark.
     const old = await abandonedCheckoutsModule(tx(denied(361)), store, running, { today, now });
-    expect(old.refresh.map((r) => r.window.until)).toEqual(["13:05:00", "13:05:00"]);
+    expect(old.refresh.map((r) => r.window.until)).toEqual(["13:05:00"]);
   });
 });

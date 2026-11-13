@@ -101,11 +101,7 @@ export function summarize(rows: DailyMetricsRow[]): KpiSummary {
   };
 }
 
-/** Relative change vs previous period; null when there is no baseline. */
-export function delta(current: number | null, previous: number | null): number | null {
-  if (current === null || previous === null || previous === 0) return null;
-  return (current - previous) / Math.abs(previous);
-}
+
 
 // ---- Orders and sales -> daily rows (the reference for recomputeDays in packages/core) ----
 

@@ -113,16 +113,16 @@ export function inventoryRoutes(app: App, deps: Deps) {
       await withTenant(ws, async (tx) => {
         const store = await loadStore(tx, ws, storeId);
         const now = new Date();
-        const dates = resolveQueryDates(q, now, store.timezone);
+        const { range } = resolveQueryDates(q, now, store.timezone);
         const today = localDay(now, store.timezone);
         const [scope, sales, settings] = await Promise.all([stockScope(store), salesDays(store, today), inventorySettings(store.id)]);
         const see = { costs: allows(a.access, "inventory.costs") };
-        const overview = await inventoryOverview(tx, store, scope, dates, sales, now, see);
+        const overview = await inventoryOverview(tx, store, scope, range, sales, now, see);
         // The items needing attention first, for the overview's lists.
         const list = (status: "low" | "out") =>
           stockList(tx, scope, stockQuerySchema.parse({ status, sort: "available", dir: "asc", pageSize: 10 }), sales, today, settings, see).then((r) => ({ rows: r.rows, total: r.total }));
         const [low, out] = await Promise.all([list("low"), list("out")]);
-        return { range: dates.range, previous: dates.previous, status: await inventoryStatus(tx, store, scope, settings, now), ...overview, lowStock: low, outOfStock: out, source: scope.source };
+        return { range, status: await inventoryStatus(tx, store, scope, settings, now), ...overview, lowStock: low, outOfStock: out, source: scope.source };
       }),
     );
   });
