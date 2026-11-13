@@ -2,7 +2,6 @@
 import Link from "next/link";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Info, TrendingUp } from "lucide-react";
-import { fmtPct } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // The pieces every rebuilt page is made of, as the owner's approved Stitch design draws them
@@ -125,20 +124,6 @@ export function InShortLine({ icon = <TrendingUp className="h-4 w-4" />, period,
       </p>
       {period && <span className="hidden shrink-0 text-xs text-muted sm:inline">{period}</span>}
     </section>
-  );
-}
-
-/** A change beside a figure: "+12%", green up and red down (`invert`: down is good); words for screen readers. */
-export function ChangeTag({ value, invert = false, versus, missing = "No earlier data" }: { value: number | null | undefined; invert?: boolean; versus: string; missing?: string }) {
-  if (value === null || value === undefined) return <span className="text-xs text-muted">{missing}</span>;
-  const good = invert ? value < 0 : value > 0;
-  return (
-    <span className={`text-xs font-medium tabular-nums ${value === 0 ? "text-muted" : good ? "text-good" : "text-danger"}`}>
-      <span className="sr-only">{value > 0 ? "up " : value < 0 ? "down " : "unchanged, "}</span>
-      <span aria-hidden>{value > 0 ? "+" : value < 0 ? "−" : ""}</span>
-      {fmtPct(Math.abs(value))}
-      <span className="sr-only"> {versus}</span>
-    </span>
   );
 }
 

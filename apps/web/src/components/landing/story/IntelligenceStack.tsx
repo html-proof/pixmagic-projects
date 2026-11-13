@@ -36,10 +36,10 @@ export const INTELLIGENCE_CARDS: readonly IntelligenceCardData[] = [
     facets: [
       "Gross and net sales",
       "Orders and average order value",
-      "Against the previous period",
+      "Day by day and month by month",
     ],
     description:
-      "Illustrative line chart: this period's sales line draws itself across the week and finishes above a dashed line for the previous period.",
+      "Illustrative line chart: this period's sales line draws itself across the week.",
     accent: "#A798FF",
   },
   {

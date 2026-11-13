@@ -7,7 +7,7 @@ import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./fo
 import { PLATFORM_NAME } from "./AdsCommon";
 import { shownFigures, upToWords } from "./adFigures";
 import { Icon } from "./Icons";
-import { B, Change } from "./Narrative";
+import { B } from "./Narrative";
 import { Panel, Stat, type Tone } from "./Primitives";
 import { topicInfo, type Topic } from "./topics";
 import { appliedCustom, breakdownOf } from "./redacted";
@@ -330,13 +330,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
               value={finishedMonths.length ? money(finishedMonths.reduce((a, x) => a + x.netSales, 0) / finishedMonths.length) : "—"}
               note={finishedMonths.length ? `over ${plural(finishedMonths.length, "full month")}` : "no full month yet"}
             />
-            {thisMonth && (
-              <Stat
-                label={`${fmtMonth(thisMonth.month)} so far`}
-                value={money(thisMonth.netSales)}
-                note={thisMonth.change !== null && thisMonth.comparedWith ? <><Change value={thisMonth.change} /> vs the same days last month</> : "nothing comparable before it"}
-              />
-            )}
+            {thisMonth && <Stat label={`${fmtMonth(thisMonth.month)} so far`} value={money(thisMonth.netSales)} />}
           </div>
         </Panel>
       )}

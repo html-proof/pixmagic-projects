@@ -156,11 +156,12 @@ counting. Receipt attachments are not implemented.
 
 ## Analytics and reports
 
-- KPI cards (each with the previous comparable value, change, explanation and update time): total
+- KPI cards (each with its explanation and update time; the answer also carries the previous
+  comparable value and the change, which the page doesn't show): total
   and active staff, working now, hours today/this week/this month, regular and overtime hours,
   payroll cost today/week/month/year, amount paid, still to pay, waiting for approval, average
-  hourly rate. "This week/month/year" compare with the same elapsed part of the previous one;
-  today compares with yesterday up to the same time.
+  hourly rate. In the answer, "This week/month/year" compare with the same elapsed part of the
+  previous one, and today with yesterday up to the same time.
 - Ranges: Live, Today, Yesterday, This/Last week, This/Last month, This/Last year, Custom (up to
   ~3 years). Buckets: hour, day, week, month, quarter, year. All in the organization's time zone.
 - Charts: working hours, payroll cost, cost per employee, regular vs overtime, attendance

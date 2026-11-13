@@ -15,7 +15,7 @@ const BUILT = REVEAL_STAGES.health[1] + 0.02;
 
 const WINDOW_LABEL =
   "Illustrative bizinsights dashboard. A top bar with a store selector and search; a sidebar with Overview, Sales, Orders, Customers, Funnel, Products, Inventory, Fulfillment and Settings; " +
-  "empty key figures for sales, orders, conversion and net sales; a sales-over-time chart compared with the previous period; a business health panel; the shopping funnel from visit to purchase; " +
+  "empty key figures for sales, orders, conversion and net sales; a sales-over-time chart; a business health panel; the shopping funnel from visit to purchase; " +
   "new versus returning customers; and product activity. No real figures are shown.";
 
 /**

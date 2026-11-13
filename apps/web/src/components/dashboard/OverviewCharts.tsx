@@ -4,7 +4,7 @@ import { ChartColumn, type LucideIcon } from "lucide-react";
 import type { PeriodGranularity } from "@app/shared/dates";
 import { customSalesMonths, dailyBreakdown, NET_SALES_MONTHS, periodBreakdown, TOTAL_SALES_MONTHS, weekdayOf, yearFigures } from "@app/shared/sales";
 import { customSales } from "@app/shared/salesCalculation";
-import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { fmtMoney, fmtNum } from "@/lib/api";
 import { ComboChart, type ComboBar, type ComboGroup } from "./ComboChart";
 import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtPeriod, fmtSpan, fmtWeekday, periodChoices, plural } from "./format";
 import { ChartChoice } from "./Primitives";
@@ -76,8 +76,6 @@ function EmptyChart({ icon: IconCmp, title, body }: { icon: LucideIcon; title: s
 const lighter = (color: string) => `color-mix(in oklab, ${color} 45%, var(--surface))`;
 /** "20 Aug & 22 Aug". */
 const listOf = (items: string[]) => new Intl.ListFormat(undefined, { style: "short", type: "conjunction" }).format(items);
-/** "+12.3%" / "−4%": a change with its sign, so the colour is never all that says which way. */
-const signed = (c: number) => `${c >= 0 ? "+" : "−"}${fmtPct(Math.abs(c))}`;
 /** "16.2K": figures on columns too narrow for the currency. */
 const compact = (n: number) => new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
 
@@ -368,7 +366,6 @@ function MonthlyComparison({ ov, year, currency }: { ov: Overview; year: NonNull
         fill: fillOf(y, ym),
         label: none || fig.value === 0 ? undefined : compact(fig.value),
         quiet: mineToo && m.current,
-        note: mineToo && fig?.change != null ? { text: signed(fig.change), tone: fig.change >= 0 ? "good" : "danger" } : undefined,
         sub: String(y.year),
       };
     }),
@@ -383,7 +380,6 @@ function MonthlyComparison({ ov, year, currency }: { ov: Overview; year: NonNull
   const sub = [
     view === "custom" && custom ? `Custom sales · ${custom.name}, not Shopify's figure` : null,
     earlier.length ? `${year.year} so far vs the same months of ${listOf(earlier)}` : `${year.year} so far, month by month; no earlier year imported to compare with`,
-    `% = ${year.year}'s change on the month before${current?.comparedWith ? ` (${fmtMonth(current.month, { short: true })}: on the same days)` : ""}`,
     someMissing && historyFrom ? `orders before ${fmtDay(historyFrom)} weren't shared by Shopify` : null,
   ].filter(Boolean);
 
@@ -400,9 +396,6 @@ function MonthlyComparison({ ov, year, currency }: { ov: Overview; year: NonNull
             <TipRow key={y.year} color={fillOf(y, ym)}>
               {y.year}: {none ? <span className="text-muted">not imported</span> : <b>{money(fig.value)}</b>}
               {y === year && m.current ? " (so far)" : ym?.coverage === "partial" ? " (partly imported)" : ""}
-              {y === year && fig?.change != null && (
-                <span className={`ml-1.5 font-semibold ${fig.change >= 0 ? "text-good" : "text-danger"}`}>{signed(fig.change)}</span>
-              )}
             </TipRow>
           );
         })}
@@ -416,8 +409,7 @@ function MonthlyComparison({ ov, year, currency }: { ov: Overview; year: NonNull
       const fig = figures[j]!.months[i];
       return `${y.year}${y === year && m.current ? " so far" : ""} ${!fig || y.months[i]?.coverage === "none" ? "not imported" : money(fig.value)}`;
     });
-    const change = mine.months[i]?.change;
-    return `${fmtMonth(m.month)}, ${name}: ${parts.join(", ")}${change != null ? `; ${change >= 0 ? "up" : "down"} ${fmtPct(Math.abs(change))} on the month before` : ""}. ${money(mine.months[i]?.cumulative ?? 0)} in ${year.year} so far.`;
+    return `${fmtMonth(m.month)}, ${name}: ${parts.join(", ")}. ${money(mine.months[i]?.cumulative ?? 0)} in ${year.year} so far.`;
   };
 
   const months = year.months.length === 1 ? fmtMonth(year.months[0]!.month, { short: true }) : `${fmtMonth(year.months[0]!.month, { short: true })} – ${fmtMonth(current!.month, { short: true })}`;
