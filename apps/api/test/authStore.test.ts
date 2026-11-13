@@ -76,6 +76,8 @@ describe("the sign-in directory in PostgreSQL (prismaAuthStore)", () => {
     expect(await store.cognitoPasswordIdentityByEmail("old@example.com")).toEqual({ sub, username: sub, email: "old@example.com", method: "password" });
     expect((await store.cognitoIdentityByUsername("google_42"))?.method).toBe("google");
     expect(await store.cognitoPasswordIdentityByEmail("old@gmail.com")).toBeNull();
+    // All of them, for the count of who still has to come over (signInMove.ts).
+    expect((await store.cognitoIdentities()).map((i) => `${i.method}:${i.email}`).sort()).toEqual(["google:old@gmail.com", "password:old@example.com"]);
 
     // And the app's own sign-in lets them back in under that sub (AUTH_MODE "local").
     const mail: string[] = [];

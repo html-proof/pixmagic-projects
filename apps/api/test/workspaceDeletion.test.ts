@@ -126,9 +126,6 @@ async function business(tag: string) {
   });
   // A WhatsApp number linked through an Evolution API instance.
   await systemDb.wappConnection.create({ data: { workspaceId: ws, storeId: store.id, provider: "qr", shard: "a", status: "connected", instanceName: `bi-${tag}`, instanceTokenEnc: waEncrypt(store.id, "instance_token", `evo-${tag}`) } });
-  // Rows the removed email module (2026-11-13) left in its tables, until those are dropped: they go with the workspace.
-  const account = await systemDb.emailAccount.create({ data: { workspaceId: ws, provider: "google", connectionMethod: "oauth_google", emailAddress: `shop@${tag}.test`, status: "connected", connectedByUserId: o.user.id } });
-  await systemDb.emailOAuthCredential.create({ data: { workspaceId: ws, emailAccountId: account.id, refreshTokenEnc: `sealed-${tag}`, encryptionKeyVersion: 1 } });
   await systemDb.department.create({ data: { workspaceId: ws, name: "Warehouse" } });
   // A finalized payroll and a paid shift: the staff freeze triggers refuse deleting their items and
   // breaks one by one, so the workspace's deletion has to take them in the right order.
@@ -141,13 +138,12 @@ async function business(tag: string) {
   await systemDb.breakSession.create({ data: { workspaceId: ws, sessionId: shift.id, employeeId: employee.id, startAt: new Date("2026-10-02T12:00:00Z"), kind: "meal", paid: false } });
   await systemDb.attendanceSession.update({ where: { id: shift.id }, data: { lockedAt: new Date() } });
   await systemDb.payrollPeriod.update({ where: { id: period.id }, data: { lockedAt: new Date() } });
-  // Zapier, and the workspace's own API key (and an event key of the removed email module).
+  // Zapier, and the workspace's own API key.
   const grant = await systemDb.zapierGrant.create({ data: { workspaceId: ws, storeId: store.id, userId: o.user.id, clientId: "zapier" } });
   await systemDb.zapierToken.create({ data: { workspaceId: ws, grantId: grant.id, kind: "access", tokenHash: sha256Hex(`zat-${tag}`), expiresAt: new Date(Date.now() + 3_600_000) } });
   await systemDb.zapierHook.create({ data: { workspaceId: ws, storeId: store.id, grantId: grant.id, event: "new_alert", targetUrl: `https://hooks.zapier.com/${tag}` } });
   const apiKey = `sk_live_${tag}_0123456789abcdef`;
   await systemDb.apiKey.create({ data: { workspaceId: ws, name: "BI", prefix: apiKey.slice(0, 14), keyHash: sha256Hex(apiKey), createdById: o.user.id } });
-  await systemDb.emailIngestKey.create({ data: { workspaceId: ws, name: "Events", prefix: "eik_", keyHash: sha256Hex(`eik-${tag}`), createdByUserId: o.user.id } });
 
   return { owner: o, member, ws, store, old, storeIds: [store.id, old.id], apiKey, metaPerson };
 }
@@ -158,7 +154,7 @@ describe("deleting a workspace", () => {
     const b = await business("other");
     const before = await rowsOf(a.ws, a.storeIds);
     // The seed reaches the corners this test is about.
-    for (const t of ["stores", "orders", "products", "store_expenses", "expense_entries", "expense_categories", "business_events", "ad_connections", "wapp_connections", "email_accounts", "email_oauth_credentials", "zapier_grants", "zapier_tokens", "zapier_hooks", "api_keys", "email_ingest_keys", "memberships", "invitations", "notification_preferences", "sync_jobs", "webhook_events", "alerts", "subscriptions", "departments", "employees", "payroll_periods", "payroll_items", "attendance_sessions", "break_sessions", "audit_logs"]) {
+    for (const t of ["stores", "orders", "products", "store_expenses", "expense_entries", "expense_categories", "business_events", "ad_connections", "wapp_connections", "zapier_grants", "zapier_tokens", "zapier_hooks", "api_keys", "memberships", "invitations", "notification_preferences", "sync_jobs", "webhook_events", "alerts", "subscriptions", "departments", "employees", "payroll_periods", "payroll_items", "attendance_sessions", "break_sessions", "audit_logs"]) {
       expect(before[t], t).toBeGreaterThan(0);
     }
     const otherBefore = await rowsOf(b.ws, b.storeIds);
