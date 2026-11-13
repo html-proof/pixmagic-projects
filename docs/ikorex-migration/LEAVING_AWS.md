@@ -6,6 +6,11 @@ move and delete everything in AWS, without waiting out the 14-day rollback perio
 from AWS, what cuts each tie, and the order the account is emptied in. It is stage F of
 [AWS_TO_IKOREX_MIGRATION_MATRIX.md](AWS_TO_IKOREX_MIGRATION_MATRIX.md), brought forward.
 
+**Part 1 is done (2026-11-13, 07:13 to 07:55 UTC), on the owner's "Yes, delete now": there is no
+way back to AWS.** The database, the functions, the queues, CloudFront, the WAF, the WhatsApp
+service and the deploy pipeline are deleted ([what was deleted](#what-was-deleted-2026-11-13)).
+What is left in the account is what the two ties below need, and little else.
+
 ## What replaced what
 
 Every AWS service bizinsights used, and what does its job on the server. Nothing in the last column
@@ -34,7 +39,11 @@ is an AWS service; the two rows marked **still AWS** are the ties below.
 
 ## The two ties
 
-Counted on the server on 2026-11-13 (`admin sign-in-move`, below).
+Counted on the server on 2026-11-13 (`admin sign-in-move`, below). Where each stands that evening:
+Google sign-in runs on the app's own client since 07:31 UTC (steps 1 and 2 below, done from the
+cutover's session; a person signing in with Google is still to be seen), and `AUTH_MODE` is still
+`migrating`. The owner put R2 off ("Skip R2 for now": it asks for a payment card), so the backups
+stay in S3 and **the account cannot be closed yet**.
 
 | Tie | What breaks if AWS goes first | What cuts it |
 | --- | --- | --- |
@@ -98,35 +107,63 @@ opens it, because R2 asks for a payment card even on its free tier:
 4. The passphrase into the owner's password manager: without it no backup can be read. Then its
    Parameter Store copy, the S3 bucket and the IAM user `bizinsights-backups` can go.
 
-## What is in the account (2026-11-13)
+## What was deleted (2026-11-13)
 
-Sydney unless said: the stacks `InsightsApp`, `InsightsData`, `InsightsAuth`, `InsightsWhatsapp`,
-`InsightsAudit`, `InsightsCi` and `CDKToolkit`, and in us-east-1 `InsightsEdge` and `CDKToolkit`;
-the database `insights-production` (deletion protection on) and one manual snapshot,
-`insights-production-pre-table-drop-20261112`; 16 functions; 9 buckets; the user pool
-`insights-production`; two EC2 instances (a NAT instance running, the admin host stopped); the IAM
-users `bizinsights-ikorex` (the server's Cognito calls) and `bizinsights-backups`.
+Before anything went: a last dump of both RDS databases, taken on AWS's admin host with
+`copy-db.sh` (app: 130 tables, 121,458 rows; evolution: 37 tables), kept on the server in
+`~/bizinsights-archive/rds-final-20261113/` with its checksums compared; and a copy of the server's
+`.env` and `env/`, encrypted with the backups' passphrase, in the backups bucket under
+`server-env/` (`~/bin/bizinsights-env-archive.sh` on the server makes it again). Until then the
+only other copy of the app's secrets was Secrets Manager.
+
+Deleted, in this order:
+
+1. One IAM policy of the Auth stack (the `api` function's Cognito rights): it read an export of the
+   App stack, and CloudFormation deletes no stack whose exports are in use. Nothing else of the Auth
+   stack changed.
+2. The stacks `InsightsWhatsapp`, `InsightsApp`, `InsightsCi` (the GitHub deploy role and its OIDC
+   provider), `InsightsAudit` (CloudTrail: the Data stack could not go while it read the access-log
+   bucket's name), `InsightsEdge` (us-east-1) and `InsightsData` (the database, the VPC, the NAT
+   instance, the admin host).
+3. What those stacks keep by design: the buckets `site`, `payloads`, `artifacts`, both access-log
+   buckets and CloudTrail's; the coordinator table; their log groups; the retained automated RDS
+   backups and the manual snapshot `insights-production-pre-table-drop-20261112`; 13 disk snapshots;
+   the certificate for `bizinsights.io` in us-east-1 (CloudFront's); the secrets `db-owner`,
+   `db-system`, `evolution-api`, `evolution-db` and `origin-lock` (Secrets Manager keeps each 30
+   days before it is gone for good) and their Parameter Store copies.
+
+The server was never touched by it: `/api/readyz` answered 200 throughout, and Cognito's sign-in
+page still answers.
+
+## What is left in the account
+
+| Left | Why | Goes |
+| --- | --- | --- |
+| The stack `InsightsAuth`: the user pool, its client, `auth.bizinsights.io`, the `cognito-email` function and its KMS key; the certificate for `auth.bizinsights.io`; the secrets `insights/production/app` (the email function reads its Resend key there) and `worker-cognito`, with their Parameter Store copies and `/insights/production/runtime` | Sign-in | Part 2 |
+| The IAM user `bizinsights-ikorex` | The server's Cognito calls | Part 2 |
+| The bucket `bizinsights-backups-605411278365`, the IAM user `bizinsights-backups`, the parameter `/bizinsights/ikorex/backup-cipher-pass` | The server's backups | Part 3 |
+| The snapshot `insightsdata-production-snapshot-db5d02a0a9-…` | CloudFormation's final snapshot of the database: cents a month, kept as a second copy of the last dump until the account closes | Last |
+| Both `CDKToolkit` stacks and their asset buckets | The Auth stack is deleted with their role | After part 2 |
+| GuardDuty | Watches an account that still holds two access keys | Last |
 
 ## The order
 
 Deleting is the one step of the move with no way back: after part 1 a rollback to AWS is no longer
 possible, and the server and its backups are the only copy of the data.
 
-**Part 1, needs nothing above** (this is nearly all of the bill): the WhatsApp stack; the App stack
-(functions, queues, schedules, the coordinator table, the payload and site buckets); the Edge stack
-(CloudFront, the WAF); the Data stack after a last dump of both RDS databases is kept off AWS (the
-database, its snapshots, the NAT instance, the admin host); the CI stack and the GitHub deploy role;
-CloudWatch log groups and alarms; Secrets Manager and the runtime parameters; GuardDuty, the budget,
-CloudTrail and its bucket. With it, in the repository: `.github/workflows/aws-deploy.yml`,
-`infra/cdk`, the Lambda entry point and the adapters only it loads.
+**Part 1, done 2026-11-13** (nearly all of the bill): everything listed under "What was deleted"
+above. Still to follow it in the repository, as its own pull request:
+`.github/workflows/aws-deploy.yml` (switched off in GitHub meanwhile), `infra/cdk` apart from what
+describes the Auth stack, the Lambda entry point and the adapters only it loads.
 
 **Part 2, after `AUTH_MODE=local`:** the Auth stack (the user pool, `auth.bizinsights.io` and its
 record at Cloudflare, the `cognito-email` function and its KMS key) and the IAM user
 `bizinsights-ikorex`; in the repository, `cognito.ts`, `migratingAuth.ts` and the Cognito stand-in
 of the tests.
 
-**Part 3, after the backups are in R2:** the bucket `bizinsights-backups-605411278365`, its IAM
-user and the passphrase's parameter.
+**Part 3, after the backups are in R2** (or wherever the owner decides, outside AWS): the bucket
+`bizinsights-backups-605411278365`, its IAM user and the passphrase's parameter.
 
-**Last:** `node scripts/aws-dependency-scan.mjs --none-left` passes, and the owner closes the
-account in the AWS console (Account → Close account).
+**Last:** the final snapshot, both `CDKToolkit` stacks and GuardDuty; `node
+scripts/aws-dependency-scan.mjs --none-left` passes; and the owner closes the account in the AWS
+console (Account → Close account).
