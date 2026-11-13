@@ -508,7 +508,7 @@ export default function DashboardPage() {
             </span>
           }
           help={leftOver.isNet ? FIGURE_HELP.netProfit : FIGURE_HELP.leftOver}
-          onClick={() => (allowed("analytics.sales") ? router.push("/sheet") : detail.open("sales"))}
+          onClick={() => (allowed("analytics.sales") ? router.push("/profit") : detail.open("sales"))}
         />
       ) : (
         aovTile(2)

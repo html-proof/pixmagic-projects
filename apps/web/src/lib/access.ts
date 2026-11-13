@@ -112,8 +112,10 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   ["/advertising", "marketing.ads"],
   ["/advertising/campaigns", "marketing.campaigns"],
   ["/funnel", "analytics.conversion"],
+  // /sheet (the Profit sheet until 13 Nov 2026) only forwards to Profit & Loss, which shows a member
+  // without the sales breakdown the day-by-day sheet alone.
   ["/sheet", "analytics.sales"],
-  ["/profit", "finance.breakdown"],
+  ["/profit", "analytics.sales"],
   ["/inventory", "inventory.view"],
   ["/inventory/movements", "inventory.history"],
   ["/team", "members:manage"],

@@ -20,7 +20,7 @@ async function seed() {
     systemDb.alert.create({ data: { workspaceId: ws, storeId: null, ...data } });
   await alert({ storeId: store.id, severity: "critical", code: "sync_orders_failed", message: `We couldn't sync orders for acme.myshopify.com: ${LEAK}`, createdAt: ago(5) });
   await alert({ storeId: store.id, severity: "warning", code: "webhook_failed", message: `Processing orders/create failed: ${LEAK}`, createdAt: ago(60) });
-  await alert({ severity: "warning", code: "email_account_reauth:acc1", message: "The email account shop@acme.test must be reconnected before it can send again (Settings → Email → Accounts).", createdAt: ago(30) });
+  await alert({ severity: "warning", code: "zapier_delivery_failed", message: `Zapier refused an event: ${LEAK}`, createdAt: ago(30) });
   await alert({ severity: "warning", code: "staff_open_shifts", message: "2 shifts have been open longer than expected.", createdAt: ago(90) });
   await alert({ storeId: store.id, severity: "warning", code: "whatsapp_logged_out", message: `WhatsApp logged out the linked phone (${LEAK})`, createdAt: ago(10) });
   await alert({ storeId: store.id, severity: "warning", code: "privacy_request", message: "A customer of acme.myshopify.com asked for their data.", createdAt: ago(120) });
@@ -44,7 +44,7 @@ describe("GET /workspaces/:ws/alerts", () => {
     expect(alerts).toEqual([
       { id: expect.any(String), severity: "critical", area: "shopify", title: "Couldn't sync your orders", body: expect.stringContaining("Settings → Shopify"), store: acme, createdAt: expect.any(String) },
       { id: expect.any(String), severity: "warning", area: "whatsapp", title: "Link WhatsApp again", body: expect.stringContaining("link it again"), store: acme, createdAt: expect.any(String) },
-      { id: expect.any(String), severity: "warning", area: "email", title: "An email account needs reconnecting", body: expect.stringContaining("shop@acme.test"), store: null, createdAt: expect.any(String) },
+      { id: expect.any(String), severity: "warning", area: "integrations", title: "Some events didn't reach Zapier", body: expect.stringContaining("Settings → Integrations → Zapier"), store: null, createdAt: expect.any(String) },
       { id: expect.any(String), severity: "warning", area: "shopify", title: "An update from Shopify couldn't be processed", body: expect.any(String), store: acme, createdAt: expect.any(String) },
       { id: expect.any(String), severity: "warning", area: "staff", title: "Shifts left open", body: "2 shifts have been open longer than expected.", store: null, createdAt: expect.any(String) },
       { id: expect.any(String), severity: "warning", area: "privacy", title: "A customer asked for their data", body: expect.stringContaining("Settings → Privacy requests"), store: acme, createdAt: expect.any(String) },

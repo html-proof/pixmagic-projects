@@ -168,7 +168,7 @@ of truth and almost every screen is "load, show, edit, save".
 | --- | --- |
 | Server data | `useApi(path)` (`lib/api.ts`): each answer is kept with the request it answers, transient failures retry by themselves, `reload()` and `setData()` for edits. `useLiveApi(path, ms)` for data that must stay live (the dashboard). |
 | Session, workspaces, current workspace and store | `AppContext` (`useApp()`), signed-in pages only. |
-| The dashboard's date range, its comparison and open detail | The URL (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`, `?view=`), so a link reproduces the view. The Advertising area (/advertising, [advertising.md](advertising.md)) reads the same dates and adds `?platform=&account=`; the Shopping Funnel (/funnel, [kpis.md](kpis.md) "Shopping Funnel page") adds `?device=&visitor=&landing=&country=`; the Profit sheet (/sheet, [kpis.md](kpis.md) "Profit sheet") `?by=&days=&events=`. |
+| The dashboard's date range, its comparison and open detail | The URL (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`, `?view=`), so a link reproduces the view. The Advertising area (/advertising, [advertising.md](advertising.md)) reads the same dates and adds `?platform=&account=`; the Shopping Funnel (/funnel, [kpis.md](kpis.md) "Shopping Funnel page") adds `?device=&visitor=&landing=&country=`; Profit & Loss (/profit, [kpis.md](kpis.md) "Profit & Loss page") `?tab=&grain=`, and for its day-by-day sheet `?days=&events=`. |
 | Per-device preferences (which Home, which menu and its open groups, the narrowed sidebar, the look around answered) | `lib/storage.ts` (`readLocal` / `writeLocal`): never throws, so blocked storage only loses the preference. |
 | Form drafts | Component state. |
 
@@ -212,7 +212,7 @@ whole list; what changed is how much of the list is read at once.
 - **The short menu** (`SIMPLE_MENU` in lib/features.ts; the rules, tested, in `lib/menu.ts`; drawn by
   `AppShell.tsx`). The sidebar lists the everyday pages (Dashboard, Sales & Orders, Products,
   Customers, Inventory or Stock, Advertising, Profit & Loss) and folds the rest into four groups:
-  More reports (Business Overview, Profit sheet, Discounts, Shopping Funnel), Store (Orders,
+  More reports (Business Overview, Discounts, Shopping Funnel), Store (Orders,
   Shipping, Sales channels, Staff, My work), Marketing (the whole list's "Marketing & integrations")
   and Settings. A group opens
   with a click and stays open on that device (localStorage `menu-open`); the group holding the
@@ -238,10 +238,11 @@ whole list; what changed is how much of the list is read at once.
 `customers`, `orders`, `shipping`, `channels`, `discounts`, `timing`, `overview`) are pages of their
 own, not panels over the Home: `components/dashboard/SalesFrame.tsx` draws the frame (title, the
 store's status as a pill, the date chip, Download and Print, the breadcrumb back to Home) and the
-row of tabs, Overview · Products · Customers · Orders & shipping · Visitors · Ads · Profit & Loss ·
-Profit sheet. The last four tabs are the pages they always were (/funnel, /advertising, /profit,
-/sheet), which put `SalesTabs` above their own header; a tab is shown to whoever the menu shows its
-page to, and moving between tabs keeps the dates. The tabs' layouts are in
+row of tabs, Overview · Products · Customers · Orders & shipping · Visitors · Ads · Profit & Loss.
+The last three tabs are the pages they always were (/funnel, /advertising, /profit); the first two
+put `SalesTabs` above their own header, and Profit & Loss (which took the Profit sheet in on
+2026-11-13, [kpis.md](kpis.md) "Profit & Loss page") draws its own sections' tabs instead. A tab is
+shown to whoever the menu shows its page to, and moving between tabs keeps the dates. The tabs' layouts are in
 `components/dashboard/SalesViews.tsx` (each from the same overview answer the Home reads); the
 panels with more detail, and the topics that share the Overview tab, stay in `Details.tsx`. Every
 menu entry still opens its own page.

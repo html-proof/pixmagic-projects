@@ -169,7 +169,8 @@ test.describe("signed in", () => {
     ["/settings/costs", /Costs/],
     ["/staff", /./],
     ["/whatsapp", /./],
-    ["/sheet", /Profit sheet/],
+    // The Profit sheet's old address: it opens Profit & Loss on its Detailed Table.
+    ["/sheet", /Profit & Loss/],
     ["/profit", /Profit & Loss|Connect your store/],
   ];
   for (const [name, viewport] of [

@@ -65,7 +65,7 @@ describe("a store's data when its row stays", () => {
         { workspaceId: old, storeId: store.id, severity: "critical", code: "sync_orders_failed", message: "m" },
         { workspaceId: old, storeId: store.id, severity: "warning", code: "privacy_request", message: "m" },
         // The old workspace's own, about no store.
-        { workspaceId: old, storeId: null, severity: "warning", code: "email_account_reauth:acc1", message: "m" },
+        { workspaceId: old, storeId: null, severity: "warning", code: "zapier_delivery_failed", message: "m" },
       ],
     });
 
@@ -86,7 +86,7 @@ describe("a store's data when its row stays", () => {
     // The alert asking to answer the request goes with it; the old workspace's other alerts about the store go.
     const alerts = await systemDb.alert.findMany({ orderBy: { code: "asc" }, select: { workspaceId: true, storeId: true, code: true } });
     expect(alerts).toEqual([
-      { workspaceId: old, storeId: null, code: "email_account_reauth:acc1" },
+      { workspaceId: old, storeId: null, code: "zapier_delivery_failed" },
       { workspaceId: ws, storeId: store.id, code: "privacy_request" },
     ]);
   });
