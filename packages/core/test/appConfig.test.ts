@@ -59,8 +59,15 @@ const APP_KEYS: Record<string, string> = {
   "shopify-app/shopify.app.public.toml": "public",
   "shopify-app/shopify.app.appstore.toml": "appstore",
 };
-/** Mirrors the default in packages/core/src/env.ts. */
+/** Mirrors the default in packages/core/src/env.ts: the required scopes every app declares. */
 const ENV_SCOPES = "read_orders,read_products";
+/**
+ * The required scopes an app may declare beyond those, in its toml's `scopes` and in its entry of
+ * SHOPIFY_APP_SCOPES: read_all_orders, the store's whole order history, which Shopify approves app
+ * by app. The two must agree exactly, unlike the optional extras: a scope in the setting that the
+ * released toml lacks offers "Reconnect to import full history" on a reconnect that grants nothing.
+ */
+const ALLOWED_EXTRA_SCOPES = ["read_all_orders"];
 /**
  * The optional (post-install) scopes every app declares. Only these can be requested: a
  * dashboard "Enable" button is built from `declaredOptionalScopes`, so this list, the start of
@@ -87,6 +94,8 @@ function appExtras(raw: string): Record<string, string[]> {
   return byApp;
 }
 const shippedAppExtras = () => appExtras(envValue(read("apps/aws/src/settings.ts"), "SHOPIFY_APP_OPTIONAL_SCOPES") ?? "");
+/** SHOPIFY_APP_SCOPES, read as strictly: each app's own required scopes. */
+const shippedAppScopes = () => appExtras(envValue(read("apps/aws/src/settings.ts"), "SHOPIFY_APP_SCOPES") ?? "");
 
 describe("Shopify app configuration", () => {
   for (const path of APP_CONFIGS) {
@@ -111,7 +120,12 @@ describe("Shopify app configuration", () => {
       });
 
       it("declares exactly the scopes the app expects to be granted", () => {
-        expect(tomlString(toml, "scopes")).toBe(ENV_SCOPES);
+        // The common list, plus this app's own entry in SHOPIFY_APP_SCOPES and nothing else.
+        const declared = tomlString(toml, "scopes")!.split(",");
+        const own = shippedAppScopes()[APP_KEYS[path]!] ?? [];
+        expect(new Set(declared).size, "a scope declared twice").toBe(declared.length);
+        expect([...declared].sort()).toEqual([...ENV_SCOPES.split(","), ...own].sort());
+        for (const s of own) expect(ALLOWED_EXTRA_SCOPES, `${path} requires ${s}`).toContain(s);
       });
 
       it("declares the optional scopes every app declares, then only allowed extras of its own", () => {
@@ -181,7 +195,6 @@ describe("Shopify app configuration", () => {
     const shape = (t: string) => ({
       apiVersion: tomlString(t, "api_version"),
       applicationUrl: tomlString(t, "application_url"),
-      scopes: tomlString(t, "scopes"),
       embedded: /^embedded\s*=\s*(\w+)/m.exec(t)?.[1],
     });
     for (const other of others) expect(shape(other)).toEqual(shape(main!));
@@ -201,8 +214,14 @@ describe("Shopify app configuration", () => {
     for (const path of ["apps/aws/src/settings.ts"]) {
       const text = read(path);
 
-      it(`${path} asks for the scopes the main app declares`, () => {
-        expect(envValue(text, "SHOPIFY_SCOPES")).toBe(tomlString(read(APP_CONFIGS[0]!), "scopes"));
+      it(`${path} asks for the scopes every app declares`, () => {
+        // What an app's toml adds to these is its entry in SHOPIFY_APP_SCOPES, checked per toml above.
+        expect(envValue(text, "SHOPIFY_SCOPES")).toBe(ENV_SCOPES);
+        expect(envValue(text, "SHOPIFY_APP_SCOPES")).not.toBeNull();
+        for (const [key, scopes] of Object.entries(shippedAppScopes())) {
+          expect(Object.values(APP_KEYS), `SHOPIFY_APP_SCOPES names an app with no toml: ${key}`).toContain(key);
+          for (const s of scopes) expect(ENV_SCOPES.split(","), `${key}: ${s} is already in SHOPIFY_SCOPES`).not.toContain(s);
+        }
       });
 
       it(`${path} mirrors the optional scopes the tomls declare`, () => {

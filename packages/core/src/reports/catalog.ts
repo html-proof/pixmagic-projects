@@ -1,7 +1,7 @@
 import { Prisma, type Store, type Tx } from "@app/db";
 import { dailyRate, historyAccess, historyStart, localDay, MIN_HISTORY_DAYS, storeRangeLimits, storeStartDay, type DateRange, type RangeLimits } from "@app/shared";
 import { orderHistoryStatus } from "../orderHistory.js";
-import { declaredScopes, optionalScopesFor } from "../scopes.js";
+import { requiredScopesFor, optionalScopesFor } from "../scopes.js";
 import { salesDays, soldCte, STATUS, stockScope, variantStockCte } from "../inventory/stock.js";
 import { num, numOrNull, r1, r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js";
 
@@ -133,7 +133,7 @@ export async function importedData(tx: Tx, scope: Scope, store: Pick<Store, "ord
       FROM orders
       WHERE workspace_id = ${ws} AND store_id = ${storeId}
     ) o`;
-  const access = historyAccess(store.grantedScopes, { optionalScopes: optionalScopesFor(store), declaredScopes: declaredScopes() });
+  const access = historyAccess(store.grantedScopes, { optionalScopes: optionalScopesFor(store), declaredScopes: requiredScopesFor(store) });
   return {
     orders: num(row?.orders),
     products: num(row?.products),

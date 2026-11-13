@@ -1,17 +1,18 @@
 "use client";
-import { useId, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { fmtMoney } from "@/lib/api";
+import { TileBars, type TileTrend } from "./TileBars";
 
 // ---------------------------------------------------------------------------
-// The top of the dashboard: four headline numbers, each on a tinted tile with its day-by-day
-// shape (the panels under them are HomePanels.tsx). Each opens the details behind it, like every
-// card on the page.
+// The top of the dashboard: four headline numbers, each on a tinted tile with a small bar chart
+// of it over the dates picked (TileBars.tsx; the panels under them are HomePanels.tsx). Each opens
+// the details behind it, like every card on the page.
 // ---------------------------------------------------------------------------
 
 /**
  * One tint per headline number, so the four read apart at a glance (the owner's design): a soft
- * wash of it on the tile, a solid disc for the icon, and the sparkline's ink.
+ * wash of it on the tile, a solid disc for the icon, and the ink of its bars.
  */
 const TINT = {
   green: {
@@ -32,50 +33,6 @@ const TINT = {
   },
 } as const;
 export type Tint = keyof typeof TINT;
-
-/**
- * A figure's shape over the days picked, small and unlabelled (the tile says what it is): a line
- * in the current colour with a fade under it. A day with no figure is a gap, never a 0. Nothing
- * is drawn with fewer than two days.
- */
-export function Sparkline({ values, className = "" }: { values: Array<number | null>; className?: string }) {
-  const id = `spark-${useId().replace(/[^\w-]/g, "")}`;
-  const known = values.filter((v): v is number => v !== null);
-  if (values.length < 2 || known.length < 2) return null;
-  const W = 112;
-  const H = 40;
-  const lo = Math.min(...known);
-  const hi = Math.max(...known);
-  const span = hi - lo || 1;
-  const x = (i: number) => (i / (values.length - 1)) * W;
-  // 3px of room at the top and bottom for the stroke.
-  const y = (v: number) => 3 + (1 - (v - lo) / span) * (H - 6);
-  const runs: Array<Array<[number, number]>> = [];
-  values.forEach((v, i) => {
-    if (v === null) return;
-    if (i === 0 || values[i - 1] === null || !runs.length) runs.push([]);
-    runs.at(-1)!.push([x(i), y(v)]);
-  });
-  const line = (pts: Array<[number, number]>) => pts.map(([px, py], i) => `${i ? "L" : "M"}${px.toFixed(1)},${py.toFixed(1)}`).join("");
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className={className} aria-hidden>
-      <defs>
-        <linearGradient id={id} x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="currentColor" stopOpacity={0.22} />
-          <stop offset="100%" stopColor="currentColor" stopOpacity={0} />
-        </linearGradient>
-      </defs>
-      {runs.map((pts, r) =>
-        pts.length > 1 ? (
-          <g key={r}>
-            <path d={`${line(pts)}L${pts.at(-1)![0].toFixed(1)},${H}L${pts[0]![0].toFixed(1)},${H}Z`} fill={`url(#${id})`} />
-            <path d={line(pts)} fill="none" stroke="currentColor" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-          </g>
-        ) : null,
-      )}
-    </svg>
-  );
-}
 
 /**
  * Under the Total sales tile: what refunds, returns and cancellations took off it in the dates
@@ -99,7 +56,7 @@ export function KpiCard({
   value,
   icon: IconCmp,
   tint,
-  spark,
+  trend,
   i = 0,
   extra,
   onClick,
@@ -108,8 +65,8 @@ export function KpiCard({
   value: ReactNode;
   icon: LucideIcon;
   tint: Tint;
-  /** The figure day by day over the dates picked, for the sparkline. */
-  spark?: Array<number | null>;
+  /** The figure over the dates picked, for the small bar chart (`tileTrend`). */
+  trend?: TileTrend;
   i?: number;
   /** One more line under the figure, such as the store's Custom sales beside Shopify's figure. */
   extra?: ReactNode;
@@ -133,7 +90,7 @@ export function KpiCard({
           <span className="mt-0.5 block truncate text-xl font-bold tracking-tight sm:text-[1.65rem] sm:leading-9">{value}</span>
         </span>
       </span>
-      {spark && <Sparkline values={spark} className={`mt-3 hidden h-10 w-24 shrink-0 self-end min-[420px]:block sm:w-28 ${t.ink}`} />}
+      {trend && <TileBars trend={trend} ink={t.ink} />}
       {extra && <span className="mt-2 block min-w-0 text-xs text-muted">{extra}</span>}
       {/* No aria-label: it would replace the figure; screen readers read the tile, then this. */}
       <span className="sr-only"> – open details</span>

@@ -13,19 +13,34 @@ import { HistoryLine } from "@/components/dashboard/HistoryLine";
 import { topicInfo, useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { KpiCard, RefundsLine } from "@/components/dashboard/HomeCards";
+import { sumDays as sum, tileTrend } from "@/components/dashboard/TileBars";
 import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, OrdersAtAGlance, PaidVsOrganic, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
 import { OverviewCharts } from "@/components/dashboard/OverviewCharts";
 import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
 import { TourOffer } from "@/components/Tour";
-import type { Capability, Overview } from "@/components/dashboard/types";
+import type { Capability, Overview, SalesOverview } from "@/components/dashboard/types";
 import { signInFinished } from "@/lib/adSignIn";
 import { api, ApiError, apiHref, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
 import { ALL_HISTORY } from "@app/shared/dates";
+import { trendPeriods } from "@app/shared/sales";
 import { hasFullAccess, ROLE_INFO, seesModule } from "@app/shared/access";
 import { NoAccessAssigned } from "@/components/team/AccessStates";
 import { hasDashboardAccess, seesTopic, showsDashboardHome, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
+
+type SeriesDay = SalesOverview["series"][number];
+
+/**
+ * Average order value over the days of one bar: what their orders sold for over how many there
+ * were, never an average of the days' averages. No orders, no figure. (`orderValue` is absent from
+ * an older answer: the day's average times its orders is the same amount.)
+ */
+function averageOrderValueOf(days: SeriesDay[]): number | null {
+  const orders = days.reduce((a, d) => a + d.orders, 0);
+  if (!(orders > 0)) return null;
+  return Math.round((sum(days, (d) => d.orderValue ?? (d.averageOrderValue ?? 0) * d.orders) / orders) * 100) / 100;
+}
 
 /** While a topic's contents load (the first time one opens): its first panels, as shapes. */
 function TopicLoading() {
@@ -379,6 +394,8 @@ export default function DashboardPage() {
     ) : (
       n
     );
+  // The dates picked as the bars of the headline tiles' small charts: a bar a day, week or month.
+  const trend = ov && s ? trendPeriods(s.series, ov.range, ov.today, historyFrom ?? null) : undefined;
   const name = firstName(me.user.displayName);
 
   // Under Total sales: what refunds took off it (it is already after them), for a
@@ -607,16 +624,16 @@ export default function DashboardPage() {
               tint="green"
               title="Total sales"
               value={figure(<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />)}
-              spark={s.series.map((d) => d.totalSales ?? d.netSales)}
+              trend={trend && tileTrend(trend, (days) => sum(days, (d) => d.totalSales ?? d.netSales), (n) => fmtMoney(n, cur))}
               extra={salesExtra}
               onClick={() => detail.open("sales")}
             />
           ) : (
-            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />)} spark={s.series.map((d) => d.netSales)} onClick={() => detail.open("sales")} />
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />)} trend={trend && tileTrend(trend, (days) => sum(days, (d) => d.netSales), (n) => fmtMoney(n, cur))} onClick={() => detail.open("sales")} />
           )}
-          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} spark={s.series.map((d) => d.orders)} onClick={() => detail.open("sales")} />
-          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />)} spark={s.series.map((d) => d.averageOrderValue)} onClick={() => detail.open("sales")} />
-          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} spark={s.series.map((d) => d.units ?? null)} onClick={() => detail.open("products")} />
+          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} trend={trend && tileTrend(trend, (days) => sum(days, (d) => d.orders), fmtNum)} onClick={() => detail.open("sales")} />
+          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />)} trend={trend && tileTrend(trend, averageOrderValueOf, (n) => fmtMoney(n, cur))} onClick={() => detail.open("sales")} />
+          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} trend={trend && tileTrend(trend, (days) => (days.some((d) => d.units === undefined) ? null : sum(days, (d) => d.units ?? 0)), fmtNum)} onClick={() => detail.open("products")} />
         </section>
       )}
 

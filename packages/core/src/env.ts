@@ -74,6 +74,8 @@ const schema = z.object({
    * apps/aws/src/settings.ts. Empty: no app declares more than the common list.
    */
   SHOPIFY_APP_OPTIONAL_SCOPES: z.string().optional().default(""),
+  /** Required scopes only some of our apps declare, on top of SHOPIFY_SCOPES: "appKey:scope,scope;appKey:scope" (scopes.ts appRequiredScopes). */
+  SHOPIFY_APP_SCOPES: z.string().optional().default(""),
   SHOPIFY_API_VERSION: z.string().default("2026-10"),
   /** Extra Shopify apps as JSON (see apps.ts); each one's secret is in SHOPIFY_APP_SECRET_<KEY>. */
   SHOPIFY_EXTRA_APPS: z.string().optional().default(""),
