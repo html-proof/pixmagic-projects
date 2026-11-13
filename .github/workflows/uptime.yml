@@ -10,11 +10,15 @@ name: Uptime check
 # is back. GitHub may start scheduled runs late, by minutes when it is busy: this is a free check,
 # not a pager.
 #
+# The minutes are 7, 17, 27 … and not 0, 10, 20 …: GitHub delays, and under load drops, scheduled
+# runs at the minutes everyone picks, the start of the hour most of all. (With `*/10`, no scheduled
+# run had started an hour after the workflow reached main on 2026-11-13.)
+#
 # Free: this repository is public, so GitHub's standard runners cost nothing here. If it is ever made
 # private, a run every 10 minutes is about 4,300 minutes a month: change the schedule first.
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "7-57/10 * * * *"
   workflow_dispatch:
     inputs:
       urls:
