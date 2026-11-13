@@ -132,6 +132,14 @@ Deleted, in this order:
    `db-system`, `evolution-api`, `evolution-db` and `origin-lock` (Secrets Manager keeps each 30
    days before it is gone for good) and their Parameter Store copies.
 
+4. At 08:02 UTC, on the owner's "delete the leftovers in aws too" and their choice of "Delete all of
+   it" over "Keep the database snapshots": CloudFormation's final snapshot of the database
+   (`insightsdata-production-snapshot-db5d02a0a9-…`, taken 07:45 UTC), which had been kept as a
+   second copy of the last dump, and the two SES identities (`bizinsights.io` and one address;
+   the Auth stack's `SesIdentityArn` is empty and SES had sent nothing). AWS now holds no copy of
+   the old database: the last dump on the server, next to the live database, and the server's
+   backups are the only ones.
+
 The server was never touched by it: `/api/readyz` answered 200 throughout, and Cognito's sign-in
 page still answers.
 
@@ -142,7 +150,6 @@ page still answers.
 | The stack `InsightsAuth`: the user pool, its client, `auth.bizinsights.io`, the `cognito-email` function and its KMS key; the certificate for `auth.bizinsights.io`; the secrets `insights/production/app` (the email function reads its Resend key there) and `worker-cognito`, with their Parameter Store copies and `/insights/production/runtime` | Sign-in | Part 2 |
 | The IAM user `bizinsights-ikorex` | The server's Cognito calls | Part 2 |
 | The bucket `bizinsights-backups-605411278365`, the IAM user `bizinsights-backups`, the parameter `/bizinsights/ikorex/backup-cipher-pass` | The server's backups | Part 3 |
-| The snapshot `insightsdata-production-snapshot-db5d02a0a9-…` | CloudFormation's final snapshot of the database: cents a month, kept as a second copy of the last dump until the account closes | Last |
 | Both `CDKToolkit` stacks and their asset buckets | The Auth stack is deleted with their role | After part 2 |
 | GuardDuty | Watches an account that still holds two access keys | Last |
 
@@ -164,6 +171,6 @@ of the tests.
 **Part 3, after the backups are in R2** (or wherever the owner decides, outside AWS): the bucket
 `bizinsights-backups-605411278365`, its IAM user and the passphrase's parameter.
 
-**Last:** the final snapshot, both `CDKToolkit` stacks and GuardDuty; `node
+**Last:** both `CDKToolkit` stacks and GuardDuty; `node
 scripts/aws-dependency-scan.mjs --none-left` passes; and the owner closes the account in the AWS
 console (Account → Close account).
