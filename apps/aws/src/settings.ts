@@ -11,7 +11,11 @@
  */
 export const APP_SETTINGS = {
   "SHOPIFY_API_KEY": "57e9ef75435db908617fdd46099afe0e",
-  "SHOPIFY_SCOPES": "read_orders,read_products",
+  // read_all_orders: a store's whole order history, where Shopify otherwise shares the last 60 days.
+  // A store that granted it has its first import read every year back to its first order
+  // (packages/core/src/orderHistory.ts); one connected before is asked for it when its owner next
+  // opens the app from Shopify, and its dashboard offers "Reconnect to import full history" until then.
+  "SHOPIFY_SCOPES": "read_orders,read_all_orders,read_products",
   // NOTE: under Shopify managed installation (use_legacy_install_flow = false) these two settings do
   // NOT decide what merchants are asked to grant - shopify-app/shopify.app.toml does, and only
   // `shopify app deploy` changes it. Clearing this one does not stop Shopify requesting a scope;

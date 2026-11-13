@@ -65,7 +65,7 @@ const schema = z.object({
   GOOGLE_SIGNIN_ENDPOINT: z.string().optional().default(""),
   SHOPIFY_API_KEY: z.string().default(""),
   SHOPIFY_API_SECRET: z.string().default(""),
-  SHOPIFY_SCOPES: z.string().default("read_orders,read_products"),
+  SHOPIFY_SCOPES: z.string().default("read_orders,read_all_orders,read_products"),
   SHOPIFY_OPTIONAL_SCOPES: z.string().default(""),
   /**
    * Optional scopes only some of our apps declare, on top of SHOPIFY_OPTIONAL_SCOPES (which every

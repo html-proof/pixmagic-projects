@@ -60,7 +60,7 @@ const APP_KEYS: Record<string, string> = {
   "shopify-app/shopify.app.appstore.toml": "appstore",
 };
 /** Mirrors the default in packages/core/src/env.ts. */
-const ENV_SCOPES = "read_orders,read_products";
+const ENV_SCOPES = "read_orders,read_all_orders,read_products";
 /**
  * The optional (post-install) scopes every app declares. Only these can be requested: a
  * dashboard "Enable" button is built from `declaredOptionalScopes`, so this list, the start of

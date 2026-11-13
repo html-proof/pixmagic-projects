@@ -21,7 +21,10 @@ embedded = false
 # use_legacy_install_flow = false (Shopify managed installation) the scopes come from this
 # file, NOT from the `scope` parameter our authorize URL sends. SHOPIFY_SCOPES in the app's
 # settings must mirror this list exactly - packages/core/test/appConfig.test.ts enforces that.
-scopes = "read_orders,read_products"
+# read_all_orders: the store's whole order history, not Shopify's last 60 days. It has to be
+# approved for the app first (Partner Dashboard -> API access requests -> Read all orders scope),
+# or `shopify app deploy` refuses the version (docs/shopify-setup.md, "Full order history").
+scopes = "read_orders,read_all_orders,read_products"
 # Optional (dynamic) scopes: NOT part of the install grant. The install screen asks only for
 # `scopes` above; these are requested afterwards, one feature at a time, when the merchant
 # clicks "Enable" on a locked dashboard module (packages/core/src/scopes.ts,

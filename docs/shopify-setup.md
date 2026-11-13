@@ -148,10 +148,10 @@ What keeps a store complete, and its limits:
   were read), which is why its sales looked short.
 - **"Sync now"** (Settings → Shopify stores) re-reads the 60-day window, products and stock, once
   per 5 minutes per store.
-- **History.** Shopify gives 60 days of orders without `read_all_orders`; that scope has to be
-  requested in the Partner Dashboard (API access requests) and approved for each app before a
-  store can grant it. Ranges reaching further back show those days as not imported, and the line
-  under the dashboard's dates says from when the orders are in and why (below, "History import").
+- **History.** Shopify gives 60 days of orders without `read_all_orders`, which the apps ask for
+  at install (below, "Full order history"): a store that granted it has every order since its
+  first. For one that hasn't yet, ranges reaching further back show those days as not imported,
+  and the line under the dashboard's dates says from when the orders are in and why.
 - **Scheduled jobs** (reconcile, stale import reaper, token refresh) run only while the
   environment's schedules are on: `schedulesEnabled` in `infra/cdk/lib/config.ts`, on in production
   and off in staging; the GitHub variable `AWS_SCHEDULES` (`on`, or `off`) overrides it for every
@@ -165,32 +165,44 @@ What keeps a store complete, and its limits:
 
 Shopify treats order data as customer data. If an import fails with "Shopify withheld orders (access denied)" or "This app is not approved to access the Order object", request access in the Partner Dashboard: **Apps → Insights → API access → Protected customer data access → Request access** (pick the data and reasons). Development stores get access as soon as the request is filled in; production stores need Shopify's review (App Review's own stores are let through meanwhile, so a review install can import while a merchant's store can't: production, 2026-10-18). Until then such a store stops at once and its dashboard, Settings → Stores card and alert say it is waiting on Shopify's approval (`not_approved`), not that it needs reconnecting; it imports by itself within half an hour of the approval while its dashboard is open. The optional scopes (`read_customers`, `write_pixels`, `read_customer_events`) also need this approval before they can be requested.
 
-To import more than 60 days of history (and so report on, and compare with, dates further
-back), in this order:
+### Full order history
 
-1. Partner Dashboard → the app → **API access → Read all orders scope → Request access**, with the
-   reason (sales reports and comparisons over the store's whole history). Shopify reviews it per
-   app: the main app, PixMagic's and the App Store app each need their own.
-2. Once approved, add `read_all_orders` to `scopes` (the required ones) in that app's toml and to
-   `SHOPIFY_SCOPES` in `apps/aws/src/settings.ts` (appConfig.test checks they agree), run
-   `shopify app deploy --config <toml>` and merge to `main`. Before approval this breaks installs.
-3. The merchant opens the app from their Shopify admin and accepts the new permission (Shopify
-   asks once, under managed installation). `app/scopes_update` then queues a full orders import
-   (`scopeFollowUpKinds`), which reads every order with no date filter and records the history as
-   complete, so no dates show as "Not imported" any more.
+Shopify shares the last 60 days of orders with an app that holds `read_orders` alone. Every app in
+`shopify-app/` also asks for `read_all_orders` at install (`scopes` in its toml, `SHOPIFY_SCOPES` in
+`apps/aws/src/settings.ts`; appConfig.test checks they agree), so a store's first import reads every
+order back to its first one, a year at a time (below), and the dashboard's dates go back to the day
+the store started selling.
 
-Or, once approved, declare it in `optional_scopes` instead (every toml and
-`SHOPIFY_OPTIONAL_SCOPES`, as in 3e): installs keep working for merchants who never want it, and the
-line under the dashboard's dates then offers owners and admins **Import full history**, which sends
-them to Shopify to grant it (`POST .../scopes/request` with `scopes: ["read_all_orders"]`). The
-overview's `data.history.access` says which applies to a store: `granted`, `reconnect` (declared
-required, this store's grant predates it), `requestable` (declared optional) or `awaiting_shopify`
-(declared nowhere: the dashboard says Shopify has to approve bizinsights first, with no button).
+Shopify has to approve each app for the scope before a version that declares it can be released:
 
-Apps created in the Dev Dashboard under a merchant's own organization (not a Partner organization) need
-no approval for `read_all_orders`, per Shopify's access-scope docs; every app in `shopify-app/` is in
-a Partner organization today, and `SHOPIFY_SCOPES` is shared by all of them, so a scope added for one
-is asked of every store.
+1. Partner Dashboard → **Apps** → the app → **API access requests** → **Read all orders scope** →
+   describe the app (sales reports over the store's whole history) → **Request access**. Per app:
+   the App Store app, PixMagic's and the main app each need their own. An app made in the Dev
+   Dashboard under a merchant's own organization, for that organization's stores, needs none
+   (Shopify's access-scope docs).
+2. Once approved, release the toml: `shopify app deploy --config <name>`. Before approval Shopify
+   refuses the version (an `app_access` validation error on `scopes`), and nothing changes for
+   merchants.
+3. **Only then** merge the change that adds the scope to `SHOPIFY_SCOPES`. The setting never
+   changes what Shopify asks a merchant for; it is what the dashboard believes was asked. Ahead of
+   the released toml it would offer every store "Reconnect to import full history", and the
+   reconnect would grant nothing.
+
+What a store sees (`data.history.access` in the overview):
+
+- A **new** store grants the scope at install: `granted`, and its first import is the whole history.
+- A store **connected before** keeps working on its 60 days and reads `reconnect`: its dashboard
+  says so under the dates, with **Reconnect to import full history** for owners and admins. Shopify
+  also asks for the new permission by itself when the merchant next opens the app from their Shopify
+  admin (managed installation). Either way `app/scopes_update` queues a full orders import
+  (`scopeFollowUpKinds`), which records the history as complete, so no dates show as "Not imported"
+  any more.
+- `requestable` (the scope declared in `optional_scopes` instead: an **Import full history** button,
+  `POST .../scopes/request`) and `awaiting_shopify` (declared nowhere) are what the code shows for
+  a deployment that doesn't declare it required; production's does.
+
+`SHOPIFY_SCOPES` is shared by all the apps, so a scope added for one is asked of every store: an app
+whose released toml lacks it leaves its stores on `reconnect` with nothing to grant.
 
 ### History import (read_all_orders): a year at a time
 
