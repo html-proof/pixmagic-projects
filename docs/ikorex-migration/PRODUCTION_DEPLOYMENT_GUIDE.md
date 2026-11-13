@@ -302,6 +302,7 @@ before it needs the file copied again into `C:\ProgramData\bizinsights-runner` (
 | Check a store against Shopify | `docker compose --profile admin run --rm admin shopify-check --shop <x>.myshopify.com` |
 | Row counts | `docker compose --profile admin run --rm admin counts` |
 | What is configured (names only) | `docker compose --profile admin run --rm admin config` |
+| What deleting every account but one would take (removes nothing) | `docker compose --profile admin run --rm admin remove-accounts --keep <address>`. With `--confirm <the count it printed>` it deletes them, each as "Delete account" in Settings does: the workspaces an account alone owns go with it, their stores' data too. Only on the owner's word; the one way back is a restore of the database |
 | Who still signs in through Cognito (counts) | `docker compose --profile admin run --rm admin sign-in-move` ([LEAVING_AWS.md](LEAVING_AWS.md#sign-in-off-cognito)) |
 | The backups there are (the folder on the server's disk, [Backups](#backups)) | `docker compose exec backup pgbackrest --stanza=bizinsights info` |
 | Is the log reaching the backups | `docker compose exec backup pgbackrest --stanza=bizinsights check` |
