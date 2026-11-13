@@ -74,7 +74,18 @@ passphrase), the two retention lines as for the folder; then `docker compose up 
 backup`. `backup-loop.sh` sees `PGBACKREST_REPO2_PATH`, logs `repositories: 1 2`, and takes the
 bucket's first full backup at once.
 
-**The uptime check as it runs since 2026-11-13:** the workflow Uptime check
+**The uptime check, on Cloudflare (relied on since 2026-11-13):** the Worker `bizinsights-uptime`
+(`infra/uptime/worker.mjs`, `wrangler.json`) runs the same `check.mjs` every 10 minutes on
+Cloudflare's cron and, when `/api/readyz` or `/login` is still wrong after a second look 30 seconds
+later, emails `bizinsightsaus@yahoo.com` from `uptime@bizinsights.io` through Email Routing (the
+destination must stay verified there). An email every 10 minutes while the site is down; none means
+it is up. It has no address of its own. It is published by hand from a checkout, not by any
+workflow: `npx --yes wrangler@4.154.0 deploy --config infra/uptime/wrangler.json` (the file's header
+also says how to see an alert arrive). Its runs: Cloudflare dashboard → Workers & Pages →
+bizinsights-uptime → Logs. It replaced relying on GitHub's schedule, below, which never started a
+run on 2026-11-13.
+
+**The uptime check on GitHub (the second one):** the workflow Uptime check
 (`.github/workflows/uptime.yml`) runs `infra/uptime/check.mjs` every 10 minutes on GitHub's own
 machines, outside the server and outside AWS. It asks `https://bizinsights.io/api/readyz` and
 `/login`, looks again after 30 seconds when either is wrong, and fails the run if it still is.

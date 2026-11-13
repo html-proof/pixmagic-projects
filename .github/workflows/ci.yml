@@ -281,9 +281,10 @@ jobs:
       # administrator's guide.
       - name: Test of the server's pinned host key
         run: node --test infra/ikorex/scripts/host-key.test.mjs
-      # What the Uptime check workflow runs every 10 minutes (.github/workflows/uptime.yml).
+      # What the Uptime check workflow (.github/workflows/uptime.yml) and the Cloudflare Worker
+      # bizinsights-uptime (infra/uptime/worker.mjs) run every 10 minutes.
       - name: Tests of the uptime check
-        run: node --test infra/uptime/check.test.mjs
+        run: node --test infra/uptime/check.test.mjs infra/uptime/alert.test.mjs
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24

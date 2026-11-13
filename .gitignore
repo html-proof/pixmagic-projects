@@ -35,6 +35,8 @@ cdk.out
 
 # Local remnants of the retired Worker deployment (may contain secrets).
 apps/cloudflare/
+# Wrangler's local state and cache (the uptime Worker, infra/uptime/worker.mjs).
+.wrangler/
 
 # Country flags copied from country-flag-icons at build time (apps/web/scripts/copy-flags.mjs)
 apps/web/public/flags/

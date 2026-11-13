@@ -1,7 +1,7 @@
-// The uptime check for production: asks the public address what a visitor would, from GitHub's
-// machines, so from outside both the iKorex server and AWS. Run every 10 minutes by
-// .github/workflows/uptime.yml; a run that ends 1 is what tells the owner (GitHub emails a failed
-// scheduled run to whoever last changed the workflow's schedule).
+// The uptime check for production: asks the public address what a visitor would, from outside the
+// iKorex server. Run every 10 minutes by the Cloudflare Worker bizinsights-uptime (worker.mjs), which
+// emails the owner, and by .github/workflows/uptime.yml, where a run that ends 1 is what tells the
+// owner (GitHub emails a failed scheduled run to whoever last changed the workflow's schedule).
 //
 //   node infra/uptime/check.mjs [url ...]     default: the two addresses below
 //
@@ -36,7 +36,8 @@ export async function check(urls, { probeImpl = probe, wait = (ms) => new Promis
   return look();
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run as a script by Node; imported by the Worker, where there is no script path.
+if (typeof process !== "undefined" && process.argv?.[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const urls = process.argv.length > 2 ? process.argv.slice(2) : DEFAULT_URLS;
   const problems = await check(urls);
   if (problems.length === 0) {
