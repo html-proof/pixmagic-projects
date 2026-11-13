@@ -1,5 +1,12 @@
 # bizinsights on AWS: deployment runbook
 
+**This page is a record.** Production left AWS on 2026-11-13 and AWS's side was deleted the same
+day ([ikorex-migration/LEAVING_AWS.md](ikorex-migration/LEAVING_AWS.md)); the server's runbook is
+[ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md](ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md).
+What this page names in the repository (`infra/cdk`, `.github/workflows/aws-deploy.yml`, the Lambda
+entry point `apps/aws/src/index.ts`, `apps/aws/scripts/build.mjs`) was removed after it and is in
+Git's history: the last commit that holds it is `a5177a93`.
+
 How bizinsights on AWS is built, deployed, filled with data, tested, rolled back and, at cutover,
 made the only production (the old Cloudflare deployment still serves merchants until then, see
 [Retiring the old Cloudflare deployment](#retiring-the-old-cloudflare-deployment)). The design and its reasoning are in

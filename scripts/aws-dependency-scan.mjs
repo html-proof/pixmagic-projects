@@ -46,24 +46,14 @@ const isDocs = (path) => path.endsWith(".md") || path.startsWith("docs/");
  */
 export const GROUPS = [
   {
-    title: "AWS's infrastructure and its deploy",
-    goes: "Stage F, with the resources it describes (ROLLBACK_PLAN.md, \"Order of decommissioning\")",
-    paths: ["infra/cdk/", "infra/aws/", ".github/workflows/aws-deploy.yml"],
+    title: "The user pool's template (the Auth stack, the one stack left in AWS)",
+    goes: "With Cognito, after `AUTH_MODE=local` (LEAVING_AWS.md, part 2). The CDK app, Deploy to AWS and the Lambda functions went on 2026-11-13",
+    paths: ["infra/aws/"],
   },
   {
-    title: "The Lambda functions and the AWS adapters only they load",
-    goes: "Stage F, with the functions. The server's bundle (`server.ts`, `admin.ts`) loads none of these",
-    paths: [
-      "apps/aws/src/index.ts",
-      "apps/aws/src/cognitoEmail.ts",
-      "apps/aws/src/dynamoCoord.ts",
-      "apps/aws/src/s3Blobs.ts",
-      "apps/aws/src/secrets.ts",
-      "apps/aws/scripts/build.mjs",
-      "apps/aws/package.json",
-      "apps/aws/.env.example",
-      "apps/aws/test/",
-    ],
+    title: "The server package's AWS dependency, example settings and tests",
+    goes: "With the AWS code the server still loads (next group)",
+    paths: ["apps/aws/package.json", "apps/aws/.env.example", "apps/aws/test/"],
   },
   {
     title: "AWS code the server loads, used only when a switch says so",

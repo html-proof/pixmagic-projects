@@ -159,9 +159,12 @@ Deleting is the one step of the move with no way back: after part 1 a rollback t
 possible, and the server and its backups are the only copy of the data.
 
 **Part 1, done 2026-11-13** (nearly all of the bill): everything listed under "What was deleted"
-above. Still to follow it in the repository, as its own pull request:
-`.github/workflows/aws-deploy.yml` (switched off in GitHub meanwhile), `infra/cdk` apart from what
-describes the Auth stack, the Lambda entry point and the adapters only it loads.
+above. The repository followed the same day: `.github/workflows/aws-deploy.yml`, all of `infra/cdk`,
+the Lambda entry point (`apps/aws/src/index.ts`) and what only it loaded (the SQS, DynamoDB, S3 and
+Secrets Manager adapters, the cost email, Cognito's email function, the Lambda build) are removed;
+the last commit that holds them is `a5177a93`. `infra/aws/cognito.yaml` stays as the description of
+the pool until part 2. What still names AWS in the code is in
+[AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md).
 
 **Part 2, after `AUTH_MODE=local`:** the Auth stack (the user pool, `auth.bizinsights.io` and its
 record at Cloudflare, the `cognito-email` function and its KMS key) and the IAM user
