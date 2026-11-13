@@ -1,0 +1,48 @@
+name: Uptime check
+
+# Is https://bizinsights.io answering? Asked every 10 minutes from GitHub's machines: outside the
+# iKorex server it runs on, and outside AWS. infra/uptime/check.mjs asks /api/readyz and /login, looks
+# again after 30 seconds if either is wrong, and fails the run if it still is.
+#
+# The alarm is GitHub's own: a failed scheduled run is emailed to whoever last changed this file's
+# schedule (their GitHub notification settings, Actions: "failed workflows"). While the site stays
+# down every run fails, so an email follows about every 10 minutes; a green run after them means it
+# is back. GitHub may start scheduled runs late, by minutes when it is busy: this is a free check,
+# not a pager.
+#
+# Free: this repository is public, so GitHub's standard runners cost nothing here. If it is ever made
+# private, a run every 10 minutes is about 4,300 minutes a month: change the schedule first.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: Other addresses to check, separated by spaces (to see a failure, give one that doesn't answer 200)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# One at a time; a late run never piles onto the next.
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: infra/uptime
+          sparse-checkout-cone-mode: true
+      # The runner's own Node (no setup step: nothing to install, and every second saved is saved 144 times a day).
+      - name: Ask bizinsights.io
+        env:
+          URLS: ${{ inputs.urls }}
+        run: |
+          # shellcheck disable=SC2086
+          node infra/uptime/check.mjs $URLS

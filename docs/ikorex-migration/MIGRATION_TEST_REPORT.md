@@ -282,7 +282,7 @@ capacity claim); everything that touches production (stages D-F).
 | 14 | Customer permissions work | Unchanged code and database roles; not yet tested on the server |
 | 15 | Historical analytics intact | The copy and its table-by-table check tested against PostgreSQL ([DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md)); against RDS: not yet (stage B rehearsal, stage D) |
 | 16 | Backups and restore tested | **Running since 2026-11-13 06:48 UTC, restore test passed** (to an S3 bucket for now: [below](#2026-11-13-backups-off-the-server-and-the-restore-test)); the weekly test and the nightly run themselves not yet seen |
-| 17 | Monitoring and alerting work | Configured; not yet run (stage C) |
+| 17 | Monitoring and alerting work | The monitoring stack: configured, not run (it doesn't fit the server's memory). Since 2026-11-13 an uptime check instead: `.github/workflows/uptime.yml` asks `/api/readyz` and `/login` every 10 minutes from GitHub and fails its run, which GitHub emails, when either is wrong twice 30 seconds apart (`infra/uptime/check.mjs`, 4 tests). An AWS version (Lambda and SNS) was dropped the same hour: SNS refuses the owner's address, and AWS is being removed |
 | 18 | No cross-tenant leakage | The new tables carry no tenant data and the tenant role has no rights on them (checked); the copy carries every table's row-level security and policies unchanged (tested); on the server: not yet |
 | 19 | Existing iKorex websites keep working | Not yet (nothing has run on the server) |
 | 20 | n8n and the CCTV tunnel keep working | Not yet |
