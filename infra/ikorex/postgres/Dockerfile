@@ -7,8 +7,9 @@ FROM postgres:17.11-bookworm
 RUN apt-get update \
  && apt-get install -y --no-install-recommends pgbackrest ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /var/spool/pgbackrest /var/log/pgbackrest /tmp/pgbackrest /restore-test \
- && chown -R postgres:postgres /var/spool/pgbackrest /var/log/pgbackrest /tmp/pgbackrest /restore-test
+ && mkdir -p /var/spool/pgbackrest /var/log/pgbackrest /tmp/pgbackrest /restore-test /var/lib/pgbackrest-local \
+ && chown -R postgres:postgres /var/spool/pgbackrest /var/log/pgbackrest /tmp/pgbackrest /restore-test /var/lib/pgbackrest-local \
+ && chmod 750 /var/lib/pgbackrest-local
 
 COPY --chown=postgres:postgres pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
 COPY --chown=postgres:postgres postgresql.conf /etc/postgresql/postgresql.conf
