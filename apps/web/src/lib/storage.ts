@@ -44,5 +44,8 @@ export const MENU_RAIL_KEY = "menu-rail";
 /** Set once the look around (components/Tour.tsx) was taken or declined on this device, so the Home stops offering it. */
 export const TOUR_SEEN_KEY = "tour-seen";
 
+// Light or dark on this device is kept here too, under THEME_KEY: lib/theme.ts owns it, because the
+// script that reads it before the page paints is built there.
+
 /** Per workspace, the newest note (info alert) the bell has shown, so older ones don't light its dot again. */
 export const notesSeenKey = (workspaceId: string) => `notes-seen:${workspaceId}`;

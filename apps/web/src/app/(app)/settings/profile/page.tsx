@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { Check } from "lucide-react";
 import { useApp } from "@/components/AppContext";
+import { AppearanceCard } from "@/components/Theme";
 import { Alert } from "@/components/ui";
 import { actionError, api } from "@/lib/api";
 
@@ -86,6 +87,9 @@ export default function ProfilePage() {
           </button>
         </form>
       </section>
+
+      {/* Light or dark: this device's, not the account's (components/Theme.tsx). */}
+      <AppearanceCard />
     </div>
   );
 }
