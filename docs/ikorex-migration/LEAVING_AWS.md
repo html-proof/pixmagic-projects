@@ -11,10 +11,16 @@ way back to AWS.** The database, the functions, the queues, CloudFront, the WAF,
 service and the deploy pipeline are deleted ([what was deleted](#what-was-deleted-2026-11-13)).
 What is left in the account is what the two ties below need, and little else.
 
+**Parts 2 and 3 followed the same day, and the account is empty since 08:45 UTC.** On the owner's
+"delete cognito too" and "Yes, delete it" (the backups bucket), Cognito, the bucket, both IAM users
+and everything else went ([what is left](#what-is-left-in-the-account): nothing that runs or
+costs). Nothing in production uses AWS. What remains is the owner closing the account, and the
+last AWS code leaving the repository.
+
 ## What replaced what
 
 Every AWS service bizinsights used, and what does its job on the server. Nothing in the last column
-is an AWS service; the two rows marked **still AWS** are the ties below.
+is an AWS service; the two rows that were ties (backups, sign-in) say how each was cut.
 
 | AWS service | Its job | On the server |
 | --- | --- | --- |
@@ -23,9 +29,9 @@ is an AWS service; the two rows marked **still AWS** are the ties below.
 | EventBridge Scheduler | Timed jobs | Schedules in the worker (`schedules.ts`) |
 | DynamoDB | Rate limits, sign-in state, locks | A PostgreSQL table (`pgCoord.ts`) |
 | RDS PostgreSQL | All the data | PostgreSQL 17 in a container |
-| RDS snapshots, AWS's backups | Backups | pgBackRest, encrypted, with a restore test. **Still AWS:** the bucket it writes to |
+| RDS snapshots, AWS's backups | Backups | pgBackRest, encrypted, with a restore test, in a folder on the server's own disk (the owner chose "only on the server" on 2026-11-13; the S3 bucket it first wrote to is deleted) |
 | S3 | Webhook bodies waiting for their job, the built pages | A folder on the server; pages served by `web` |
-| Cognito | Sign-in: passwords, emailed codes, Google, two-step verification | The app's own sign-in (`localAuth.ts`: argon2id passwords, six-digit emailed codes, authenticator-app codes in `totp.ts`). **Still AWS:** until `AUTH_MODE=local` |
+| Cognito | Sign-in: passwords, emailed codes, Google, two-step verification | The app's own sign-in (`localAuth.ts`: argon2id passwords, six-digit emailed codes, authenticator-app codes in `totp.ts`), alone since `AUTH_MODE=local` on 2026-11-13; the user pool is deleted |
 | Cognito's email function + KMS | Sending the sign-in codes | The app writes and sends them itself, through Resend |
 | SES | Email (an unused fallback) | Resend, which always sent every email. Not AWS, not on the server: a mail server of our own on a shared address would land in spam ([OPEN_SOURCE_STACK.md](OPEN_SOURCE_STACK.md)) |
 | End User Messaging SMS, SNS `sms-events` | Texts | Nothing: the owner removed Customer Messaging (SMS) on 2026-11-13 |
@@ -48,13 +54,20 @@ Counted on the server on 2026-11-13 (`admin sign-in-move`, below). Where each st
   healthy, a wrong sign-in answered 401 and a reset request 200 without Cognito, Google's start
   still handed to Google, no error and no call to Cognito in the server's log. Not yet seen: a
   person signing in with Google on the app's own client, or one of the 3 setting a password.
-  **The user pool is kept for a few days as the way back** (the owner had no preference): the
-  file as it was is `env/app.env.before-local` on the server, and `COGNITO_*` and the IAM user's
-  keys are still in `env/app.env`, unused. Going back is that file copied over `env/app.env` and
-  `docker compose up -d web worker`; whoever set a password in the app meanwhile keeps it.
-- **The backups are still in S3.** The owner put R2 off (it asks for a payment card); the sessions
-  that own the backups record what replaces the bucket. Until that is proven, the bucket is the only
-  copy of the data off the server, and **the account cannot be closed yet**.
+  **The user pool is deleted** (the owner, later that hour: "delete cognito too"), so there is no
+  switching back: sign-in problems are fixed in the app. What could be proven about Google without
+  a person, before it went: Google's token endpoint accepts the server's client id and secret (a
+  made-up code is refused as `invalid_grant`, not `invalid_client`), and all 4 Google users are
+  recorded under the name the app's own sign-in finds them by (`google_<Google's id>`).
+- **The backups are on the server only.** The owner chose that over R2 (it asks for a payment
+  card), told plainly that the database and every backup then share one disk. pgBackRest writes to
+  a folder there since 08:18 UTC (restore test passed; the sessions that own the backups record
+  it in [PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE.md)), and the S3 bucket, its
+  IAM user and the passphrase's parameter are deleted (08:32 UTC). The app's secrets likewise
+  exist only in `~/bizinsights/env` on the server: the encrypted copy made before part 1 was in
+  that bucket.
+
+The table is the two ties as they were:
 
 | Tie | What breaks if AWS goes first | What cuts it |
 | --- | --- | --- |
@@ -157,13 +170,36 @@ page still answers.
 
 ## What is left in the account
 
-| Left | Why | Goes |
-| --- | --- | --- |
-| The stack `InsightsAuth`: the user pool, its client, `auth.bizinsights.io`, the `cognito-email` function and its KMS key; the certificate for `auth.bizinsights.io`; the secrets `insights/production/app` (the email function reads its Resend key there) and `worker-cognito`, with their Parameter Store copies and `/insights/production/runtime` | Sign-in | Part 2 |
-| The IAM user `bizinsights-ikorex` | The server's Cognito calls | Part 2 |
-| The bucket `bizinsights-backups-605411278365`, the IAM user `bizinsights-backups`, the parameter `/bizinsights/ikorex/backup-cipher-pass` | The server's backups | Part 3 |
-| Both `CDKToolkit` stacks and their asset buckets | The Auth stack is deleted with their role | After part 2 |
-| GuardDuty | Watches an account that still holds two access keys | Last |
+Nothing that runs, stores data or costs (read 2026-11-13, 08:45 UTC, Sydney and us-east-1): no
+stack, bucket, function, database or snapshot, user pool, IAM user, certificate, log group,
+parameter, trail or GuardDuty detector. AWS itself still holds, until their waiting periods end
+and at no charge:
+
+| Left | Until |
+| --- | --- |
+| Seven secrets `insights/production/*`, deleted with Secrets Manager's recovery window | 2026-12-13, then gone for good |
+| The KMS key of Cognito's email function, scheduled for deletion | 2026-11-20 |
+
+Outside AWS, two loose ends of it:
+
+- **The DNS record `auth.bizinsights.io`** at Cloudflare points at Cognito's deleted domain. It is
+  removed in the Cloudflare dashboard, with the owner.
+- **The last bill** arrives the month after: about US$66.52 had run up by 2026-11-13, before GST.
+
+## What parts 2 and 3 deleted (2026-11-13)
+
+- **Cognito (08:20 to 08:42 UTC).** First the server: the `COGNITO_*` lines and the IAM user's keys
+  emptied in `env/app.env`, `web` and `worker` restarted healthy, sign-in checked again. Then the
+  IAM user `bizinsights-ikorex`; the stack `InsightsAuth` (the client, both pool domains, the
+  `cognito-email` function, its KMS key); the user pool itself, which the stack keeps by design;
+  the secrets `insights/production/app` and `worker-cognito` with their Parameter Store copies;
+  the log group; the certificate for `auth.bizinsights.io`.
+- **The backups' place in AWS (08:32 UTC),** after reading on the server that nothing there named
+  S3 any more and archiving had 0 failures: the IAM user `bizinsights-backups`, the bucket
+  `bizinsights-backups-605411278365` with all 2,683 object versions, the parameter
+  `/bizinsights/ikorex/backup-cipher-pass`. `pgbackrest check` passed on the server after it.
+- **Last (08:45 UTC):** both `CDKToolkit` stacks with their asset buckets and image repositories,
+  and GuardDuty.
 
 ## The order
 
@@ -178,15 +214,16 @@ the last commit that holds them is `a5177a93`. `infra/aws/cognito.yaml` stays as
 the pool until part 2. What still names AWS in the code is in
 [AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md).
 
-**Part 2, after `AUTH_MODE=local`** (the server is there since 2026-11-13; the deletion waits for
-the owner's word, a few days of sign-ins first)**:** the Auth stack (the user pool, `auth.bizinsights.io` and its
+**Part 2, done 2026-11-13 in AWS:** the Auth stack (the user pool, `auth.bizinsights.io` and its
 record at Cloudflare, the `cognito-email` function and its KMS key) and the IAM user
-`bizinsights-ikorex`; in the repository, `cognito.ts`, `migratingAuth.ts` and the Cognito stand-in
-of the tests.
+`bizinsights-ikorex`. Still to follow in the repository, as its own pull request: `cognito.ts`,
+`migratingAuth.ts`, `infra/aws/cognito.yaml`, the Cognito stand-in of the tests, the SES mailer
+and the copy tools ([AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md#stage-f-removing-the-code)).
 
-**Part 3, after the backups are in R2** (or wherever the owner decides, outside AWS): the bucket
+**Part 3, done 2026-11-13** (the backups went to the server's own disk, not to R2): the bucket
 `bizinsights-backups-605411278365`, its IAM user and the passphrase's parameter.
 
-**Last:** both `CDKToolkit` stacks and GuardDuty; `node
-scripts/aws-dependency-scan.mjs --none-left` passes; and the owner closes the account in the AWS
-console (Account → Close account).
+**Last:** both `CDKToolkit` stacks and GuardDuty are deleted (2026-11-13). Open: `node
+scripts/aws-dependency-scan.mjs --none-left` passes once the code above is gone; and the owner
+closes the account in the AWS console as its root user (Account → Close account), which nothing
+in the account now stands in the way of.
