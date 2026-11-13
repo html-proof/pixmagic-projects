@@ -28,6 +28,11 @@ docker image inspect "bizinsights:$tag" >/dev/null
 previous="$(sed -n 's/^APP_TAG=//p' .env)"
 set_tag() { sed -i "s/^APP_TAG=.*/APP_TAG=$1/" .env; }
 
+# Until the switch below, Compose works with the running release's tag. On a folder's very first
+# deploy there is none (.env's APP_TAG is empty, and the Compose file refuses an empty tag for every
+# command, the database's too): the new release's stands in.
+export APP_TAG="${previous:-$tag}"
+
 # The database first (it must be up for the migrations), then the WhatsApp service's own database.
 compose up -d --build postgres
 log "migrations"
@@ -74,6 +79,8 @@ check() {
 }
 
 log "switching from ${previous:-nothing}"
+# From here .env decides again (set_tag), for the switch and for a rollback alike.
+unset APP_TAG
 set_tag "$tag"
 compose up -d --remove-orphans web worker evolution backup cloudflared
 if ! check; then

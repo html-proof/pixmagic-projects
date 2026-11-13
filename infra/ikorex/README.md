@@ -6,6 +6,7 @@ The self-hosted deployment, built for the move off AWS (docs/ikorex-migration). 
 | Path | What |
 | --- | --- |
 | `docker-compose.yml` | The app: `web`, `worker`, `admin`, `postgres`, `backup`, `evolution`, `cloudflared`. No published port. |
+| `docker-compose.lean.yml` | Smaller memory limits on the same containers, for a server short of memory (the iKorex server as it is: 2.5 GB free). Chosen in the server's `.env` with `COMPOSE_FILE` |
 | `docker-compose.monitoring.yml` | Prometheus, Alertmanager, Grafana, exporters; Loki + Alloy in the `logs` profile |
 | `Dockerfile` | The app image, from the bundle `apps/aws/scripts/build-server.mjs` makes |
 | `postgres/` | PostgreSQL 17.11 + pgBackRest, its settings, the nightly backup and the weekly restore test |
@@ -17,6 +18,7 @@ The self-hosted deployment, built for the move off AWS (docs/ikorex-migration). 
 | `scripts/deploy.sh` | On the server: migrations, switch, health checks, automatic rollback |
 | `scripts/render-monitoring.sh` | On the server: Alertmanager's file from its template |
 | `scripts/export-env.mjs` | AWS's secrets straight into a file on the server, never on screen |
+| `scripts/setup-env.sh` | On the server, once per project folder: the env files from their examples, a new password per database login, AWS's values merged in, `.env` with the low-memory limits |
 | `scripts/copy-db.mjs`, `copy-db.sh`, `copy-db-lib.mjs`, `copy-db-run.mjs` | The database copy from RDS, checked table by table (`--rehearsal`, `--cutover`; docs/ikorex-migration/DATABASE_MIGRATION_REPORT.md) |
 | `scripts/copy-db-back.mjs` | The copy back into RDS for a rollback, the same checks (`--rehearsal`, `--rollback --replace`; docs/ikorex-migration/ROLLBACK_PLAN.md) |
 | `known_hosts` | The server's SSH host key, pinned: `ship.sh`, `copy-db.mjs` and `copy-db-back.mjs` connect only to it |
