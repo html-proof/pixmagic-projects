@@ -146,12 +146,14 @@ test("with bizinsights' WhatsApp service switched off, the page says so instead 
   await expect(page.getByText("Switched off", { exact: true })).toBeVisible();
 
   // A button that needs the service: the reason, and nothing about bizinsights being unreachable.
+  await page.goto("/dashboard/whatsapp-automation?tab=settings");
+  await expect(off).toBeVisible();
   await page.getByRole("button", { name: "Check again" }).first().click();
   await expect(page.getByRole("alert").filter({ hasText: "WhatsApp is switched off on bizinsights at the moment. Nothing was changed." })).toBeVisible();
   await expect(page.getByText(/can't reach bizinsights|keep trying/)).toHaveCount(0);
 
   // Connecting isn't offered while it is off.
-  await page.getByRole("link", { name: "Setup", exact: true }).click();
+  await page.goto("/dashboard/whatsapp-automation?tab=setup");
   await page.getByRole("list", { name: "Setup steps" }).getByRole("button").first().click();
   await expect(page.locator("#wa-step-connect")).toContainText("Nothing can be connected until it is back on");
 });
