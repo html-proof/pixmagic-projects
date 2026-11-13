@@ -861,16 +861,22 @@ visits in the same dates and filter, so no rate mixes two sources:
   funnel now and before, every transition, every day, every segment and the products (with quick
   adds, checkouts and purchases, empty where not recorded). "Print or save as PDF" prints the page.
 
-## Profit sheet (/sheet)
+## Profit sheet (Profit & Loss → Detailed Table)
+
+The day-by-day sheet. It was a page of its own (/sheet) until 2026-11-13, when the owner's design
+folded it into Profit & Loss: it is the second half of that page's Detailed Table
+(`/profit?tab=table`, `components/sheet/SheetSection.tsx`), under the statement by period. `/sheet`
+forwards there with its dates and filters (`?by=` read as the page's `?grain=`).
 
 Every figure bizinsights has for the store laid out like the owner's own spreadsheet: a row per
 figure, the days shown added up first, then a column per day, week (Monday to Sunday) or calendar
-month (`?by=`; without it days up to 45 days, weeks up to 190, then months). Its data is the
+month: the page's Daily / Weekly / Monthly (`?grain=`; a year's columns are months; for a member
+without the statement and no pick, days up to 45 days, weeks up to 190, then months). Its data is the
 dashboard's own answer narrowed to it (`GET …/overview?parts=sheet`: `sales_overview`, `funnel` with
 `visitsByDay`, `ads`, `ad_connections`, `product_costs` with `byDay`, `expenses` with `terms`);
 `@app/shared/sheet` adds the days up. Nothing is estimated. Page access: "View sales and revenue"
-(`analytics.sales`); each row needs what its figure needs. Above the table the page opens on the
-store's **profit and loss** for a day and a month ("Profit and loss" below).
+(`analytics.sales`); each row needs what its figure needs. A member with the sales but not their
+breakdown gets this sheet alone on Profit & Loss, as /sheet gave them.
 
 | Row | Day by day from | Notes |
 | --- | --- | --- |
@@ -924,18 +930,18 @@ share), then each event's own days, with "Only its days" to narrow the sheet to 
 **Download CSV** ("Export approved reports" permission): the sheet as on screen, built in the browser (the
 same figures the page shows), plain numbers, the events as a row. **Print** prints the page.
 
-## Profit and loss (Profit sheet)
+## Profit and loss (a month and its days)
 
 Reference implementation: `packages/shared/src/profit.ts` (`profitAndLoss`, `costsOver`, `outcomeOf`),
-`packages/core/src/reports/profit.ts` (`profitReport`), `GET /workspaces/:ws/stores/:storeId/profit?month=YYYY-MM`
-(`apps/api/src/routes/profit.ts`) and the sheet's "Profit and loss" (`components/sheet/ProfitPanel.tsx`).
+`packages/core/src/reports/profit.ts` (`profitReport`) and `GET /workspaces/:ws/stores/:storeId/profit?month=YYYY-MM`
+(`apps/api/src/routes/profit.ts`).
 
-Whether the store made money on a day and in a month. The page picks a month (this month by default,
-any month back to the store's first) and a day in it (today by default): `?month=` and `?day=`. The
-API answers the month's days, the month (so far, while it runs) and the 12 months ending with it, all
-worked out on the server from the store's own records; the page lays them out as Daily performance,
-Monthly performance, Expense breakdown and Profit analysis (daily profit or loss, monthly profit or
-loss, sales vs expenses, fixed vs variable costs, profit margin trend). Days are store-local.
+Whether the store made money on a day and in a month. The API answers a month's days, the month (so
+far, while it runs) and the 12 months ending with it, all worked out on the server from the store's
+own records. Days are store-local. Until 2026-11-13 the Profit sheet page opened on a panel drawn
+from this answer (a month and a day picked there); Profit & Loss ("Profit & Loss page" below) now
+shows the same figures for any dates from `…/profit/statement`, by the same engine and the same
+rules, and no page asks for this one. It stays for API keys and shared links.
 
 | Figure | Formula | From |
 | --- | --- | --- |
@@ -984,10 +990,39 @@ The owner's own profit and loss workbook (EEq.xlsx, a "Dashboard" sheet with a c
 "Add Cost" sheet) as a page: any dates and the dates they're compared with (the dashboard's pickers:
 today, yesterday, this week, this month, last month, this year, last year, custom; previous period,
 previous year, custom), a column per day, week, month or year (at most `MAX_STATEMENT_COLUMNS`, 62;
-coarser when the dates need more), overview cards with the change from the comparison, charts
-(revenue, expenses and profit per column; daily profit or loss; the expense breakdown; advertising;
-fixed vs variable), the statement, the expenses table and the recurring expenses. Every figure is
-`profitAndLoss`'s (`packages/shared/src/profit.ts`), worked out on the server; the page formats it.
+coarser when the dates need more). Every figure is `profitAndLoss`'s
+(`packages/shared/src/profit.ts`), worked out on the server; the page formats it.
+
+**Layout (the owner's design, 2026-11-13).** One page for the profit and loss and the Profit sheet.
+The header has the dates, Daily / Weekly / Monthly / Yearly (`?grain=`: the charts' periods, the
+statement's columns and the sheet's) and Export (the statement as CSV). Under it four figures, each
+with its change from the dates compared with and what it means behind its "i": Revenue (Tax Incl.),
+Total Expenses, Profit (After Tax) (revenue before tax − total expenses: the tax collected is taken
+out first) and Profit Margin (its change in percentage points). Then five sections (`?tab=`), with
+the quick actions Add Expense and Add Business Event beside them:
+
+| Section | What it shows |
+| --- | --- |
+| Overview (default) | Revenue and expenses as columns with profit as a line, per period; Key Insights; Expense Breakdown (a ring); Profit Analysis; the statement in four columns (these dates, the dates compared with, the change, its share), with the comparison picker, Download CSV and View Details |
+| Revenue (`revenue`) | Revenue with and without tax, tax collected, orders, items sold; revenue per period; the sum from gross sales to revenue with tax, a step a line |
+| Expenses (`expenses`) | Total, advertising, variable and fixed costs; Expense Breakdown (the ring); every cost biggest first, with what the connected ad accounts add; the expenses table; the recurring expenses; how fixed costs are spread (every day, or the days the store is open) |
+| Profit Analysis (`analysis`) | Profit Analysis; the sum from revenue before tax to profit, a step a line; profit day by day; margin, MER, ROAS, VCR and FCR each with a line of plain words; the cash-flow note |
+| Detailed Table (`table`) | The statement, a column per period (the table below); then the day-by-day sheet with the business events ("Profit sheet" above) |
+
+- **Key Insights** are sentences a figure on the page backs, never a guess: profit against the dates
+  compared with (or why it can't be given); the largest of the five cost groups and its share of
+  total expenses; the advertising spend and its share of revenue (or "No advertising spend in this
+  period."); the best day by profit; how many business events fall in the dates (or a prompt to add one).
+- **Expense Breakdown** groups every cost five ways that add up to total expenses: product costs,
+  other variable costs (your variable categories), fixed costs, advertising, and interest, tax and
+  other (below operating profit). A group that isn't known says "Missing data"; the ring's centre is
+  then "Costs known", not the total.
+- **Profit Analysis**: the average profit a day (total ÷ days), the highest and the lowest day with
+  their dates, and the total; "Missing data" while any day's profit isn't known.
+- A member with "View sales and revenue" but not the breakdown gets the day-by-day sheet alone, with
+  a line saying what to ask for.
+- Not in the design and so not built: recording revenue by hand ("Add Revenue"). Revenue is only
+  what Shopify's sales records say.
 
 | Row | Formula |
 | --- | --- |
@@ -1026,8 +1061,7 @@ on a day refunds outweigh sales.
 
 Reference implementation: `packages/shared/src/expenses.ts` (`expenseInRange`, `occurrences`,
 `expenseTotals`, `netProfit`), `packages/core/src/expenses.ts`, Profit & Loss (`/profit`), Settings →
-Costs (`/settings/costs`) and the Profit sheet's Expense breakdown, which all edit costs with the one
-form (`components/costs/CostForm.tsx`).
+Costs (`/settings/costs`), which edit costs with the one form (`components/costs/CostForm.tsx`).
 
 What Shopify, its profit report and the ad platforms can't tell bizinsights (rent, salaries, software,
 the Shopify plan and apps, shipping labels, packaging, payment fees, commissions, ads on platforms that

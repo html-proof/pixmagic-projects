@@ -34,7 +34,6 @@ import {
   Send,
   Settings,
   Scale,
-  Sheet,
   ShieldCheck,
   UserCog,
   ShoppingBag,
@@ -275,10 +274,10 @@ function Sidebar({ onNavigate, prefs, rail = false }: { onNavigate?: () => void;
   // Every entry once, by name; the two layouts below arrange the same entries.
   const home: NavItem[] = showsDashboardHome(access) ? [{ label: full ? "Dashboard" : "Overview", icon: LayoutDashboard, href: DASHBOARD, active: onDash && view === null }] : [];
   const overview = topic("overview", "Business Overview", Gauge);
-  // The Profit sheet: every figure a column per day, week or month, with the business events (/sheet).
-  const sheet = allowed("analytics.sales") ? [area("/sheet", "Profit sheet", Sheet)] : [];
-  // Profit & Loss: the statement for any dates and the store's own expenses, managed there (/profit).
-  const profit = allowed("analytics.sales") && allowed("finance.breakdown") ? [area("/profit", "Profit & Loss", Scale)] : [];
+  // Profit & Loss (/profit): the statement for any dates, the store's own expenses, managed there, and
+  // the day-by-day sheet with the business events (the Profit sheet's own page until 13 Nov 2026). A
+  // member without the sales breakdown gets the sheet alone there, so the entry follows the sales.
+  const profit = allowed("analytics.sales") ? [area("/profit", "Profit & Loss", Scale)] : [];
   const sales = topic("sales", "Sales & Orders", ShoppingBag);
   const products = topic("products", "Products", Package);
   // The Inventory section (stock per location, alerts, changes). It takes the place of the
@@ -319,13 +318,13 @@ function Sidebar({ onNavigate, prefs, rail = false }: { onNavigate?: () => void;
   ];
 
   // The whole list, as the menu always was.
-  const main: NavItem[] = [...home, ...overview, ...sheet, ...profit, ...sales, ...products, ...stock, ...customers, ...advertising, ...discounts, ...funnel];
+  const main: NavItem[] = [...home, ...overview, ...profit, ...sales, ...products, ...stock, ...customers, ...advertising, ...discounts, ...funnel];
   const store: NavItem[] = [...orders, ...stockPanel, ...shipping, ...channels, ...people];
   const entries = main.length + store.length + marketing.length + settings.length;
   const fold = folds(prefs.layout, entries);
   // The short menu: the pages a store owner opens most days, then the rest by group.
   const everyday: NavItem[] = [...home, ...sales, ...products, ...customers, ...stock, ...stockPanel, ...advertising, ...profit];
-  const reports: NavItem[] = [...overview, ...sheet, ...discounts, ...funnel];
+  const reports: NavItem[] = [...overview, ...discounts, ...funnel];
   const storeMore: NavItem[] = [...orders, ...shipping, ...channels, ...people];
 
   // A group holding the current page is open by itself until it is closed by hand, on that page.
@@ -923,10 +922,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     return [
       ...(showsDashboardHome(access) ? [{ id: "dashboard", label: "Dashboard", group: "Insights", icon: LayoutDashboard, keywords: "home", go: go(DASHBOARD) }] : []),
       ...(allowed("analytics.sales")
-        ? [{ id: "sheet", label: "Profit sheet", group: "Insights", icon: Sheet, keywords: "spreadsheet daily weekly monthly p&l profit loss business events calendar mer", go: go("/sheet") }]
-        : []),
-      ...(allowed("analytics.sales") && allowed("finance.breakdown")
-        ? [{ id: "profit", label: "Profit & Loss", group: "Insights", icon: Scale, keywords: "p&l profit loss expenses costs recurring categories mer roas vcr fcr statement", go: go("/profit") }]
+        ? [{ id: "profit", label: "Profit & Loss", group: "Insights", icon: Scale, keywords: "p&l profit loss sheet spreadsheet daily weekly monthly expenses costs recurring categories business events calendar mer roas vcr fcr statement", go: go("/profit") }]
         : []),
       ...TOPICS.filter((t) => seesTopic(access, t, offers)).map(
         (t): PaletteItem => ({ id: `topic-${t}`, label: topicInfo(t).title, group: "Insights", icon: TOPIC_ICON[t], keywords: TOPIC_WORDS[t], go: () => goToTopic(t, window.location.pathname, (href) => router.push(href)) }),

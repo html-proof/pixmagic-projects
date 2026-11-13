@@ -164,7 +164,7 @@ export function Statement({ a, onDownload }: { a: StatementAnswer; onDownload: (
       <div className="flex flex-wrap items-start justify-between gap-3 px-4 pt-4 sm:px-5">
         <div className="min-w-0">
           <h2 id="pl-statement-h" className="font-semibold">
-            Profit and loss statement
+            Statement by period
           </h2>
           <p className="mt-0.5 text-xs text-muted">
             {fmtSpan(a.range.from, a.range.to, { year: true })}, compared with {fmtSpan(a.previous.from, a.previous.to, { year: true })}. In {a.currency}; a dash is a figure that can&apos;t be given.

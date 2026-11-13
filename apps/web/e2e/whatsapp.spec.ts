@@ -116,3 +116,44 @@ test("the linked phone's own number is verified without a code, and the page say
   await control("report", { id: (await sendsTo(linked))[0]!.id, status: "SERVER_ACK" });
   await expect(page.getByRole("heading", { name: "WhatsApp Automation is set up" })).toBeVisible({ timeout: 20_000 });
 });
+
+test("with bizinsights' WhatsApp service switched off, the page says so instead of calling it an outage", async ({ page }) => {
+  await ownerWithStore(page);
+  await page.goto("/dashboard/whatsapp-automation");
+  await page.getByRole("radio", { name: /Link a WhatsApp phone with a QR code/ }).check();
+  await page.getByRole("checkbox", { name: /the way WhatsApp Web does/ }).check();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("wa-start-pairing").click();
+  await expect(page.getByTestId("wa-qr")).toBeVisible();
+  await control("scan", { phone: `614${String(Date.now()).slice(-8)}` });
+  await expect(page.getByRole("heading", { name: "3. Configure" })).toBeVisible({ timeout: 15_000 });
+
+  // The service goes off (production's AWS_WHATSAPP=off): the API has no service address, says so in
+  // the overview, and refuses whatever needs the service with a 503 that names the reason.
+  await page.route("**/api/workspaces/*/stores/*/whatsapp", async (route) => {
+    const res = await route.fetch();
+    const overview = (await res.json()) as { platform: { evolution: boolean } };
+    await route.fulfill({ response: res, json: { ...overview, platform: { ...overview.platform, evolution: false } } });
+  });
+  await page.route("**/api/workspaces/*/stores/*/whatsapp/connection/check", (route) =>
+    route.fulfill({ status: 503, json: { error: "provider_not_configured", message: "WhatsApp connections aren't set up on bizinsights yet. Nothing was changed." } }),
+  );
+  await page.goto("/dashboard/whatsapp-automation");
+
+  const off = page.getByTestId("wa-off");
+  await expect(off).toContainText("WhatsApp is switched off on bizinsights at the moment.");
+  await expect(off).toContainText("Your automations, templates and message history are kept.");
+  await expect(page.getByText("Switched off", { exact: true })).toBeVisible();
+
+  // A button that needs the service: the reason, and nothing about bizinsights being unreachable.
+  await page.goto("/dashboard/whatsapp-automation?tab=settings");
+  await expect(off).toBeVisible();
+  await page.getByRole("button", { name: "Check again" }).first().click();
+  await expect(page.getByRole("alert").filter({ hasText: "WhatsApp is switched off on bizinsights at the moment. Nothing was changed." })).toBeVisible();
+  await expect(page.getByText(/can't reach bizinsights|keep trying/)).toHaveCount(0);
+
+  // Connecting isn't offered while it is off.
+  await page.goto("/dashboard/whatsapp-automation?tab=setup");
+  await page.getByRole("list", { name: "Setup steps" }).getByRole("button").first().click();
+  await expect(page.locator("#wa-step-connect")).toContainText("Nothing can be connected until it is back on");
+});

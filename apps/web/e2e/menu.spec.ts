@@ -59,7 +59,7 @@ test("the menu lists the everyday pages, folds the rest, and every page is still
 
   // "Show every page" brings back the whole list, kept on the device; "Show fewer pages" returns.
   await showEveryPage(page);
-  for (const name of ["Business Overview", "Profit sheet", "Orders", "Shipping", "Sales channels", "Integrations", "Team & Access"]) await expect(nav.getByRole("link", { name, exact: true }), name).toBeVisible();
+  for (const name of ["Business Overview", "Orders", "Shipping", "Sales channels", "Integrations", "Team & Access"]) await expect(nav.getByRole("link", { name, exact: true }), name).toBeVisible();
   await expect(nav.getByTestId("menu-group-store")).toHaveCount(0);
   await page.reload();
   await expect(nav).toHaveAttribute("data-menu", "full");
