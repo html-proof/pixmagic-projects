@@ -18,8 +18,8 @@ const SLIDES: Array<{ headline: [string, string]; body: string }> = [
     body: "Total sales, orders, products and stock side by side, explained so anyone can act on them.",
   },
   {
-    headline: ["Compare any dates", "at a glance"],
-    body: "See each number next to the period before or the dates you pick, with the change worked out for you.",
+    headline: ["See what changed", "at a glance"],
+    body: "See each number next to the period before, with the change worked out for you.",
   },
 ];
 

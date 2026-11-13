@@ -37,11 +37,8 @@ describe("ranges of up to 12 months, however far back", () => {
     expect(customRangeProblem({ from: "2019-07-01", to: "2020-07-01" })).toBe("too_long");
     const now = new Date("2026-10-24T03:00:00Z");
     expect(() => resolvePreset("custom", now, "UTC", { from: "2023-01-01", to: "2024-01-01" })).toThrow("pick up to 12 months at a time");
-    expect(() => resolvePreset("custom", now, "UTC", { from: "2026-10-01", to: "2026-10-05" }, { mode: "custom", from: "2024-01-01", to: "2025-06-30" })).toThrow(
-      "compare up to 12 months at a time",
-    );
-    // An older year on its own is a question like any other, and its comparison a year before it.
-    expect(resolvePreset("custom", now, "UTC", { from: "2023-01-01", to: "2023-12-31" }, { mode: "year" })).toEqual({
+    // An older year on its own is a question like any other, and its comparison the year before it.
+    expect(resolvePreset("custom", now, "UTC", { from: "2023-01-01", to: "2023-12-31" })).toEqual({
       range: { from: "2023-01-01", to: "2023-12-31" },
       previous: { from: "2022-01-01", to: "2022-12-31" },
     });
@@ -59,7 +56,6 @@ describe("ranges of up to 12 months, however far back", () => {
     const tz = "Australia/Melbourne";
     expect(resolvePreset("6m", now, tz)).toEqual({ range: { from: "2026-04-25", to: "2026-10-24" }, previous: { from: "2025-10-24", to: "2026-04-24", until: "14:00:00" } });
     expect(resolvePreset("12m", now, tz)).toEqual({ range: { from: "2025-10-25", to: "2026-10-24" }, previous: { from: "2024-10-25", to: "2025-10-24", until: "14:00:00" } });
-    expect(resolvePreset("12m", now, tz, undefined, { mode: "year" }).previous).toEqual({ from: "2024-10-25", to: "2025-10-24", until: "14:00:00" });
     // Both stay within 12 months, on a leap day and at a month's end too.
     for (const at of ["2028-02-29T12:00:00Z", "2026-08-31T12:00:00Z", "2026-03-31T12:00:00Z"]) {
       for (const p of ["6m", "12m"] as const) {
@@ -87,15 +83,15 @@ describe("where a store's dates begin", () => {
     const limits = storeRangeLimits("2022-03-15", true);
     expect(customRangeProblem({ from: "2022-03-15", to: "2022-12-31" }, "2026-10-24", limits)).toBeNull();
     expect(customRangeProblem({ from: "2022-03-14", to: "2022-12-31" }, "2026-10-24", limits)).toBe("before_start");
-    expect(() => resolvePreset("custom", new Date("2026-10-24T03:00:00Z"), "UTC", { from: "2021-01-01", to: "2021-12-31" }, undefined, limits)).toThrow(
+    expect(() => resolvePreset("custom", new Date("2026-10-24T03:00:00Z"), "UTC", { from: "2021-01-01", to: "2021-12-31" }, limits)).toThrow(
       "before the store's first day",
     );
     // Only the first order known: a quiet first month before it is still the store's.
     expect(customRangeProblem({ from: "2022-03-14", to: "2022-12-31" }, "2026-10-24", storeRangeLimits("2022-03-15", false))).toBeNull();
-    // Comparison dates may reach back before it: the answer then says no orders are that old.
-    expect(resolvePreset("custom", new Date("2026-10-24T03:00:00Z"), "UTC", { from: "2022-03-15", to: "2022-12-31" }, { mode: "year" }, limits).previous).toEqual({
-      from: "2021-03-15",
-      to: "2021-12-31",
+    // The period before may reach back before it: the answer then says no orders are that old.
+    expect(resolvePreset("custom", new Date("2026-10-24T03:00:00Z"), "UTC", { from: "2022-03-15", to: "2022-12-31" }, limits).previous).toEqual({
+      from: "2021-05-27",
+      to: "2022-03-14",
     });
   });
 

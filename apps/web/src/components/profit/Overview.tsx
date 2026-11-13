@@ -3,7 +3,7 @@ import { Fragment, type ReactNode } from "react";
 import { ArrowRight, CalendarPlus, ChartColumn, CircleDollarSign, Download, Info, Megaphone, PieChart, ReceiptText, ShoppingCart, Sparkles, TrendingDown, TrendingUp, Trophy } from "lucide-react";
 import { PROFIT_LOSS_GAP_WORDS, type ProfitLoss } from "@app/shared/profit";
 import { Donut } from "@/components/dashboard/Charts";
-import { CompareSelect, versusWords } from "@/components/dashboard/DateRange";
+import { versusWords } from "@/components/dashboard/DateRange";
 import { LineChart } from "@/components/dashboard/LineChart";
 import { fmtDay, fmtMoneyCompact, fmtSpan, fmtWeekday, plural } from "@/components/dashboard/format";
 import { HelpTip } from "@/components/PageKit";
@@ -280,7 +280,7 @@ const SECTIONS: Array<{ id: string; label: string; rows: Row[] }> = [
 const DASH = <span className="text-muted/60">—</span>;
 
 /** The statement in four columns: these dates, the dates compared with, the change and its share. The Detailed Table has it period by period. */
-export function SummaryStatement({ a, s, onDownload, onDetails }: { a: StatementAnswer; s: StatementState; onDownload: (() => void) | null; onDetails: () => void }) {
+export function SummaryStatement({ a, onDownload, onDetails }: { a: StatementAnswer; onDownload: (() => void) | null; onDetails: () => void }) {
   const show = (n: number | null, f: Format) => (n === null || !Number.isFinite(n) ? DASH : f === "money" ? fmtMoney(n, a.currency) : f === "percent" ? fmtPct(n) : fmtNum(n));
   const signed = (d: number, f: Format) => {
     const sign = d > 0 ? "+" : d < 0 ? "−" : "";
@@ -298,7 +298,6 @@ export function SummaryStatement({ a, s, onDownload, onDetails }: { a: Statement
       sub={`${fmtSpan(a.range.from, a.range.to, { year: true })} (vs ${fmtSpan(a.previous.from, a.previous.to, { year: true })})`}
       actions={
         <>
-          <CompareSelect r={s.dates} shown={s.shown} current={!s.older} id="pl-compare" label="Compare Period" size="sm" />
           {onDownload && (
             <button type="button" className="home-btn border border-home-line bg-surface" onClick={onDownload} data-testid="pl-summary-csv">
               <Download aria-hidden className="h-4 w-4" />
@@ -415,7 +414,7 @@ export function OverviewTab({
         <ExpenseDonut a={a} />
         <ProfitAnalysisCard a={a} />
       </div>
-      <SummaryStatement a={a} s={s} onDownload={onDownload} onDetails={onDetails} />
+      <SummaryStatement a={a} onDownload={onDownload} onDetails={onDetails} />
     </>
   );
 }

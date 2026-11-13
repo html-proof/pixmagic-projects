@@ -10,15 +10,15 @@ const query = z.object(datesQuery);
 
 /**
  * Sales by collection (core reports/collections.ts): each Shopify collection's net sales, units
- * and orders for the dashboard's dates, against what they are compared with. Top products'
+ * and orders for the dashboard's dates, against the period before them. Top products'
  * figures grouped another way, so the same permission ("View product performance") and the same
  * access (orders and products) as GET .../analytics/products/top-selling.
  *
- * The products page asks with the dashboard's own dates written out as custom dates (it has no
- * preset to send), and its comparison as the mode whenever that gives the same days, else as dates
- * (apps/web/src/components/dashboard/collectionDates.ts). A preset's dates may start before the store's first day (the last 90 days of a
- * store a month old), which dates picked in the date picker may not: that limit isn't applied
- * here, and days before the store simply have no sales.
+ * The products page asks as the dashboard was asked: the same preset, or the same custom dates
+ * (apps/web/src/components/dashboard/collectionDates.ts), so both sides are the dashboard's own
+ * days. A preset's dates may start before the store's first day (the last 90 days of a store a
+ * month old), which dates picked in the date picker may not: that limit isn't applied here, and
+ * days before the store simply have no sales.
  */
 export function collectionRoutes(app: App, deps: Deps) {
   app.get("/workspaces/:ws/stores/:storeId/analytics/collections/sales", async (c) => {
@@ -34,7 +34,7 @@ export function collectionRoutes(app: App, deps: Deps) {
         // The question is read once the store is known to be this workspace's (another's answers 404, not 400).
         const q = query.parse(c.req.query());
         const dates = resolveQueryDates(q, new Date(), store.timezone);
-        return { range: dates.range, previous: { ...dates.previous, compare: q.compare }, ...(await collectionSales(tx, { ws, storeId }, store, dates)) };
+        return { range: dates.range, previous: dates.previous, ...(await collectionSales(tx, { ws, storeId }, store, dates)) };
       }),
     );
   });

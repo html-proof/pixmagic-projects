@@ -114,7 +114,6 @@ export default function GoogleAdsAnalyticsPage() {
         }
         r={r}
         shown={shown}
-        current={!!a}
         actions={
           <>
             {choices.length > 1 && (

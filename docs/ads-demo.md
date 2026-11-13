@@ -115,7 +115,7 @@ changes "Manage integrations" (`integrations.manage`).
 | `GET /demo/account` | The demo's facts, state, seed and fictional permissions. |
 | `POST /demo/sync` | Sync demo data: a catch-up job like a real account's (one at a time; `queued` false while one is on its way). |
 | `POST /demo/reset` (`{ seed? }`) | A new seed (or the one given), figures deleted and generated again. |
-| `GET /analytics` | Everything the analytics page shows, for `?connection=` (the demo by default) and the dashboard's date query (`preset`, `from`, `to`, `compare`, `cfrom`, `cto`). |
+| `GET /analytics` | Everything the analytics page shows, for `?connection=` (the demo by default) and the dashboard's date query (`preset`, `from`, `to`). |
 | `GET /analytics/overview`, `/campaigns` (`q`, `status`, `type`, `sort`, `dir`, `page`, `pageSize`), `/performance`, `/conversions`, `/devices`, `/audience`, `/recommendations`, `/combined` | Slices of the same. Also under `/demo/…` (the brief's names). |
 | `GET /analytics/export?part=` | One section as CSV (`overview`, `campaigns`, `days`, `weeks`, `months`, `devices`, `audience`, `recommendations`, `combined`), with the same query as `/analytics`. Needs "Export approved reports" as well, in the audit log; a demo's file is named `…-demo-simulated-…` and its first row says the figures are simulated ([advertising.md](advertising.md), "Reports and downloads"). |
 

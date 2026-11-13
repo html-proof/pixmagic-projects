@@ -7,7 +7,7 @@ import { CircleDollarSign, Gem, Package, ShoppingCart } from "lucide-react";
 import { useApp, canManage, StoresPending } from "@/components/AppContext";
 import { EmptyState, Alert } from "@/components/ui";
 import { AboutThisData, EmptyStoreNote, StatusWords, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
-import { CompareDates, comparedWith, CompareSelect, CustomDates, DateChip, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
+import { comparedWith, CustomDates, DateChip, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
 import { SalesActions, SalesCrumbs, SalesHeader, SalesTabs, salesTabOf, StatusPill } from "@/components/dashboard/SalesFrame";
 import { HistoryFoot, HistoryLine } from "@/components/dashboard/HistoryLine";
 import { topicInfo, useDetailView } from "@/components/dashboard/topics";
@@ -541,19 +541,10 @@ export default function DashboardPage() {
     </section>
   );
   // While the store's dates are custom, their pickers under the header (either Home).
-  const customPickers = (
-    <>
-      {dates.preset === "custom" && (
-        <div className="flex w-full justify-end">
-          <CustomDates r={dates} />
-        </div>
-      )}
-      {dates.compare === "custom" && (
-        <div className="flex w-full justify-end">
-          <CompareDates r={dates} />
-        </div>
-      )}
-    </>
+  const customPickers = dates.preset === "custom" && (
+    <div className="flex w-full justify-end">
+      <CustomDates r={dates} />
+    </div>
   );
   // Every panel of the full dashboard, or back: kept on this device (SimpleHome.tsx useHomeLayout).
   const layoutSwitch = SIMPLE_HOME && (
@@ -638,7 +629,7 @@ export default function DashboardPage() {
               </StatusPill>
             )
           }
-          dates={topic !== "stock" && <DateChip r={dates} shown={shown} current={!olderAnswer} />}
+          dates={topic !== "stock" && <DateChip r={dates} shown={shown} />}
           actions={<SalesActions exportHref={exportHref} canPrint={hasFullAccess(access.role) || allowed("reports.export")} />}
           tabs={tab && <SalesTabs active={tab} onDashboard />}
         />
@@ -707,7 +698,7 @@ export default function DashboardPage() {
               {layoutSwitch}
             </p>
           </div>
-          <DateChip r={dates} shown={shown} current={!olderAnswer} />
+          <DateChip r={dates} shown={shown} />
           {customPickers}
         </header>
       ) : (
@@ -724,8 +715,6 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-center gap-2.5">
           {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />}
           <DateRangeSelect r={dates} shown={shown} id="date-range" label="Dates" />
-          {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
-          <CompareSelect r={dates} shown={shown} current={!olderAnswer} id="compare-with" label="Compare with" />
         </div>
         {customPickers}
       </header>

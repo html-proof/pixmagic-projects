@@ -36,7 +36,7 @@ const TAB_OF_TOPIC: Partial<Record<Topic, SalesTab>> = {
 };
 export const salesTabOf = (t: Topic): SalesTab | null => TAB_OF_TOPIC[t] ?? null;
 
-/** The dates' parameters of the page shown (preset, from, to, compare…), without the open topic. */
+/** The dates' parameters of the page shown (preset, from, to), without the open topic. */
 function datesQuery(): string {
   const q = new URLSearchParams(window.location.search);
   q.delete("view");

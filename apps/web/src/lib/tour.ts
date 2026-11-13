@@ -32,7 +32,7 @@ export const TOUR_STEPS: TourStep[] = [
     id: "dates",
     targets: ["dates"],
     title: "Choose the dates",
-    body: "Pick today, a week, a month or your own dates, and what to compare them with. Every figure on the page follows.",
+    body: "Pick today, a week, a month or your own dates. Every figure on the page follows.",
   },
   {
     id: "menu",
