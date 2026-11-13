@@ -7,7 +7,8 @@
 export const CROSS_TENANT_REASONS = {
   // --- Cron and maintenance.
   sweep: "The cron's scheduled sweeps (runScheduled): work due across every store, such as sends, token refreshes, checks and retention.",
-  maintenance: "The cron function's maintenance actions (after-move, reread, verify, shopify-check, product-check): run by the owner or the deploy across stores.",
+  maintenance:
+    "The maintenance actions (after-move, reread, verify, shopify-check, product-check; remove-accounts, which deletes accounts on the owner's word): run by the owner or the deploy across stores and people.",
 
   // --- Jobs whose workspace isn't found from the job itself (worker/src/scope.ts says which).
   job: "A queued job whose own row names no workspace yet, or names none any more: it finds its store or account itself.",
