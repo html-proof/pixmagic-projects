@@ -879,25 +879,22 @@ to every request it passes on, the header `x-origin-lock`, and CloudFront's view
 (`infra/cdk/lib/viewer-request.ts`) answers **403** to a request without it. Page requests (GET,
 HEAD) on the other names still get their 301 to `https://bizinsights.io` first.
 
-**Where it stands (2026-11-13): reporting, not enforcing.** `"enforce"` was merged that day once
-`/edge-lock` answered 204, and never deployed: its one Deploy (05:31 UTC) stopped at the function
-itself, because CloudFront takes a comment of at most 128 characters and the enforcing one had
-138, and the stack rolled back (the comment is shorter now and a test counts it). Half an hour
-later `bizinsights.io` moved to the iKorex server and AWS was frozen as the way back. `config.ts`
-is back on `"report"`, which is what is deployed, because the order below can't be kept while
-the name points at the server:
+**Where it stands (2026-11-13): there is nothing left to lock.** The rest of this section is
+history, and how it would be set up again. `"enforce"` was merged that day once `/edge-lock`
+answered 204, and never deployed: its one Deploy (05:31 UTC) stopped at the function itself,
+because CloudFront takes a comment of at most 128 characters and the enforcing one had 138, and
+the stack rolled back (the comment is shorter now and a test counts it; `config.ts` is back on
+`"report"`). At 06:03 UTC `bizinsights.io` moved to the iKorex server, and between 07:14 and 07:38
+UTC the owner's "delete everything in AWS" took the stacks
+([LEAVING_AWS.md](ikorex-migration/LEAVING_AWS.md)): the distribution, its viewer function and the
+WAF are gone, and the cloudfront.net name no longer resolves. Two things outlived them:
 
-- `https://bizinsights.io/edge-lock` is the server's to answer now (404). It says nothing about
-  CloudFront until Cloudflare sends this name's traffic there again.
-- Cloudflare's rule still adds the header on both names, and it now arrives at the server through
-  the tunnel, which doesn't read it. **Keep the rule**: it is what lets the lock be enforced if
-  AWS serves again, and making it again takes the owner at the PC.
-- The cloudfront.net name is open to a request that skips Cloudflare, as it was before the lock:
-  the WAF is in front of it and, since the freeze, nothing behind it answers (429 from the
-  functions).
-
-If AWS serves again, enforcing is one pull request after the DNS is back: check that `/edge-lock`
-answers 204, set `"enforce"`, merge, Deploy.
+- **Cloudflare's rule `Origin lock for CloudFront`** still adds the header on both names. It now
+  arrives at the server through the tunnel, which doesn't read it, and opens nothing. It can be
+  deleted (the owner's to decide: Rules → Overview, the rule's menu → Delete).
+- **The secret** `insights/production/origin-lock` and its Parameter Store copy
+  `/insights/production/origin-lock`: the Data stack kept it on purpose (`RETAIN`), US$0.40 a
+  month until it is deleted with the rest of Secrets Manager.
 
 - **The secret** is `insights/production/origin-lock` in Secrets Manager (US$0.40 a month): 48
   letters and digits the Data stack generated; nobody has seen it and it is in no file. CloudFormation
