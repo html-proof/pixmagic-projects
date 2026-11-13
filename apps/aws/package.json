@@ -15,7 +15,6 @@
     "@app/core": "workspace:*",
     "@app/db": "workspace:*",
     "@app/worker": "workspace:*",
-    "aws4fetch": "^1.0.20",
     "hono": "^4.9.0",
     "pg": "^8.16.0"
   },

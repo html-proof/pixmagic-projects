@@ -46,28 +46,9 @@ const isDocs = (path) => path.endsWith(".md") || path.startsWith("docs/");
  */
 export const GROUPS = [
   {
-    title: "The user pool's template (the Auth stack, the one stack left in AWS)",
-    goes: "With Cognito, after `AUTH_MODE=local` (LEAVING_AWS.md, part 2). The CDK app, Deploy to AWS and the Lambda functions went on 2026-11-13",
-    paths: ["infra/aws/"],
-  },
-  {
-    title: "The server package's AWS dependency, example settings and tests",
-    goes: "With the AWS code the server still loads (next group)",
-    paths: ["apps/aws/package.json", "apps/aws/.env.example", "apps/aws/test/"],
-  },
-  {
-    title: "AWS code the server loads, used only when a switch says so",
-    goes: "Each when its switch is on the AWS-free side (`AUTH_MODE=local`, no `SES_REGION`); the AWS side deleted at stage F",
-    paths: [
-      "apps/aws/src/selfhost.ts",
-      "apps/aws/src/app.ts",
-      "apps/aws/src/actions.ts",
-      "apps/aws/src/awsClient.ts",
-      "apps/aws/src/mailers.ts",
-      "apps/aws/src/sesMailer.ts",
-      "infra/ikorex/env/",
-      "infra/ikorex/monitoring/alerts.yml",
-    ],
+    title: "The server package's settings for Cognito, its examples and tests",
+    goes: "With Cognito's code (next group). The SES mailer, the AWS client, the pool's template and the copy tools went on 2026-11-13",
+    paths: ["apps/aws/.env.example", "apps/aws/test/selfhost.test.ts", "apps/aws/src/selfhost.ts", "apps/aws/src/app.ts", "apps/aws/src/actions.ts", "infra/ikorex/env/"],
   },
   {
     title: "Cognito in the app, its settings and its test stand-in",
@@ -92,16 +73,6 @@ export const GROUPS = [
       "infra/cognito-local/",
       ".claude/",
     ],
-  },
-  {
-    title: "Lambda's version number in `/api/version`",
-    goes: "Stage F. On the server `release` is empty: the commit identifies the build",
-    paths: ["apps/api/src/app.ts", "apps/api/test/observability.test.ts"],
-  },
-  {
-    title: "The migration's own tools (copies between AWS and the server, the secrets export)",
-    goes: "Stage F, after the final dump of RDS",
-    paths: ["infra/ikorex/scripts/"],
   },
 ];
 
