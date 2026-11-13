@@ -171,7 +171,7 @@ of truth and almost every screen is "load, show, edit, save".
 | Server data | `useApi(path)` (`lib/api.ts`): each answer is kept with the request it answers, transient failures retry by themselves, `reload()` and `setData()` for edits. `useLiveApi(path, ms)` for data that must stay live (the dashboard). |
 | Session, workspaces, current workspace and store | `AppContext` (`useApp()`), signed-in pages only. |
 | The dashboard's date range and open detail | The URL (`?preset=&from=&to=`, `?view=`), so a link reproduces the view. The Advertising area (/advertising, [advertising.md](advertising.md)) reads the same dates and adds `?platform=&account=`; the Shopping Funnel (/funnel, [kpis.md](kpis.md) "Shopping Funnel page") adds `?device=&visitor=&landing=&country=`; Profit & Loss (/profit, [kpis.md](kpis.md) "Profit & Loss page") `?tab=&grain=`, and for its day-by-day sheet `?days=&events=`. |
-| Per-device preferences (which Home, which menu and its open groups, the narrowed sidebar, the look around answered) | `lib/storage.ts` (`readLocal` / `writeLocal`): never throws, so blocked storage only loses the preference. |
+| Per-device preferences (which Home, which menu and its open groups, the narrowed sidebar, the look around answered, light or dark mode) | `lib/storage.ts` (`readLocal` / `writeLocal`): never throws, so blocked storage only loses the preference. |
 | Form drafts | Component state. |
 
 Write a hand-made `api()` call in an effect only when `useApi` can't express it (paging with
@@ -208,6 +208,21 @@ page by page:
   (the small "i" beside a figure's name: what it measures, on hover, focus or tap).
 
 A new page uses these pieces rather than its own borders and radii.
+
+**Light or dark mode (2026-11-13).** The app has two palettes in `globals.css`, and which one shows
+is the person's choice, kept on the device (localStorage `theme`): Light, Dark, or Same as device
+(nothing saved, the default: the device's own setting, as before there was a choice). The rules
+and the script are in `lib/theme.ts` (tested); the controls in `components/Theme.tsx`: the
+sun-or-moon button in the top bar, the Appearance card on Settings → Profile, and "Switch to dark
+mode" in search.
+- The palette showing is `data-theme="light|dark"` on `<html>`. An inline script in `app/layout.tsx`
+  sets it before the page paints, so no page flashes the other palette; `ThemeSync` keeps it right
+  afterwards (the device's setting changing, a choice made in another tab).
+- CSS never reads `prefers-color-scheme` (a test holds this): the dark tokens are
+  `:root[data-theme="dark"]`, and Tailwind's `dark:` variant is redefined to follow the attribute.
+  Both apply on screen only, so a page printed from dark mode prints in the light palette.
+- Colour a page with the tokens (`bg-surface`, `text-muted`, …) and it follows both palettes with
+  no `dark:` at all. The landing page (`lp-` tokens) and the sidebar are dark in both.
 
 **Finding your way (2026-11-11).** Every page keeps its name, its address and its place in the menu's
 whole list; what changed is how much of the list is read at once.

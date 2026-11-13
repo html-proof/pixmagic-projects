@@ -19,7 +19,7 @@ import {
 } from "@app/shared";
 import { addMonths } from "@app/shared/customers";
 import { expenseLines, expenseTerms } from "../expenses.js";
-import { declaredScopes, optionalScopesFor } from "../scopes.js";
+import { requiredScopesFor, optionalScopesFor } from "../scopes.js";
 import { adsModule } from "./ads.js";
 import { importedData } from "./catalog.js";
 import { r2, type Scope } from "./common.js";
@@ -57,7 +57,7 @@ type AdsAnswer = Awaited<ReturnType<typeof adsModule>>;
  */
 async function profitInputs(tx: Tx, store: Store, span: DateRange, now: Date, sees: ProfitSees, adRanges: readonly DateRange[]) {
   const scope: Scope = { ws: store.workspaceId, storeId: store.id };
-  const capabilities = resolveCapabilities(store.grantedScopes, { pixelInstalled: store.pixelInstalled, optionalScopes: optionalScopesFor(store), declaredScopes: declaredScopes() });
+  const capabilities = resolveCapabilities(store.grantedScopes, { pixelInstalled: store.pixelInstalled, optionalScopes: optionalScopesFor(store), declaredScopes: requiredScopesFor(store) });
   // Each product's cost per item comes with the store's products, as the dashboard's product costs do.
   const productsShared = capabilities.some((c) => c.id === "top_products" && c.enabled);
   const [data, rows, costs, products, ...ads] = await Promise.all([

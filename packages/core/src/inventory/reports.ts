@@ -362,7 +362,7 @@ function stockRow(r: StockRowDb, sales: SalesWindow, today: string, settings: Pi
       return d === null ? null : Math.round(d);
     })(),
     depletionDate: available === null || !r.tracked ? null : depletionDay(today, available, rate),
-    restock: !r.tracked || available === null ? null : restockQuantity({ available, incoming: r.incoming ?? 0, rate, leadTimeDays: settings.leadTimeDays, coverDays: settings.coverDays }),
+    restock: !r.tracked || available === null ? null : restockQuantity({ available, committed: r.committed, incoming: r.incoming ?? 0, rate, leadTimeDays: settings.leadTimeDays, coverDays: settings.coverDays }),
   };
 }
 export type StockRow = ReturnType<typeof stockRow>;

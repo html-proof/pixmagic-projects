@@ -23,6 +23,7 @@ import {
   Menu,
   MessageCircle,
   MessageCircleMore,
+  Moon,
   OctagonAlert,
   Package,
   PanelLeftClose,
@@ -37,6 +38,7 @@ import {
   UserCog,
   ShoppingBag,
   Store,
+  Sun,
   TriangleAlert,
   Truck,
   UserRound,
@@ -62,6 +64,8 @@ import { FOLD_FROM, folds, groupFolds, groupOpen, parseOpenGroups, toggleGroup, 
 import { MENU_LAYOUT_KEY, MENU_OPEN_KEY, MENU_RAIL_KEY, notesSeenKey, readLocal, removeLocal, TOUR_SEEN_KEY, writeLocal } from "@/lib/storage";
 import { startTour, TOUR_EVENT } from "@/lib/tour";
 import { Tour } from "@/components/Tour";
+import { ThemeToggle, useTheme } from "@/components/Theme";
+import { otherTheme } from "@/lib/theme";
 import { ALERT_PATH, type AlertSeverity, type AlertView } from "@app/shared/alerts";
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
 import { staffAccess } from "@app/shared/staff";
@@ -825,6 +829,7 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
           <button type="button" onClick={onSearch} aria-label="Search" data-tour="search-button" className="flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-text/[0.05] hover:text-text md:hidden">
             <Search aria-hidden className="h-5 w-5" />
           </button>
+          <ThemeToggle />
           <Notifications />
           {/* On a wide screen the account is the card at the foot of the sidebar. */}
           <div className="lg:hidden">
@@ -878,6 +883,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [palette, setPalette] = useState(false);
   const [tour, setTour] = useState(false);
   const prefs = useMenuPrefs();
+  const { theme, setChoice: setTheme } = useTheme();
   useEffect(() => setDrawer(false), [path]);
 
   // The look around, asked for from the Home's offer or the help button (lib/tour.ts).
@@ -947,9 +953,11 @@ export function AppShell({ children }: { children: ReactNode }) {
       ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),
       ...(allowed("members:manage") ? [{ id: "team", label: "Team & Access", group: "Settings", icon: ShieldCheck, keywords: "members invite users roles permissions share", go: go("/team") }] : []),
       ...SETTINGS_PAGES.filter((s) => !s.href && page(`/settings/${s.slug}`)).map((s): PaletteItem => ({ id: `settings-${s.slug}`, label: s.label, group: "Settings", icon: s.icon, keywords: s.keywords, go: go(`/settings/${s.slug}`) })),
+      // Light or dark, as the top bar's button: to the other one from the one showing.
+      { id: "theme", label: `Switch to ${otherTheme(theme)} mode`, group: "Settings", icon: theme === "dark" ? Sun : Moon, keywords: "appearance theme dark light night colours colors", go: () => setTheme(otherTheme(theme)) },
       { id: "help", label: "Help centre", group: "Help", icon: Headset, keywords: "support contact faq", go: go("/support") },
     ];
-  }, [router, workspace.role, workspace.staffRole, workspace.permissions, me.employments, me.shared, access, allowed, offers]);
+  }, [router, workspace.role, workspace.staffRole, workspace.permissions, me.employments, me.shared, access, allowed, offers, theme, setTheme]);
 
   return (
     <div className="app-look min-h-dvh lg:flex">
