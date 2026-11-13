@@ -1,9 +1,6 @@
 import { Prisma, type Store, type Tx } from "@app/db";
 import {
-  comparisonImported,
   countsByStep,
-  daysBetweenInclusive,
-  delta,
   eachDay,
   FUNNEL_DEVICES,
   funnelInsights,
@@ -16,14 +13,13 @@ import {
   summarizeJourney,
   TRAFFIC_SOURCES,
   visitsHistoryStart,
-  type Comparison,
   type DateRange,
   type FunnelFilter,
   type JourneyPageRow,
   type SegmentFunnel,
   type SiteSection,
 } from "@app/shared";
-import { localMoment, r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js";
+import { r2, SALE_UNITS, SALE_VALUE, type Scope } from "./common.js";
 
 // ---------------------------------------------------------------------------
 // Storefront funnel (web pixel). One row per shopper per store-local day in
@@ -54,21 +50,14 @@ function filterSql(ws: string, f: FunnelFilter): Prisma.Sql {
 }
 
 /**
- * The store's funnel for these dates, against its comparison. Visits are counted only from when
- * the web pixel was put in place (`historyFrom`, see `visitsHistoryStart`): a comparison reaching
- * back before that would count a period partly unrecorded and show a rise that never happened, so
- * its figures and changes are left out (null, `previous.imported` false) and the page says there
- * is no earlier data. `filter` narrows every figure to some of the visits (the Shopping Funnel page).
+ * The store's funnel for these dates. Visits are counted only from when the web pixel was put in
+ * place (`historyFrom`, see `visitsHistoryStart`). `filter` narrows every figure to some of the
+ * visits (the Shopping Funnel page).
  */
-export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, previous: Comparison, store: Pick<Store, "timezone" | "pixelInstalledAt">, filter: FunnelFilter = {}) {
+export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, store: Pick<Store, "timezone" | "pixelInstalledAt">, filter: FunnelFilter = {}) {
   const timeZone = store.timezone;
   const only = filterSql(ws, filter);
   const inRange = (r: DateRange) => Prisma.sql`v.workspace_id = ${ws} AND v.store_id = ${storeId} AND v.day BETWEEN ${r.from} AND ${r.to} ${only}`;
-  // A running comparison's last day: the visits that had started by the same time of day (one
-  // recorded before visits were timed counts, as it always did).
-  const inComparison = previous.until
-    ? Prisma.sql`${inRange(previous)} AND (v.day < ${previous.to} OR v.entered_at IS NULL OR v.entered_at < ${localMoment(previous.to, previous.until, timeZone)})`
-    : inRange(previous);
 
   // How far each visit got, and where the ones that stopped short were last seen.
   const stepRows = await tx.$queryRaw<Array<{ furthest_step: number; exit_section: string | null; visits: number; page_views: number }>>`
@@ -100,12 +89,6 @@ export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, p
   const [first] = await tx.$queryRaw<Array<{ day: string | null }>>`
     SELECT MIN(day) AS day FROM funnel_visits WHERE workspace_id = ${ws} AND store_id = ${storeId}`;
   const historyFrom = visitsHistoryStart(store.pixelInstalledAt, timeZone, first?.day ?? null);
-  const imported = comparisonImported(previous, historyFrom);
-  // The comparison step by step: the page compares every step and transition, the dashboard its visits and conversion.
-  const prevRows = imported
-    ? await tx.$queryRaw<Array<{ furthest_step: number; visits: number }>>`
-        SELECT v.furthest_step, COUNT(*)::int AS visits FROM funnel_visits v WHERE ${inComparison} GROUP BY v.furthest_step`
-    : null;
 
   const sections = new Map<SiteSection, { section: SiteSection; visits: number; entries: number }>();
   for (const r of sectionRows) {
@@ -124,18 +107,12 @@ export async function funnel(tx: Tx, { ws, storeId }: Scope, range: DateRange, p
       .filter((r) => r.kind === kind)
       .map((r) => ({ path: r.path, section: isSection(r.section) ? r.section : "other", visits: r.visits, purchases: r.purchases }));
 
-  const prevReached = prevRows ? reachedCounts(countsByStep(prevRows.map((r) => ({ furthestStep: r.furthest_step, visits: r.visits })))) : null;
-  const prevVisits = prevReached ? prevReached[0]! : null;
-  const prevConversion = prevReached && prevVisits ? prevReached[PURCHASED_STEP]! / prevVisits : null;
   return {
     ...summary,
     entryPages: pages("entry"),
     exitPages: pages("exit"),
     /** The first day every visit was counted from (null: none recorded yet). */
     historyFrom,
-    /** `reached`: visits that reached each step or a later one, in the dates compared with. */
-    previous: { visits: prevVisits, conversionRate: prevConversion, imported, reached: prevReached },
-    deltas: { visits: imported ? delta(summary.visits, prevVisits) : null, conversionRate: imported ? delta(summary.conversionRate, prevConversion) : null },
   };
 }
 
@@ -210,7 +187,7 @@ export async function visitsByDay(tx: Tx, { ws, storeId }: Scope, range: DateRan
 
 /**
  * Everything the Shopping Funnel page shows from the pixel's visits, for these dates and the
- * filter: the dashboard's funnel (above), the comparison step by step, every transition, day by
+ * filter: the dashboard's funnel (above), every transition, day by
  * day, funnels per device, country, landing page, new or returning visitor and traffic source,
  * products, the observations the numbers support, and the store's checklist.
  *
@@ -219,9 +196,9 @@ export async function visitsByDay(tx: Tx, { ws, storeId }: Scope, range: DateRan
  * `sourcesFrom` (the first visit with a source: the same pixel release sends both). Visits from
  * before have none, and say so (`not_recorded`, null) rather than guess.
  */
-export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, previous: Comparison, store: Pick<Store, "timezone" | "pixelInstalledAt">, view: FunnelView) {
+export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, store: Pick<Store, "timezone" | "pixelInstalledAt">, view: FunnelView) {
   const { ws, storeId } = scope;
-  const base = await funnel(tx, scope, range, previous, store, view.filter);
+  const base = await funnel(tx, scope, range, store, view.filter);
   const only = filterSql(ws, view.filter);
   const inRange = Prisma.sql`v.workspace_id = ${ws} AND v.store_id = ${storeId} AND v.day BETWEEN ${range.from} AND ${range.to} ${only}`;
 
@@ -390,15 +367,12 @@ export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, previ
   });
 
   const reached = base.steps.map((s) => s.reached);
-  const before = base.previous.reached;
   return {
     ...base,
     filter: view.filter,
-    /** Each step's visits against the dates compared with, as a change (null: nothing to compare). */
-    stepDeltas: reached.map((n, k) => (before ? delta(n, before[k] ?? 0) : null)),
     /** Distinct browsers among the visits (one shopper tracked on several days is one browser). */
     browsers: browsers?.n ?? 0,
-    transitions: funnelTransitions(reached, base.previous.reached),
+    transitions: funnelTransitions(reached),
     daily,
     segments,
     products,
@@ -411,8 +385,6 @@ export async function funnelDetail(tx: Tx, scope: Scope, range: DateRange, previ
     lastEventAt: last?.at ? last.at.toISOString() : null,
     insights: funnelInsights({
       reached,
-      previousReached: base.previous.reached,
-      sameLength: daysBetweenInclusive(range.from, range.to) === daysBetweenInclusive(previous.from, previous.to),
       devices: segments.device,
       visitors: segments.visitor,
       products: products.filter((p) => p.viewed !== null).map((p) => ({ handle: p.handle, title: p.title, viewed: p.viewed ?? 0, added: p.added ?? 0 })),

@@ -221,24 +221,14 @@ export interface FunnelTransition {
   progression: number | null;
   /** 1 − progression. */
   dropOff: number | null;
-  /** The same transition in the dates compared with (null: nothing to compare). */
-  previous: { fromCount: number; toCount: number; progression: number | null } | null;
-  /** progression − previous progression, as a fraction (0.05 = 5 percentage points). */
-  change: number | null;
-  /** The change is larger than chance would explain (proportionZ), with enough visits on both sides. */
-  significant: boolean;
 }
 
-/** Each step to the next, from visits reached per step (reachedCounts) now and, if any, before. */
-export function funnelTransitions(reached: readonly number[], previousReached: readonly number[] | null = null): FunnelTransition[] {
+/** Each step to the next, from visits reached per step (reachedCounts). */
+export function funnelTransitions(reached: readonly number[]): FunnelTransition[] {
   return FUNNEL_STEPS.slice(0, -1).map((from, k): FunnelTransition => {
     const fromCount = reached[k] ?? 0;
     const toCount = reached[k + 1] ?? 0;
     const progression = ratio(toCount, fromCount);
-    const pf = previousReached?.[k];
-    const pt = previousReached?.[k + 1];
-    const previous = previousReached && pf !== undefined && pt !== undefined ? { fromCount: pf, toCount: pt, progression: ratio(pt, pf) } : null;
-    const change = progression !== null && previous?.progression != null ? progression - previous.progression : null;
     return {
       from,
       to: FUNNEL_STEPS[k + 1]!,
@@ -247,9 +237,6 @@ export function funnelTransitions(reached: readonly number[], previousReached: r
       lost: fromCount - toCount,
       progression,
       dropOff: progression === null ? null : 1 - progression,
-      previous,
-      change,
-      significant: previous ? significant(proportionZ(toCount, fromCount, previous.toCount, previous.fromCount)) : false,
     };
   });
 }
@@ -296,12 +283,9 @@ export type InsightTone = "positive" | "negative" | "neutral";
 
 /**
  * One thing the numbers show, with the figures behind it. The page words them; nothing here is a
- * cause, only a measured difference, and each kind is made only when the test behind it holds:
+ * cause, only a measured difference, and each kind is made only when the test behind it holds.
+ * Nothing is set against other dates: every observation is within the dates asked about.
  *
- * - `visits`: tracked visits rose or fell by more than chance (the Poisson test on the two counts),
- *   comparing dates of the same length, at least 50 visits on each side.
- * - `conversion` / `transition`: the share of visits that bought, or that went from one step to the
- *   next, differs from the dates compared with (proportionZ).
  * - `largest_drop`: where most visits stopped (always true of the numbers; at least 30 visits).
  * - `segment_gap`: one device, or new against returning visitors, buys or completes checkout at a
  *   different rate than the other (proportionZ).
@@ -309,9 +293,6 @@ export type InsightTone = "positive" | "negative" | "neutral";
  *   other product pages (proportionZ against the rest).
  */
 export type FunnelInsight =
-  | { kind: "visits"; tone: InsightTone; current: number; previous: number; change: number }
-  | { kind: "conversion"; tone: InsightTone; current: number; previous: number; visits: number; previousVisits: number }
-  | { kind: "transition"; tone: InsightTone; from: FunnelStep; to: FunnelStep; current: number; previous: number; fromCount: number; previousFromCount: number }
   | { kind: "largest_drop"; tone: InsightTone; from: FunnelStep; to: FunnelStep; lost: number; dropOff: number; fromCount: number }
   | {
       kind: "segment_gap";
@@ -331,60 +312,28 @@ export type FunnelInsight =
 export interface InsightInput {
   /** Visits reached per step in the dates. */
   reached: readonly number[];
-  /** The same in the dates compared with; null when there is nothing to compare with. */
-  previousReached: readonly number[] | null;
-  /** The two periods have the same number of days (visit counts compare only then). */
-  sameLength: boolean;
   devices: readonly SegmentFunnel[];
   visitors: readonly SegmentFunnel[];
   products: ReadonlyArray<{ handle: string; title: string | null; viewed: number; added: number }>;
 }
 
-/** Visits a step-change or a count-change needs on each side before it is said. */
-export const MIN_VISITS_CHANGE = 50;
 /** Most observations shown at once. */
 export const MAX_INSIGHTS = 6;
-
-/** Two Poisson counts differ by more than chance at 95% (normal approximation to the conditional test). */
-function countsDiffer(a: number, b: number): boolean {
-  return a + b > 0 && Math.abs(a - b) / Math.sqrt(a + b) >= Z_95;
-}
 
 const by = <T>(score: (x: T) => number) => (a: T, b: T) => score(b) - score(a);
 
 /** The observations the numbers support, strongest first (at most MAX_INSIGHTS). */
 export function funnelInsights(input: InsightInput): FunnelInsight[] {
   const out: Array<{ insight: FunnelInsight; score: number }> = [];
-  const { reached, previousReached } = input;
+  const { reached } = input;
   const visits = reached[0] ?? 0;
-  const purchases = reached[PURCHASED_STEP] ?? 0;
 
-  const transitions = funnelTransitions(reached, previousReached);
+  const transitions = funnelTransitions(reached);
   const drop = largestDropOff(transitions);
   if (drop !== null && visits >= MIN_COMPARED) {
     const t = transitions[drop]!;
     // Always first: it is what the page is for.
     out.push({ insight: { kind: "largest_drop", tone: "neutral", from: t.from, to: t.to, lost: t.lost, dropOff: t.dropOff ?? 0, fromCount: t.fromCount }, score: Number.POSITIVE_INFINITY });
-  }
-
-  if (previousReached) {
-    const before = previousReached[0] ?? 0;
-    if (input.sameLength && visits >= MIN_VISITS_CHANGE && before >= MIN_VISITS_CHANGE && countsDiffer(visits, before)) {
-      out.push({ insight: { kind: "visits", tone: visits > before ? "positive" : "negative", current: visits, previous: before, change: (visits - before) / before }, score: Math.abs(visits - before) / Math.sqrt(visits + before) });
-    }
-    const boughtBefore = previousReached[PURCHASED_STEP] ?? 0;
-    const zc = proportionZ(purchases, visits, boughtBefore, before);
-    if (significant(zc)) {
-      out.push({ insight: { kind: "conversion", tone: zc! > 0 ? "positive" : "negative", current: purchases / visits, previous: boughtBefore / before, visits, previousVisits: before }, score: Math.abs(zc!) });
-    }
-    for (const t of transitions) {
-      if (!t.significant || !t.previous || t.progression === null || t.previous.progression === null) continue;
-      const z = proportionZ(t.toCount, t.fromCount, t.previous.toCount, t.previous.fromCount)!;
-      out.push({
-        insight: { kind: "transition", tone: z > 0 ? "positive" : "negative", from: t.from, to: t.to, current: t.progression, previous: t.previous.progression, fromCount: t.fromCount, previousFromCount: t.previous.fromCount },
-        score: Math.abs(z),
-      });
-    }
   }
 
   const gap = (dimension: "device" | "visitor", a: SegmentFunnel | undefined, b: SegmentFunnel | undefined) => {

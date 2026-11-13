@@ -174,7 +174,7 @@ export async function storeOverview(
   if (enabled.has("top_products")) modules.top_products = await productPerformance(tx, scope, store, range);
 
   if (enabled.has("funnel")) {
-    const f = funnelView ? await funnelDetail(tx, scope, range, previous, store, funnelView) : await funnel(tx, scope, range, previous, store);
+    const f = funnelView ? await funnelDetail(tx, scope, range, store, funnelView) : await funnel(tx, scope, range, store);
     // The Profit sheet's visits day by day, counted as the funnel counts them.
     modules.funnel = sheet.visitsByDay ? { ...f, visitsByDay: await visitsByDay(tx, scope, range, f.historyFrom) } : f;
   }

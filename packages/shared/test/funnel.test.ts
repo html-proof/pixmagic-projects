@@ -127,7 +127,8 @@ describe("steps and transitions", () => {
     ]);
     expect(t.map((x) => x.progression)).toEqual([0.4, 0.375, 0.5, 50 / 75]);
     expect(t[0]!.dropOff).toBeCloseTo(0.6, 10);
-    expect(t.every((x) => x.previous === null && x.change === null && !x.significant)).toBe(true);
+    // A transition is the dates' own: nothing of other dates in it.
+    for (const x of t) for (const k of ["previous", "change", "significant"]) expect(x).not.toHaveProperty(k);
     expect(largestDropOff(t)).toBe(0);
   });
 
@@ -136,18 +137,6 @@ describe("steps and transitions", () => {
     expect(t.every((x) => x.progression === null && x.dropOff === null)).toBe(true);
     expect(largestDropOff(t)).toBeNull();
     expect(largestDropOff(funnelTransitions([5, 5, 5, 5, 5]))).toBeNull();
-  });
-
-  it("compares each transition with the dates compared with, and says when the change is more than chance", () => {
-    const now = reachedCounts(at);
-    const before = [1000, 400, 150, 105, 70];
-    const t = funnelTransitions(now, before);
-    expect(t[0]).toMatchObject({ previous: { fromCount: 1000, toCount: 400, progression: 0.4 }, change: 0, significant: false });
-    // Cart → checkout: 50% now against 70% before, on 150 carts each.
-    expect(t[2]!.change).toBeCloseTo(-0.2, 10);
-    expect(t[2]!.significant).toBe(true);
-    // Checkout → purchase: 66.7% both times.
-    expect(t[3]!.significant).toBe(false);
   });
 
   it("summarizes one segment's funnel", () => {
@@ -180,28 +169,11 @@ describe("proportionZ", () => {
 });
 
 describe("funnelInsights", () => {
-  const base: InsightInput = { reached: [1000, 400, 150, 75, 50], previousReached: null, sameLength: true, devices: [], visitors: [], products: [] };
+  const base: InsightInput = { reached: [1000, 400, 150, 75, 50], devices: [], visitors: [], products: [] };
 
   it("always leads with the largest drop-off once there are enough visits", () => {
     expect(funnelInsights(base)).toEqual([{ kind: "largest_drop", tone: "neutral", from: "visited", to: "viewed_product", lost: 600, dropOff: 0.6, fromCount: 1000 }]);
     expect(funnelInsights({ ...base, reached: [20, 10, 5, 2, 1] })).toEqual([]);
-  });
-
-  it("reports changes against the dates compared with only when they are more than chance", () => {
-    // Visits 1,000 against 700 (same length); cart → checkout 50% against 70% (74 of 105); the other steps as before.
-    const before = [700, 280, 105, 74, 49];
-    const found = funnelInsights({ ...base, previousReached: before });
-    expect(found.map((i) => i.kind)).toEqual(expect.arrayContaining(["largest_drop", "visits", "transition"]));
-    expect(found.find((i) => i.kind === "visits")).toMatchObject({ tone: "positive", current: 1000, previous: 700 });
-    const transitions = found.filter((i) => i.kind === "transition");
-    expect(transitions).toHaveLength(1);
-    expect(transitions[0]).toMatchObject({ from: "added_to_cart", to: "started_checkout", tone: "negative", current: 0.5, fromCount: 150, previousFromCount: 105 });
-    // 5% against 7% of visits bought: within chance on these numbers.
-    expect(found.some((i) => i.kind === "conversion")).toBe(false);
-    // The same numbers over a period of another length: no visit count is compared.
-    expect(funnelInsights({ ...base, previousReached: before, sameLength: false }).map((i) => i.kind)).not.toContain("visits");
-    // A small wobble says nothing.
-    expect(funnelInsights({ ...base, previousReached: [990, 398, 151, 76, 49] }).map((i) => i.kind)).toEqual(["largest_drop"]);
   });
 
   it("compares mobile with desktop, and new with returning visitors", () => {
@@ -224,11 +196,15 @@ describe("funnelInsights", () => {
     expect(found[0]).toMatchObject({ handle: "tee", viewed: 300, added: 9, rate: 0.03, othersRate: 0.2 });
   });
 
-  it("shows at most six", () => {
+  it("says only what the dates themselves show, at most six", () => {
     const devices = [segmentFunnel("mobile", [700, 200, 60, 30, 10]), segmentFunnel("desktop", [200, 100, 40, 20, 40])];
     const visitors = [segmentFunnel("new", [800, 250, 80, 40, 10]), segmentFunnel("returning", [100, 50, 20, 10, 20])];
     const products = [{ handle: "tee", title: "Tee", viewed: 300, added: 9 }, { handle: "mug", title: "Mug", viewed: 300, added: 60 }, { handle: "hat", title: "Hat", viewed: 300, added: 10 }];
-    expect(funnelInsights({ ...base, previousReached: [700, 400, 100, 30, 10], devices, visitors, products }).length).toBeLessThanOrEqual(6);
+    const found = funnelInsights({ ...base, devices, visitors, products });
+    expect(found.length).toBeLessThanOrEqual(6);
+    // Where most visits stop, a segment against another, a product against the others: never a change on other dates.
+    expect(found.map((i) => i.kind as string).filter((k) => !["largest_drop", "segment_gap", "product_interest"].includes(k))).toEqual([]);
+    expect(found.map((i) => i.kind)).toEqual(expect.arrayContaining(["largest_drop", "segment_gap", "product_interest"]));
   });
 });
 

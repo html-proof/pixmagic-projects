@@ -442,9 +442,6 @@ export interface FunnelModule extends JourneySummary {
   exitPages: JourneyPageRow[];
   /** The first day every visit was counted from: the day after the pixel was put in place. */
   historyFrom?: string | null;
-  /** Null, and `imported` false, when the comparison starts before `historyFrom`: "No earlier data". `reached`: visits per step then. */
-  previous: { visits: number | null; conversionRate: number | null; imported?: boolean; reached?: number[] | null };
-  deltas: { visits: number | null; conversionRate: number | null };
   /** The Profit sheet's answer (?parts=sheet) only: visits day by day, null on a day before they were counted. */
   visitsByDay?: Array<{ day: string; visits: number | null }>;
 }
@@ -483,7 +480,6 @@ export interface FunnelProduct {
 /** The Shopping Funnel page's funnel (GET …/overview?parts=funnel): the dashboard's, and everything funnelDetail adds. */
 export interface FunnelPageModule extends FunnelModule {
   filter: FunnelFilter;
-  stepDeltas: Array<number | null>;
   browsers: number;
   transitions: FunnelTransition[];
   /** Day by day, visits reached per step; null on a day before visits were counted. */

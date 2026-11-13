@@ -755,7 +755,7 @@ Stored paths drop the query string, fragment and market prefix (`/en-au`). Produ
 
 Shoppers who decline analytics consent are not tracked, so funnel numbers are behavioural trends. Today's numbers include visits still in progress, which count as exits from the page they are on. Revenue KPIs never use pixel data.
 
-Visits are compared only from the first whole day after the pixel was put in place (`historyFrom`, see Conventions: "No earlier data").
+Visits are counted in full from the first whole day after the pixel was put in place (`historyFrom`): a day before it has no figure, which isn't the same as none. The funnel is the dates' own: no visits of the period before are read (`previous`, `deltas` and `stepDeltas` were removed on 2026-11-13).
 
 `funnel_daily`, which the pre-visit pixel wrote, was dropped empty on 2026-11-12.
 
@@ -780,22 +780,21 @@ visits in the same dates and filter, so no rate mixes two sources:
 | Checkout completion | Visits that completed checkout ÷ visits that started checkout |
 | View to cart rate (a product) | Visits that added the product to cart on its page ÷ visits that viewed its page |
 | Checkout completion (a product) | Visits that bought the product ÷ visits that started a checkout holding it (`checkoutCompletion`; every buying visit started that checkout) |
-| Change of a stage (in the answer only) | (visits now − visits then) ÷ visits then, against the comparison (`stepDeltas`) |
 
 - **Largest drop-off**: the transition that lost the most visits (`largestDropOff`; a tie goes to the
   earlier step). Rates are never called good or bad: there is no benchmark.
 - **A clear difference**: two rates differ by more than chance, by the pooled two-proportion z-test
   at 95% (`proportionZ`, |z| ≥ 1.96) with at least 30 visits on each side and five expected
-  successes and failures in each group. The answer marks each transition against the period before
-  with it (`change`, `significant`); the page shows no change of a transition.
+  successes and failures in each group. It sets one group of the dates' visits against another
+  (a segment, a product), never the dates against other dates.
 - **Observations** (`funnelInsights`, at most six). The page words three kinds: where most visits
   are lost (`largest_drop`, 30 visits or more); mobile against desktop, or new against returning
   visitors, buying or completing checkout at different rates (`segment_gap`, the z-test); a product
   page added to cart less often than the store's other product pages (`product_interest`, the
-  z-test). The answer also holds the three kinds that are changes on the period before, which the
-  page doesn't word: `visits` (up or down by a Poisson test, at least 50 a side, only between dates
-  of the same length), `conversion` and `transition` (the z-test). Nothing else is said, and reasons
-  are offered as things to check, never as measured causes.
+  z-test). The three kinds that were changes on the period before (`visits`, `conversion`,
+  `transition`) were removed on 2026-11-13: they took places among the six without being worded,
+  so up to five observations of the dates themselves now always fit. Nothing else is said, and
+  reasons are offered as things to check, never as measured causes.
 - **Segments** (each a funnel of its own on the same visits): device, country, landing page (the
   section the visit started on), new or returning (returning: the same hashed browser has a visit on
   an earlier day since the pixel's history began), traffic source. The **filter** (`device`,

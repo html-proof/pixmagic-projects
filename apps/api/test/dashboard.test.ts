@@ -671,7 +671,7 @@ describe("date ranges", () => {
 
     const report = (preset: "today" | "yesterday") =>
       withTenant(ws, (tx) => storeOverview(tx, store, resolvePreset(preset, now, TZ), now)) as unknown as Promise<{
-        modules: { sales_overview: { current: Record<string, number> }; refunds: object; customers: object; funnel: { visits: number; previous: { visits: number; conversionRate: number } } };
+        modules: { sales_overview: { current: Record<string, number> }; refunds: object; customers: object; funnel: { visits: number } };
       }>;
     expect(resolvePreset("today", now, TZ).previous).toEqual({ from: "2026-03-07", to: "2026-03-07", until: "12:00:00" });
     const { modules: m } = await report("today");
@@ -680,8 +680,9 @@ describe("date ranges", () => {
     for (const k of ["previous", "deltas", "previousSeries"]) expect(m.sales_overview).not.toHaveProperty(k);
     expect(m.refunds).not.toHaveProperty("deltas");
     expect(m.customers).not.toHaveProperty("previous");
-    expect(m.funnel.previous).toEqual({ visits: 2, conversionRate: 0.5, imported: true, reached: [2, 2, 1, 1, 1] });
+    // Sunday's one visit; Saturday's three are Saturday's.
     expect(m.funnel.visits).toBe(1);
+    for (const k of ["previous", "deltas"]) expect(m.funnel).not.toHaveProperty(k);
 
     // Saturday on its own is still the whole day, as daily_store_metrics holds it.
     const { modules: y } = await report("yesterday");
@@ -891,8 +892,8 @@ describe("what the dates are compared with", () => {
     // visit on it would read as fewer visits before.
     const early = await compared(d(-12));
     expect(early.previous).toEqual({ from: d(-21), to: d(-13) });
-    expect(early.modules.funnel).toMatchObject({ visits: 2, conversionRate: 0.5, historyFrom: d(-19), previous: { visits: null, conversionRate: null, imported: false } });
-    expect(none(early.modules.funnel.deltas)).toBe(true);
+    expect(early.modules.funnel).toMatchObject({ visits: 2, conversionRate: 0.5, historyFrom: d(-19) });
+    for (const k of ["previous", "deltas"]) expect(early.modules.funnel).not.toHaveProperty(k);
     expect(early.modules.ads).toMatchObject({
       historyFrom: d(-12),
       current: { spend: 55 },
@@ -907,8 +908,7 @@ describe("what the dates are compared with", () => {
     // account's figures don't reach back yet.
     const mid = await compared(d(-10));
     expect(mid.previous).toMatchObject({ from: d(-17), to: d(-11) });
-    expect(mid.modules.funnel.previous).toEqual({ visits: 1, conversionRate: 1, imported: true, reached: [1, 1, 1, 1, 1] });
-    expect(mid.modules.funnel.deltas).toEqual({ visits: 1, conversionRate: -0.5 });
+    expect(mid.modules.funnel).toMatchObject({ visits: 2, conversionRate: 0.5 });
     expect(mid.modules.ads.previous.imported).toBe(false);
     expect(mid.modules.ads.deltas.spend).toBeNull();
 
