@@ -25,8 +25,6 @@ interface Analytics {
   timezone: string;
   currency: string | null;
   range: { from: string; to: string };
-  previous: { from: string; to: string };
-  inProgress: boolean;
   kpis: KpiData[];
   notes: string[];
 }

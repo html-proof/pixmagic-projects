@@ -80,10 +80,6 @@ export const MAX_RANGE_DAYS = 3 * 366 + 31;
 
 export interface ResolvedRange {
   range: DayRange;
-  /** The comparable range before it: the same length, or the same elapsed part of the previous week/month/year. */
-  previous: DayRange;
-  /** The range is still running (ends today), so it is compared with the same elapsed span before it. */
-  inProgress: boolean;
 }
 
 export class ReportRangeError extends Error {
@@ -93,64 +89,33 @@ export class ReportRangeError extends Error {
   }
 }
 
-/** The day `day` would be in the previous month (31 Mar -> 28/29 Feb). */
-function sameDayLastMonth(day: string): string {
-  const prevMonthEnd = shiftDay(startOfMonth(day), -1);
-  const want = Number(day.slice(8, 10));
-  const max = Number(prevMonthEnd.slice(8, 10));
-  return `${prevMonthEnd.slice(0, 8)}${String(Math.min(want, max)).padStart(2, "0")}`;
-}
-
-function sameDayLastYear(day: string): string {
-  const y = Number(day.slice(0, 4)) - 1;
-  const md = day.slice(5);
-  const candidate = `${y}-${md}`;
-  return isCalendarDay(candidate) ? candidate : `${y}-02-28`;
-}
-
-/**
- * Resolve a preset against the organization's `today`. "This week/month/year" run to today and are
- * compared with the same elapsed span of the previous one, so a Wednesday is never set against a
- * whole week. Custom ranges are compared with the same number of days just before them.
- */
+/** Resolve a preset against the organization's `today`. "This week/month/year" run to today. */
 export function resolveRange(preset: RangePreset, today: string, weekStartsOn: number, custom?: Partial<DayRange>): ResolvedRange {
-  const same = (range: DayRange, previous: DayRange, inProgress = false): ResolvedRange => ({ range, previous, inProgress });
   switch (preset) {
     case "live":
     case "today":
-      return same({ from: today, to: today }, { from: shiftDay(today, -1), to: shiftDay(today, -1) }, true);
+      return { range: { from: today, to: today } };
     case "yesterday": {
       const y = shiftDay(today, -1);
-      return same({ from: y, to: y }, { from: shiftDay(y, -1), to: shiftDay(y, -1) });
+      return { range: { from: y, to: y } };
     }
-    case "this_week": {
-      const from = startOfWeek(today, weekStartsOn);
-      const elapsed = dayDiff(from, today);
-      return same({ from, to: today }, { from: shiftDay(from, -7), to: shiftDay(from, elapsed - 7) }, true);
-    }
+    case "this_week":
+      return { range: { from: startOfWeek(today, weekStartsOn), to: today } };
     case "last_week": {
       const from = shiftDay(startOfWeek(today, weekStartsOn), -7);
-      return same({ from, to: shiftDay(from, 6) }, { from: shiftDay(from, -7), to: shiftDay(from, -1) });
+      return { range: { from, to: shiftDay(from, 6) } };
     }
-    case "this_month": {
-      const from = startOfMonth(today);
-      const prevFrom = startOfMonth(shiftDay(from, -1));
-      return same({ from, to: today }, { from: prevFrom, to: sameDayLastMonth(today) }, true);
-    }
+    case "this_month":
+      return { range: { from: startOfMonth(today), to: today } };
     case "last_month": {
       const to = shiftDay(startOfMonth(today), -1);
-      const from = startOfMonth(to);
-      const prevTo = shiftDay(from, -1);
-      return same({ from, to }, { from: startOfMonth(prevTo), to: prevTo });
+      return { range: { from: startOfMonth(to), to } };
     }
-    case "this_year": {
-      const from = `${today.slice(0, 4)}-01-01`;
-      const prevYear = Number(today.slice(0, 4)) - 1;
-      return same({ from, to: today }, { from: `${prevYear}-01-01`, to: sameDayLastYear(today) }, true);
-    }
+    case "this_year":
+      return { range: { from: `${today.slice(0, 4)}-01-01`, to: today } };
     case "last_year": {
       const y = Number(today.slice(0, 4)) - 1;
-      return same({ from: `${y}-01-01`, to: `${y}-12-31` }, { from: `${y - 1}-01-01`, to: `${y - 1}-12-31` });
+      return { range: { from: `${y}-01-01`, to: `${y}-12-31` } };
     }
     case "custom": {
       const from = custom?.from;
@@ -159,7 +124,7 @@ export function resolveRange(preset: RangePreset, today: string, weekStartsOn: n
       if (from > to) throw new ReportRangeError("The start date is after the end date");
       const len = dayDiff(from, to) + 1;
       if (len > MAX_RANGE_DAYS) throw new ReportRangeError("That range is too long. Choose three years or less.");
-      return same({ from, to }, { from: shiftDay(from, -len), to: shiftDay(from, -1) }, to >= today);
+      return { range: { from, to } };
     }
   }
 }
