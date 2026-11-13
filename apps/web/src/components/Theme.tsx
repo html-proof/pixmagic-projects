@@ -1,14 +1,14 @@
 "use client";
 import { useLayoutEffect, useSyncExternalStore } from "react";
 import { Monitor, Moon, Sun, type LucideIcon } from "lucide-react";
-import { readLocal, removeLocal, writeLocal } from "@/lib/storage";
-import { DEVICE_DARK, otherTheme, parseThemeChoice, resolveTheme, THEME_EVENT, THEME_KEY, type Theme, type ThemeChoice } from "@/lib/theme";
+import { readLocal, writeLocal } from "@/lib/storage";
+import { DEFAULT_THEME, DEVICE_DARK, otherTheme, parseThemeChoice, resolveTheme, THEME_EVENT, THEME_KEY, type Theme, type ThemeChoice } from "@/lib/theme";
 
 // ---------------------------------------------------------------------------
 // Light or dark (rules in lib/theme.ts): the choice kept on this device, the palette it shows, and
 // the two controls that change it: the sun-or-moon button in the top bar and the Appearance card
-// on Settings → Profile. The page's first paint is the inline script's (app/layout.tsx); from then
-// on this file keeps <html data-theme> right.
+// on Settings → Profile. Dark until someone chooses otherwise. The page's first paint is the inline
+// script's (app/layout.tsx); from then on this file keeps <html data-theme> right.
 // ---------------------------------------------------------------------------
 
 /** This tab's copy of the choice: read from the device once, so a choice still holds for the visit where storage is blocked. */
@@ -24,8 +24,7 @@ function apply(): void {
 
 function setThemeChoice(choice: ThemeChoice): void {
   chosen = choice;
-  if (choice === "system") removeLocal(THEME_KEY);
-  else writeLocal(THEME_KEY, choice);
+  writeLocal(THEME_KEY, choice);
   apply();
 }
 
@@ -34,10 +33,10 @@ const subscribe = (onChange: () => void) => {
   return () => window.removeEventListener(THEME_EVENT, onChange);
 };
 
-/** The choice on this device, the palette showing, and how to change it. Before the page is in a browser: the device's, light. */
+/** The choice on this device, the palette showing, and how to change it. Before the page is in a browser: the app's own look. */
 export function useTheme(): { choice: ThemeChoice; theme: Theme; setChoice: (choice: ThemeChoice) => void } {
-  const choice = useSyncExternalStore(subscribe, choiceNow, () => "system" as const);
-  const theme = useSyncExternalStore(subscribe, themeNow, () => "light" as const);
+  const choice = useSyncExternalStore<ThemeChoice>(subscribe, choiceNow, () => DEFAULT_THEME);
+  const theme = useSyncExternalStore<Theme>(subscribe, themeNow, () => DEFAULT_THEME);
   return { choice, theme, setChoice: setThemeChoice };
 }
 
@@ -89,12 +88,12 @@ export function ThemeToggle() {
 }
 
 const CHOICES: ReadonlyArray<{ value: ThemeChoice; label: string; hint: string; icon: LucideIcon }> = [
-  { value: "light", label: "Light", hint: "A bright page with dark text.", icon: Sun },
   { value: "dark", label: "Dark", hint: "A dark page with light text.", icon: Moon },
+  { value: "light", label: "Light", hint: "A bright page with dark text.", icon: Sun },
   { value: "system", label: "Same as device", hint: "Follows this device's own setting.", icon: Monitor },
 ];
 
-/** Settings → Profile's Appearance card: the three choices, the one in use marked. */
+/** Settings → Profile's Appearance card: the three choices, the one in use marked. Dark, the app's own look, comes first. */
 export function AppearanceCard() {
   const { choice, setChoice } = useTheme();
   return (
@@ -126,7 +125,7 @@ export function AppearanceCard() {
             })}
           </div>
         </fieldset>
-        <p className="mt-3 text-xs text-muted">Kept on this device and browser. The sun or moon button at the top of every page switches it too.</p>
+        <p className="mt-3 text-xs text-muted">Dark unless you choose otherwise. Kept on this device and browser. The sun or moon button at the top of every page switches it too.</p>
       </div>
     </section>
   );

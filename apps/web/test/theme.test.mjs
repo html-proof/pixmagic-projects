@@ -15,15 +15,23 @@ const load = async (path) => {
   new Function("require", "exports", outputText)((id) => assert.fail(`unexpected import ${id}`), exports);
   return exports;
 };
-const { DEVICE_DARK, otherTheme, parseThemeChoice, resolveTheme, THEME_KEY, THEME_SCRIPT } = await load("../src/lib/theme.ts");
+const { DEFAULT_THEME, DEVICE_DARK, otherTheme, parseThemeChoice, resolveTheme, THEME_KEY, THEME_SCRIPT } = await load("../src/lib/theme.ts");
 
-test("a stored choice is light or dark; anything else follows the device", () => {
-  assert.equal(parseThemeChoice("light"), "light");
-  assert.equal(parseThemeChoice("dark"), "dark");
-  for (const raw of [null, undefined, "", "system", "Dark", "<script>"]) assert.equal(parseThemeChoice(raw), "system");
+test("dark is the app's own look: what a device shows with nothing chosen", () => {
+  assert.equal(DEFAULT_THEME, "dark");
+  for (const raw of [null, undefined, "", "Dark", "auto", "<script>"]) assert.equal(parseThemeChoice(raw), "dark");
+  // Whatever the device's own setting.
+  assert.equal(resolveTheme(parseThemeChoice(null), false), "dark");
+  assert.equal(resolveTheme(parseThemeChoice(null), true), "dark");
 });
 
-test("a choice wins over the device's setting; no choice follows it", () => {
+test("a stored choice is light, dark or the device's setting", () => {
+  assert.equal(parseThemeChoice("light"), "light");
+  assert.equal(parseThemeChoice("dark"), "dark");
+  assert.equal(parseThemeChoice("system"), "system");
+});
+
+test("light or dark wins over the device's setting; \"same as device\" follows it", () => {
   assert.equal(resolveTheme("light", true), "light");
   assert.equal(resolveTheme("dark", false), "dark");
   assert.equal(resolveTheme("system", true), "dark");
@@ -62,11 +70,17 @@ test("the script run before the page paints follows the same rules", () => {
   }
 });
 
-test("blocked storage is nothing saved, and a browser without matchMedia is light", () => {
+test("blocked storage is nothing saved: dark; a browser without matchMedia can't follow the device", () => {
   assert.equal(runScript({ storage: "blocked", deviceDark: true }), "dark");
-  assert.equal(runScript({ storage: "blocked", deviceDark: false }), "light");
-  assert.equal(runScript({ matchMedia: false }), "light");
-  assert.equal(runScript({ stored: "dark", matchMedia: false }), "dark");
+  assert.equal(runScript({ storage: "blocked", deviceDark: false }), "dark");
+  assert.equal(runScript({ matchMedia: false }), "dark");
+  assert.equal(runScript({ stored: "light", matchMedia: false }), "light");
+  assert.equal(runScript({ stored: "system", matchMedia: false }), "light");
+});
+
+test("the pages are built in the app's own look, for a browser that runs no script", async () => {
+  const layout = await readFile(new URL("../src/app/layout.tsx", import.meta.url), "utf8");
+  assert.match(layout, /<html lang="en" data-theme=\{DEFAULT_THEME\}/);
 });
 
 test("the stylesheet's dark rules follow the choice, not the device's setting alone", async () => {

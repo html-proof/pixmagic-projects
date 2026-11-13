@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* Light or dark is the person's choice (lib/theme.ts), not only the device's: <html data-theme>
+/* Light or dark is the person's choice (lib/theme.ts), dark until they make one: <html data-theme>
    says which palette is showing, and `dark:` utilities and the dark tokens below follow it. On
    screen only, so a page printed from dark mode comes out in the light palette. */
 @custom-variant dark {
