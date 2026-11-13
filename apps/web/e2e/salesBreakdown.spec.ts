@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { signUp, uniqueEmail } from "./helpers";
+import { openMoreDetail, signUp, uniqueEmail } from "./helpers";
 
 /**
  * The Total sales breakdown and Custom sales in the browser: the lines add up to Shopify's total
@@ -75,6 +75,7 @@ test("total sales line by line, Custom sales from it, saved and shown across the
   // What refunds took off it, said even when nothing was refunded (never "-$0.00").
   await expect(page.getByTestId("tile-refunds")).toHaveText("Refunds $0.00");
   await page.getByTestId("metric-Total sales").click();
+  await openMoreDetail(page);
 
   const card = page.getByTestId("module-d-sales-breakdown");
   await expect(card).toBeVisible();
@@ -120,6 +121,7 @@ test("total sales line by line, Custom sales from it, saved and shown across the
   // This year month by month measures it too, named, with Shopify's net sales beside it; net
   // sales is one pick away.
   await page.getByTestId("metric-Total sales").click();
+  await openMoreDetail(page);
   const monthly = page.getByTestId("monthly-sales");
   await expect(monthly.getByLabel("Sales card shows")).toHaveValue("custom");
   await expect(monthly).toContainText("$1,060.00");
@@ -133,6 +135,7 @@ test("total sales line by line, Custom sales from it, saved and shown across the
   // On a phone the card fits the screen: no sideways scrolling.
   await page.setViewportSize({ width: 375, height: 812 });
   await page.getByTestId("metric-Total sales").click();
+  await openMoreDetail(page);
   await expect(card).toBeVisible();
   await expect(page.getByTestId("detail-panel")).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
@@ -143,4 +146,43 @@ test("total sales line by line, Custom sales from it, saved and shown across the
   await expect(page.getByTestId("breakdown-custom")).toContainText("$1,210.00");
   await page.getByRole("button", { name: "Stop showing on dashboard" }).click();
   await expect(card).toContainText("The dashboard shows Shopify's figures only.");
+});
+
+test("the other sales panels are folded under More detail until opened, and a printout has them", async ({ page }) => {
+  const email = uniqueEmail("fold");
+  await signUp(page, email);
+  await createWorkspace(page, "Fold Co");
+  await seedStore(email);
+
+  await page.goto("/dashboard?preset=today&view=sales");
+  const fold = page.getByTestId("more-detail-sales");
+  const inside = page.getByTestId("module-d-sales-breakdown");
+  // Closed on a first visit, and the row says what it holds.
+  await expect(fold).toBeVisible();
+  await expect(fold.locator("summary")).toContainText("More detail");
+  await expect(fold.locator("summary")).toContainText("Total sales line by line");
+  await expect(inside).toBeHidden();
+  // The page's own figures are not folded.
+  await expect(page.getByTestId("adds-up-total")).toContainText("$1,210.00");
+  // The glossary is a fold of its own.
+  await expect(page.getByTestId("more-detail-terms").locator("summary")).toContainText("What these numbers mean");
+  await expect(page.getByTestId("module-d-terms-sales")).toBeHidden();
+
+  // A printout has every panel, and printing is not remembered as opening it.
+  await page.evaluate(() => window.dispatchEvent(new Event("beforeprint")));
+  await expect(inside).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new Event("afterprint")));
+  await expect(inside).toBeHidden();
+  expect(await page.evaluate(() => window.localStorage.getItem("more-detail:sales"))).toBeNull();
+
+  // Opened once, it stays open on this device; closed again, it stays closed.
+  await fold.locator("summary").click();
+  await expect(inside).toBeVisible();
+  await page.reload();
+  await expect(inside).toBeVisible();
+  await page.getByTestId("more-detail-sales").locator("summary").click();
+  await expect(inside).toBeHidden();
+  await page.reload();
+  await expect(page.getByTestId("more-detail-sales")).toBeVisible();
+  await expect(inside).toBeHidden();
 });

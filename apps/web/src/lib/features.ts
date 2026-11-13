@@ -34,6 +34,14 @@ export const API_KEYS_ENABLED: boolean = false;
 export const SIMPLE_MENU: boolean = true;
 
 /**
+ * "More detail" folds (2026-11-11, docs/ux-redesign step B): a page shows its few numbers first and
+ * keeps its other panels in one row that says what is inside and opens with a click
+ * (components/MoreDetail.tsx). A device that opened a fold keeps it open, and a printout has every
+ * panel. Flip to `false` to draw every panel on the page again, as before.
+ */
+export const FOLD_DETAIL: boolean = true;
+
+/**
  * The Zapier card on Settings → Integrations (docs/zapier.md): connect the store to the merchant's own
  * Zapier account through bizinsights' Zapier app. On in production since 2026-10-29: the app is
  * registered and its ZAPIER_* settings are live, and the first test Zap passed (docs/zapier.md,

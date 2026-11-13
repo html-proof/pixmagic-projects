@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { fillCode, fillSignUp, insertStore, latestCode, logIn, PASSWORD, showEveryPage, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
+import { fillCode, fillSignUp, insertStore, latestCode, logIn, openMoreDetail, PASSWORD, showEveryPage, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
 
 /** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
 const alert = (page: import("@playwright/test").Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
@@ -749,6 +749,8 @@ test("shows Shopify's own sessions and gross profit, and checks the sales figure
   // The dates stand alone: no menu to compare them with other dates, and nothing saying they are.
   await expect(page.getByTestId("date-chip")).not.toHaveAttribute("title", /Compared with/);
   await expect(page.getByLabel("Compare with")).toHaveCount(0);
+  // The check against Shopify and its gross profit sit under the page's "More detail".
+  await openMoreDetail(page);
   const check = page.getByTestId("module-shopify-check");
   await expect(check).toContainText("All match");
   await expect(check.getByTestId("shopify-check-table")).toContainText("Net sales");
