@@ -40,14 +40,25 @@ is an AWS service; the two rows marked **still AWS** are the ties below.
 ## The two ties
 
 Counted on the server on 2026-11-13 (`admin sign-in-move`, below). Where each stands that evening:
-Google sign-in runs on the app's own client since 07:31 UTC (steps 1 and 2 below, done from the
-cutover's session; a person signing in with Google is still to be seen), and `AUTH_MODE` is still
-`migrating`. The owner put R2 off ("Skip R2 for now": it asks for a payment card), so the backups
-stay in S3 and **the account cannot be closed yet**.
+
+- **Sign-in no longer uses Cognito.** Google sign-in runs on the app's own client since 07:31 UTC
+  (steps 1 and 2 below, done from the cutover's session). On the owner's "Email them, then switch",
+  the notice went to the 3 people whose password only Cognito knew (3 sent, none failed) and the
+  server runs `AUTH_MODE=local` since about 08:13 UTC (steps 3 and 4). Checked after it: the site
+  healthy, a wrong sign-in answered 401 and a reset request 200 without Cognito, Google's start
+  still handed to Google, no error and no call to Cognito in the server's log. Not yet seen: a
+  person signing in with Google on the app's own client, or one of the 3 setting a password.
+  **The user pool is kept for a few days as the way back** (the owner had no preference): the
+  file as it was is `env/app.env.before-local` on the server, and `COGNITO_*` and the IAM user's
+  keys are still in `env/app.env`, unused. Going back is that file copied over `env/app.env` and
+  `docker compose up -d web worker`; whoever set a password in the app meanwhile keeps it.
+- **The backups are still in S3.** The owner put R2 off (it asks for a payment card); the sessions
+  that own the backups record what replaces the bucket. Until that is proven, the bucket is the only
+  copy of the data off the server, and **the account cannot be closed yet**.
 
 | Tie | What breaks if AWS goes first | What cuts it |
 | --- | --- | --- |
-| **Sign-in**: `AUTH_MODE=migrating`. Cognito checks the password of 4 of the 5 people who have one (the fifth has signed in since 2026-11-08, so the app has theirs), and carries Google sign-in for the 4 who use it | Those 4 can't sign in with their password until they reset it; the 4 Google users can't sign in at all | [Sign-in off Cognito](#sign-in-off-cognito) |
+| **Sign-in**, as it was until the switch to `AUTH_MODE=local` (above): `AUTH_MODE=migrating`. Cognito checks the password of 4 of the 5 people who have one (the fifth has signed in since 2026-11-08, so the app has theirs), and carries Google sign-in for the 4 who use it | Those 4 can't sign in with their password until they reset it; the 4 Google users can't sign in at all | [Sign-in off Cognito](#sign-in-off-cognito) |
 | **Backups**: pgBackRest writes to the S3 bucket `bizinsights-backups-605411278365`, with a copy of its passphrase in Parameter Store | The server's only backup off the server is deleted with the account | [Backups off S3](#backups-off-s3) |
 
 Nothing else on the server calls AWS ([AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md), "What the
@@ -82,10 +93,11 @@ server would call on AWS").
    Each of them gets one email ("Set your bizinsights password again") saying to choose "Forgot
    password?" at their next sign-in. It can be run again: whoever has set a password since is no
    longer on the list.
-4. `env/app.env`: `AUTH_MODE=local`, the `COGNITO_*` lines and the two `AWS_*` keys emptied, then
-   `docker compose up -d web worker`. Sign in with a password, an emailed code and Google, and
-   reset a password. Anyone whose browser still held a session from Cognito (signed in before
-   2026-11-08 and not since) is asked to sign in again.
+4. `env/app.env`: `AUTH_MODE=local`, then `docker compose up -d web worker`. Sign in with a
+   password, an emailed code and Google, and reset a password. Anyone whose browser still held a
+   session from Cognito (signed in before 2026-11-08 and not since) is asked to sign in again.
+   The `COGNITO_*` lines and the two `AWS_*` keys are emptied when Cognito is deleted, not before:
+   until then they are what a switch back needs.
 5. Cognito can go (below), and the code that spoke to it
    ([AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md#stage-f-removing-the-code), step 1).
 
@@ -166,7 +178,8 @@ the last commit that holds them is `a5177a93`. `infra/aws/cognito.yaml` stays as
 the pool until part 2. What still names AWS in the code is in
 [AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md).
 
-**Part 2, after `AUTH_MODE=local`:** the Auth stack (the user pool, `auth.bizinsights.io` and its
+**Part 2, after `AUTH_MODE=local`** (the server is there since 2026-11-13; the deletion waits for
+the owner's word, a few days of sign-ins first)**:** the Auth stack (the user pool, `auth.bizinsights.io` and its
 record at Cloudflare, the `cognito-email` function and its KMS key) and the IAM user
 `bizinsights-ikorex`; in the repository, `cognito.ts`, `migratingAuth.ts` and the Cognito stand-in
 of the tests.
