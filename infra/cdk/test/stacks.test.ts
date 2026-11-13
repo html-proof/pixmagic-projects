@@ -1149,10 +1149,11 @@ describe("the origin lock", () => {
     expect(naming).toEqual(["SecretParametersHandlerServiceRoleDefaultPolicy"]);
   });
 
-  it("reports in production (step one), and isn't made where the app lives on CloudFront's own name", () => {
+  it("enforces in production, and isn't made where the app lives on CloudFront's own name", () => {
     const source = (app: Template) => JSON.stringify(Object.values(app.findResources("AWS::CloudFront::Function"))[0]!.Properties.FunctionCode);
-    expect(source(t.app)).toContain("var ENFORCE = false;");
-    t.app.hasOutput("OriginLock", { Value: "report" });
+    expect(source(t.app)).toContain("var ENFORCE = true;");
+    t.app.hasOutput("OriginLock", { Value: "enforce" });
+    t.app.hasResourceProperties("AWS::CloudFront::Function", { FunctionConfig: Match.objectLike({ Comment: Match.stringLikeRegexp("only Cloudflare's requests are served$") }) });
     const staging = synth({ env: "staging" });
     staging.data.resourcePropertiesCountIs("AWS::SecretsManager::Secret", { Name: Match.stringLikeRegexp("origin-lock") }, 0);
     expect(source(staging.app)).not.toContain("resolve:secretsmanager");

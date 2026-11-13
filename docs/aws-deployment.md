@@ -905,12 +905,13 @@ aws secretsmanager get-secret-value --secret-id insights/production/origin-lock 
 ```
 
 `(Get-Clipboard).Length` should say 48. Then in the Cloudflare dashboard, zone `bizinsights.io`:
-**Rules → Overview → Create rule → Request Header Transform Rule**.
+**Rules → Overview**, section **Request Header Transform Rules** → **Create rule** (to change the
+value later: click the rule's name there, replace the Value, **Save**).
 
 | Field | Value |
 | --- | --- |
 | Rule name | `Origin lock for CloudFront` |
-| If incoming requests match | **Custom filter expression**: Hostname **equals** `bizinsights.io` **Or** Hostname **equals** `www.bizinsights.io` |
+| If incoming requests match | **Custom filter expression**: Hostname **equals** `bizinsights.io` **Or** Hostname **equals** `www.bizinsights.io` (as an expression: `(http.host eq "bizinsights.io") or (http.host eq "www.bizinsights.io")`) |
 | Then, modify request header | **Set static**, header name `x-origin-lock`, value: paste (Ctrl+V) |
 
 **Deploy**, then empty the clipboard (`Set-Clipboard -Value " "`) and check:
@@ -920,6 +921,11 @@ curl.exe -s -o NUL -w "%{http_code}" https://bizinsights.io/edge-lock
 ```
 
 **204** is right. 403 means the value or the header's name is wrong: edit the rule and paste again.
+The paste is the step that goes wrong: with an expired `aws login` the command copies nothing and
+Ctrl+V pastes whatever was copied before (on 2026-11-12 the rule went live holding the header's own
+name), hence the length check, and nothing else copied between the command and the paste. The rule
+list shows the header's value in plain text to whoever may open the zone in Cloudflare's dashboard:
+that account is as sensitive as the secret.
 "Set static" replaces a header of that name a client sent, so nobody can pass their own. The rule
 names the two hosts so the secret never goes to another origin of the zone.
 
