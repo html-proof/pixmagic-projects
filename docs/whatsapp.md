@@ -108,15 +108,21 @@ On-demand in Sydney, from AWS's price list (2026-10-25), before GST:
 | Logs (errors and warnings only), the DB-init function, SQS | cents |
 | **Total** | **~US$19** |
 
-**Production's service is switched off since 2026-11-12** (the owner's cost recommendations of that
+**Production's service is on again since 2026-11-13**: the owner asked for it back the day after it
+went off, the variable below was deleted and the next Deploy to AWS started the task. The switch
+itself stays. **It was switched off on 2026-11-12** (the owner's cost recommendations of that
 day, item 5): the repository variable `AWS_WHATSAPP=off` makes every Deploy to AWS pass
 `-c whatsapp=off`, which leaves the ECS service with no task (the Fargate charge stops; the
 namespace, secrets, queue, tables and the `evolution` database with its saved sessions all stay).
 Checked first: no message had gone through the `whatsapp` queue since 2026-10-30 (27 on 29 and 30
 October, the tests after release 131), and WhatsApp isn't offered to App Store workspaces
-(`APP_STORE_MODULES`). While it is off the functions get no `EVOLUTION_API_URL`, so the page says
-WhatsApp isn't set up, connecting (QR or Cloud API) answers that it is off, the sweep skips the
-service, and the `whatsapp-service-*` alarms don't exist. **Back on:** delete the variable
+(`APP_STORE_MODULES`). While the variable is `off` the functions get no `EVOLUTION_API_URL`, so the page says
+"WhatsApp is switched off on bizinsights at the moment" above every tab (its status reads
+"Switched off"), connecting (QR or Cloud API) and every other button that needs the service
+answers the same (the API's 503 `provider_not_configured`, worded in
+`apps/web/src/components/whatsapp/waErrors.ts`: until 2026-11-13 those read as an outage, "We
+can't reach bizinsights right now. We'll keep trying."), the sweep skips the service, and the
+`whatsapp-service-*` alarms don't exist. **Back on:** delete the variable
 (`gh variable delete AWS_WHATSAPP`) and run Deploy to AWS on `main`; linked phones reconnect from
 the saved sessions.
 

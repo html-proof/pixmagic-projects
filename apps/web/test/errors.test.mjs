@@ -238,3 +238,42 @@ test("public-link errors never change the merchant session or permissions", asyn
     assert.deepEqual(accessSignals, []);
   } finally { globalThis.fetch = original; setSharedTab(false); }
 });
+
+// WhatsApp's own refusals with a 5xx status (the service is switched off on purpose, or didn't
+// answer): an outage's "We'll keep trying" under a button is wrong for both.
+const waExports = {};
+new Function("exports", ts.transpileModule(await readFile(new URL("../src/components/whatsapp/waErrors.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText)(waExports);
+const { waError } = (() => {
+  const source = readFileSync(new URL("../src/components/whatsapp/WaUi.tsx", import.meta.url), "utf8");
+  const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
+  const exports = {};
+  new Function("require", "exports", compiled)((id) => (id === "./waErrors" ? waExports : id === "@/lib/api" ? clientExports : id === "react" ? React : {}), exports);
+  return exports;
+})();
+
+test("a WhatsApp service that is switched off says so, not that bizinsights can't be reached", async () => {
+  const original = globalThis.fetch;
+  const failWith = async (status, body) => {
+    globalThis.fetch = async () => new globalThis.Response(typeof body === "string" ? body : JSON.stringify(body), { status });
+    let caught;
+    await api("/workspaces/ws/stores/store/whatsapp/connection", { method: "POST", body: { method: "qr" } }).catch((e) => (caught = e));
+    return waError(caught, "start linking the phone");
+  };
+  try {
+    const off = await failWith(503, { error: "provider_not_configured", message: "private: EVOLUTION_API_URL unset" });
+    assert.match(off, /^WhatsApp is switched off on bizinsights at the moment\. Nothing was changed\.$/);
+    assert.match(await failWith(503, { error: "cloud_api_off", message: "private" }), /Meta's Cloud API isn't available on bizinsights at the moment/);
+    assert.match(await failWith(503, { error: "provider_unavailable", message: "private" }), /WhatsApp service didn't answer\. Nothing was changed; try again in a minute\./);
+    const refused = await failWith(502, { error: "provider_refused", message: "The WhatsApp service refused that: private instance token" });
+    assert.match(refused, /^The WhatsApp service refused that\. Nothing was changed\.$/);
+    for (const text of [off, refused]) assert.ok(!text.includes("private") && !text.includes("keep trying"));
+
+    // A real outage (the database, a gateway's page, no code at all) keeps the outage wording, with "try again": nothing retries an action.
+    for (const [status, body] of [[503, { error: "db_unavailable", message: "private" }], [502, "<html>gateway</html>"], [500, { error: "internal" }]]) {
+      assert.equal(await failWith(status, body), "We couldn't reach bizinsights to start linking the phone. Please try again in a moment.");
+    }
+    // A rule the API states (4xx) is still shown in its own words; a code alone never unlocks a 4xx's text.
+    assert.equal(await failWith(409, { error: "already_connected", message: "WhatsApp is already connected for this store." }), "WhatsApp is already connected for this store.");
+    assert.equal(await failWith(409, { error: "provider_refused", message: "Connect again." }), "Connect again.");
+  } finally { globalThis.fetch = original; }
+});
