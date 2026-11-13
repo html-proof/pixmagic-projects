@@ -1,41 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { GRADE, gradeCover, gradeRefundRate, gradeShipping, gradeStock, gradeTrend, shippingIsLate } from "../src/health.js";
+import { GRADE, gradeCover, gradeRefundRate, gradeShipping, gradeStock, shippingIsLate } from "../src/health.js";
 
 describe("GRADE", () => {
   it("states the thresholds docs/kpis.md documents", () => {
-    expect(GRADE).toEqual({ trendDrop: 0.1, refundRateGood: 0.05, refundRateWatch: 0.1, shippingDays: 3, coverDays: 7, coverUnits: 2 });
-  });
-});
-
-describe("gradeTrend", () => {
-  it.each([NaN, Infinity, -Infinity])("does not grade a non-finite comparison (%s)", (change) => {
-    expect(gradeTrend(change)).toBe("info");
-  });
-  it.each([
-    [0.25, "good"],
-    [0.0001, "good"],
-    [0, "good"],
-    [-0.0001, "watch"],
-    [-0.05, "watch"],
-    [-0.0999, "watch"],
-    [-0.1, "attention"],
-    [-0.1001, "attention"],
-    [-1, "attention"],
-  ] as const)("%s → %s", (change, health) => {
-    expect(gradeTrend(change, false)).toBe(health);
-  });
-
-  it("is information only with nothing to compare with", () => {
-    expect(gradeTrend(null, false)).toBe("info");
-    expect(gradeTrend(null)).toBe("info");
-  });
-
-  it("doesn't grade a period that is still running, whatever the change", () => {
-    for (const change of [0.5, 0, -0.05, -0.5, null]) expect(gradeTrend(change, true)).toBe("info");
-  });
-
-  it("grades a finished period by default", () => {
-    expect(gradeTrend(-0.2)).toBe("attention");
+    expect(GRADE).toEqual({ refundRateGood: 0.05, refundRateWatch: 0.1, shippingDays: 3, coverDays: 7, coverUnits: 2 });
   });
 });
 

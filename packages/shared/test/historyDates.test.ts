@@ -37,25 +37,20 @@ describe("ranges of up to 12 months, however far back", () => {
     expect(customRangeProblem({ from: "2019-07-01", to: "2020-07-01" })).toBe("too_long");
     const now = new Date("2026-10-24T03:00:00Z");
     expect(() => resolvePreset("custom", now, "UTC", { from: "2023-01-01", to: "2024-01-01" })).toThrow("pick up to 12 months at a time");
-    // An older year on its own is a question like any other, and its comparison the year before it.
+    // An older year on its own is a question like any other.
     expect(resolvePreset("custom", now, "UTC", { from: "2023-01-01", to: "2023-12-31" })).toEqual({
       range: { from: "2023-01-01", to: "2023-12-31" },
-      previous: { from: "2022-01-01", to: "2022-12-31" },
     });
-    // The period before a calendar year is the calendar year before, leap or not, as for Last year:
-    // never 31 Dec 2022 – 31 Dec 2023 (the 366 days before 2024).
-    expect(resolvePreset("custom", now, "UTC", { from: "2024-01-01", to: "2024-12-31" }).previous).toEqual({ from: "2023-01-01", to: "2023-12-31" });
-    expect(resolvePreset("custom", now, "UTC", { from: "2025-01-01", to: "2025-12-31" }).previous).toEqual({ from: "2024-01-01", to: "2024-12-31" });
-    // Other custom dates keep as many days just before.
-    expect(resolvePreset("custom", now, "UTC", { from: "2024-01-02", to: "2024-12-31" }).previous).toEqual({ from: "2023-01-02", to: "2024-01-01" });
+    // A leap year whole, 366 days, is 12 months too.
+    expect(resolvePreset("custom", now, "UTC", { from: "2024-01-01", to: "2024-12-31" })).toEqual({ range: { from: "2024-01-01", to: "2024-12-31" } });
   });
 
-  it("has the last 6 and 12 months up to today, compared with as many days before", () => {
+  it("has the last 6 and 12 months up to today", () => {
     // 24 Oct 2026, 2 pm in Melbourne.
     const now = new Date("2026-10-24T03:00:00Z");
     const tz = "Australia/Melbourne";
-    expect(resolvePreset("6m", now, tz)).toEqual({ range: { from: "2026-04-25", to: "2026-10-24" }, until: "14:00:00", previous: { from: "2025-10-24", to: "2026-04-24", until: "14:00:00" } });
-    expect(resolvePreset("12m", now, tz)).toEqual({ range: { from: "2025-10-25", to: "2026-10-24" }, until: "14:00:00", previous: { from: "2024-10-25", to: "2025-10-24", until: "14:00:00" } });
+    expect(resolvePreset("6m", now, tz)).toEqual({ range: { from: "2026-04-25", to: "2026-10-24" }, until: "14:00:00" });
+    expect(resolvePreset("12m", now, tz)).toEqual({ range: { from: "2025-10-25", to: "2026-10-24" }, until: "14:00:00" });
     // Both stay within 12 months, on a leap day and at a month's end too.
     for (const at of ["2028-02-29T12:00:00Z", "2026-08-31T12:00:00Z", "2026-03-31T12:00:00Z"]) {
       for (const p of ["6m", "12m"] as const) {
@@ -88,11 +83,8 @@ describe("where a store's dates begin", () => {
     );
     // Only the first order known: a quiet first month before it is still the store's.
     expect(customRangeProblem({ from: "2022-03-14", to: "2022-12-31" }, "2026-10-24", storeRangeLimits("2022-03-15", false))).toBeNull();
-    // The period before may reach back before it: the answer then says no orders are that old.
-    expect(resolvePreset("custom", new Date("2026-10-24T03:00:00Z"), "UTC", { from: "2022-03-15", to: "2022-12-31" }, limits).previous).toEqual({
-      from: "2021-05-27",
-      to: "2022-03-14",
-    });
+    // From its first day on, the dates are taken as they are.
+    expect(resolvePreset("custom", new Date("2026-10-24T03:00:00Z"), "UTC", { from: "2022-03-15", to: "2022-12-31" }, limits)).toEqual({ range: { from: "2022-03-15", to: "2022-12-31" } });
   });
 
   it("offers each calendar year from the store's first to this one", () => {

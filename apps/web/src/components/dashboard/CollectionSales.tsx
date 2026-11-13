@@ -61,7 +61,7 @@ const LIVE_EVERY_MS = 15_000;
 export const collectionName = (c: { collectionId: string; title: string }) => c.title || `Collection ${c.collectionId}`;
 
 /**
- * The report for the dashboard's dates, asked as the dashboard was (collectionSalesParams).
+ * The report for the dashboard's dates (collectionSalesParams).
  * `shown` false (no product sales for this member
  * or store): nothing is asked.
  */

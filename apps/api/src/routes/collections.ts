@@ -14,8 +14,8 @@ const query = z.object(datesQuery);
  * figures grouped another way, so the same permission ("View product performance") and the same
  * access (orders and products) as GET .../analytics/products/top-selling.
  *
- * The products page asks as the dashboard was asked: the same preset, or the same custom dates
- * (apps/web/src/components/dashboard/collectionDates.ts). A preset's dates may start before the store's first day (the last 90 days of a store a
+ * The products page asks for the days the dashboard's answer is for
+ * (apps/web/src/components/dashboard/collectionDates.ts); a preset by its name is answered too. A preset's dates may start before the store's first day (the last 90 days of a store a
  * month old), which dates picked in the date picker may not: that limit isn't applied here, and
  * days before the store simply have no sales.
  */

@@ -785,8 +785,8 @@ export async function recomputeDays(store: Pick<Store, "id" | "workspaceId">, da
 /**
  * The query behind `recomputeDays`, as CTEs ending in `t`: one row per day of `days`, with
  * daily_store_metrics' columns. With `until` (a timestamp expression, UTC like the tables) only
- * the orders placed and the sales made before that moment count: a part-day, which the dashboard
- * compares a running day with (`Comparison.until` in @app/shared).
+ * the orders placed and the sales made before that moment count: a part-day, which a running day
+ * is checked against Shopify's own figures on (`ReportDates.until` in @app/shared).
  */
 export function dayTotals(store: Pick<Store, "id" | "workspaceId">, days: string[], until?: Prisma.Sql) {
   return Prisma.sql`

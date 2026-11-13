@@ -18,8 +18,6 @@ export type Grade = "attention" | "watch" | "good";
 export type Health = Grade | "info";
 
 export const GRADE = {
-  /** A number that should grow: a fall of this fraction or more needs attention; a smaller fall is one to watch. */
-  trendDrop: 0.1,
   /** Refunds as a share of sales: up to this is good. */
   refundRateGood: 0.05,
   /** Refunds as a share of sales: up to this (and over `refundRateGood`) is one to watch; over it needs attention. */
@@ -31,14 +29,6 @@ export const GRADE = {
   /** Restocking: an item with this many units or fewer left is urgent, whatever it sells. */
   coverUnits: 2,
 } as const;
-
-/**
- * A number that should grow, by its change on the period before (a fraction, e.g. -0.04).
- * Nothing to compare with is information only, and so is a period still running (only today
- * picked): it isn't over, so it isn't graded against a whole one.
- */
-export const gradeTrend = (change: number | null, running = false): Health =>
-  running || change === null || !Number.isFinite(change) ? "info" : change >= 0 ? "good" : change > -GRADE.trendDrop ? "watch" : "attention";
 
 /** Refunds as a share of sales (after discounts). */
 export const gradeRefundRate = (rate: number): Grade => (rate <= GRADE.refundRateGood ? "good" : rate <= GRADE.refundRateWatch ? "watch" : "attention");

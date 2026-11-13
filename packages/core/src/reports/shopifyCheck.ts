@@ -21,7 +21,7 @@ import { fetchUntil } from "../http.js";
 import { fetchShopifyReport, type ReportFetchDeps, type ReportValues, type ReportWindow } from "../shopifyReports.js";
 import { localMoment } from "./common.js";
 import { dataFreshness } from "./overview.js";
-import { comparisonRows, dailyRows } from "./sales.js";
+import { dailyRows, dailyRowsUntil } from "./sales.js";
 import { reconcileSales } from "./shopify.js";
 
 export const CHECK_PERIODS = ["today", "yesterday", "7d", "30d", "90d", "mtd", "lastmonth"] as const satisfies readonly DatePreset[];
@@ -137,7 +137,7 @@ export async function shopifyCheckReport(
     const { range, until = null } = resolvePreset(preset, now, store.timezone);
     const window: ReportWindow = { from: range.from, to: range.to, ...(until ? { until } : {}) };
     const { ourRows, tracked } = await reads(async (tx) => ({
-      ourRows: until ? await comparisonRows(tx, store.workspaceId, store.id, { ...range, until }, store.timezone) : await dailyRows(tx, store.workspaceId, store.id, range),
+      ourRows: until ? await dailyRowsUntil(tx, store.workspaceId, store.id, { ...range, until }, store.timezone) : await dailyRows(tx, store.workspaceId, store.id, range),
       tracked: opts.conversion === false ? null : await trackedVisits(tx, store, window),
     }));
     const ours = summarize(ourRows);

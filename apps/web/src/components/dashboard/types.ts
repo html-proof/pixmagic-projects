@@ -2,7 +2,6 @@
 import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportTotals, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
 import type { AdPlatformSource, AdsFromShopify } from "@app/shared/adsFromShopify";
 import type { HistoryAccess } from "@app/shared/capabilities";
-import type { DatePreset } from "@app/shared/dates";
 import type { CustomCategory, ExpenseTotals } from "@app/shared/expenses";
 import type { ProfitCost } from "@app/shared/profit";
 import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
@@ -491,7 +490,7 @@ export interface ImportedData {
   newestOrderDay?: string | null;
   /**
    * The first day every order was imported from (the start of Shopify's 60-day window, or
-   * 1970-01-01 with the whole history): comparisons and "not imported" days go by this, not by
+   * 1970-01-01 with the whole history): "not imported" days and months go by this, not by
    * the first order, which a quiet store has days later.
    */
   historyFrom?: string | null;
@@ -534,14 +533,7 @@ export interface Overview {
   store: OverviewStore;
   /** While the store is in error: why Shopify stopped the sync (see syncProblem in the API). */
   syncProblem?: "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "not_approved" | "other" | null;
-  /** The dates as they were asked for ("wtd", "custom"…): `range` is what they came to. */
-  preset?: DatePreset;
   range: { from: string; to: string };
-  /**
-   * The period just before the range (`Comparison` in @app/shared): `until` while the range is
-   * still running.
-   */
-  previous: { from: string; to: string; until?: string };
   /** The store's today (YYYY-MM-DD). */
   today: string;
   /**

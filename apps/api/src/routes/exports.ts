@@ -40,7 +40,7 @@ async function sectionTable(ws: string, storeId: string, access: MemberAccess, s
     const adsView = section === "ads" ? {} : { platform: q.platform, account: q.account, allCampaigns: section === "ads_campaigns" };
     const funnelView = section === "funnel" ? funnelViewOf(q, access) : undefined;
     const report = redactOverview(await storeOverview(tx, store, dates, new Date(), (m) => wanted.has(m) && seesModule(access, m), adsView, funnelView), access);
-    return { table: exportTable(section, report.modules, dates), range: dates.range, previous: dates.previous, shop: store.shopDomain.replace(/\.myshopify\.com$/, "") };
+    return { table: exportTable(section, report.modules, dates), range: dates.range, shop: store.shopDomain.replace(/\.myshopify\.com$/, "") };
   });
 }
 
@@ -82,8 +82,8 @@ export function exportRoutes(app: App, deps: Deps) {
     const a = await requireWorkspace(c, deps, ws, "dashboard:read");
     const q = querySchema.parse(c.req.query());
     const section = sectionOf(a.access, q);
-    const { table, range, previous } = await sectionTable(ws, storeId, a.access, section, q);
-    return c.json({ section, label: EXPORT_SECTIONS[section].label, range, previous, header: table.header, rows: table.rows });
+    const { table, range } = await sectionTable(ws, storeId, a.access, section, q);
+    return c.json({ section, label: EXPORT_SECTIONS[section].label, range, header: table.header, rows: table.rows });
   });
 
   /**

@@ -46,7 +46,7 @@ The products page has a "Sales by collection" panel (`d-collection-sales`) under
 - At most 500 collections are listed, best-selling first (then by title); the answer's `total` says how many sold, and the panel says when some are left out. Only collections with a sale in the dates are listed (one that sold only in the period before used to be listed with 0, while that period was read).
 - Clicking a collection narrows Top products to its products (`collectionId`), which also has a Collection list; CSV export follows `reports.export` with the same formula neutralisation.
 
-`GET /workspaces/:ws/stores/:storeId/analytics/collections/sales` takes the dashboard's date question (`preset`, `from`/`to`). The page asks as the dashboard was asked (the overview's `preset`: the same preset, or the same custom dates); the store's first day isn't enforced on them (a preset's dates may start before it), and days before it simply have no sales. It needs "View product performance" and orders and products access, like top-selling, and answers 404 for another workspace's store before reading the question.
+`GET /workspaces/:ws/stores/:storeId/analytics/collections/sales` takes the dashboard's date question (`preset`, `from`/`to`). The page asks for the days the dashboard's answer is for (`preset=custom` with its `from` and `to`); the store's first day isn't enforced on them (a preset's dates may start before it), and days before it simply have no sales. It needs "View product performance" and orders and products access, like top-selling, and answers 404 for another workspace's store before reading the question.
 
 How membership is kept:
 

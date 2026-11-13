@@ -22,8 +22,8 @@ import { limit, LIMITS } from "../rateLimit.js";
 
 /**
  * The dates asked about, as the dashboard and its downloads ask: `preset=7d`,
- * `preset=custom&from=…&to=…`. They are compared with the period just before them
- * (`resolvePreset` in @app/shared).
+ * `preset=custom&from=…&to=…` (`resolvePreset` in @app/shared). Nothing is compared with other
+ * dates: a link that still carries `compare`, `cfrom` or `cto` is answered as if it didn't.
  */
 export const datesQuery = {
   preset: z.enum(DATE_PRESETS).default("30d"),
@@ -231,13 +231,7 @@ export function dashboardRoutes(app: App, deps: Deps) {
       return {
         store: publicStore(store),
         syncProblem: report.syncProblem,
-        // The dates as they were asked for, so a panel that asks about them again (Sales by
-        // collection) gets the same days on both sides: "this week" is compared with the same days
-        // of the week before, which the same days picked by hand are not.
-        preset: q.preset,
         range: dates.range,
-        // What the range is compared with (the period just before).
-        previous: dates.previous,
         today: report.today,
         // When the numbers last matched Shopify, and any changes still waiting (dataFreshness in core).
         freshness: report.freshness,

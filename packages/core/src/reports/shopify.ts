@@ -10,7 +10,7 @@
 import type { Store, Tx } from "@app/db";
 import { addDays, summarize, type DailyMetricsRow, type DateRange, type ReportDates } from "@app/shared";
 import { keptReports, REPORT_METRICS, windowKey, type KeptReport, type ReportDataset, type ReportError, type ReportRequest, type ReportValues, type ReportWindow } from "../shopifyReports.js";
-import { comparisonRows } from "./sales.js";
+import { dailyRowsUntil } from "./sales.js";
 
 /** Minutes a running window's end moves by: its answer serves every poll until the next mark. */
 export const REPORT_STEP_MIN = 5;
@@ -223,7 +223,7 @@ export async function shopifyModules(
     let rows: CheckRow[] | null = null;
     if (now.values) {
       // Ours for exactly the same window: up to the same mark while it runs.
-      const ourRows = until ? await comparisonRows(tx, store.workspaceId, store.id, { from: w.from, to: w.to, until }, store.timezone) : ctx.rangeRows;
+      const ourRows = until ? await dailyRowsUntil(tx, store.workspaceId, store.id, { from: w.from, to: w.to, until }, store.timezone) : ctx.rangeRows;
       const behind = ctx.waiting > 0 || (!!ctx.dataAsOf && !!now.fetchedAt && Date.parse(ctx.dataAsOf) < now.fetchedAt.getTime() - 15 * 60_000);
       rows = reconcileSales(summarize(ourRows), now.values, { behind });
     }

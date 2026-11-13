@@ -110,62 +110,38 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   a year later. One day more is refused (`400 invalid_range`, "pick up to 12 months at a time"); the
   dates menu offers nothing longer, and the end
   date's calendar stops there. Older periods are not limited: 1 Jan – 31 Dec 2023 is a question like
-  any other, and the answer's `previous` is 2022. The downloads
+  any other. The downloads
   read the same rule; the ad platforms' own report endpoints keep their 366-day limit.
 - **Custom ranges** run from 2000-01-01 at the earliest, or from the store's first day once Shopify's
   creation date is known (`storeRangeLimits`: `Shop.createdAt`, `stores.shop_created_at`, read by the
   shop sync job, and daily by the dashboard's refresh until it is; or an earlier order's day, since an
   order imported from another platform can predate the store), and are reported only up to the
   store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today, or before
-  the store's first day, is refused (`400 invalid_range`). The period before may reach back before the
-  store's first day: it then holds no orders, and the answer's changes on it are `null`.
-- **Comparison period:** the answers' `previous` and `deltas` always compare with the **period just
-  before** the dates (`resolvePreset` in packages/shared/src/dates.ts). Since 2026-11-13 the pages
-  no longer show these changes (removed at the owner's request): the answers still carry them, and
-  the pages keep their other comparisons (each month beside the same month of earlier years in the
-  yearly chart, days against an average day, business
-  events in the Profit sheet, Meta against Google and campaign against campaign, the Google Ads
-  "Spending trend", and a funnel segment or product against the others); the Inventory and Staff
-  tiles show no change or earlier figure either. The period isn't chosen: the comparison menu beside the
-  dates (previous period, previous year, custom dates) was removed at the owner's request on
-  2026-11-13, and a link that still carries its `compare`, `cfrom` or `cto` is answered as if it
-  didn't. The period before is the same number of days
-  immediately before the selected range (after that clamp); this week so far against the same
-  weekdays of the week before (Monday to Wednesday against Monday to Wednesday, up to the same time
-  of day), never against the days just before it; last month against the whole month
-  before it, whatever its length; last year, or any calendar year picked (1 Jan – 31 Dec), against
-  the whole calendar year before it, leap or not.
+  the store's first day, is refused (`400 invalid_range`).
+- **No comparison with other dates:** an answer is about the dates asked for and nothing else. The
+  pages stopped showing changes on the period before on 2026-11-13 (removed at the owner's request),
+  and the server stopped working them out the same day: it no longer reads the period before, and
+  the answers carry no `previous`, `deltas` or other previous-period field (sales, refunds,
+  customers, costs, top products, collections, the funnel, the ad modules, Shopify's own figures,
+  abandoned checkouts, the profit statement, the Inventory and Staff figures). `resolvePreset`
+  (packages/shared/src/dates.ts) returns the dates and, while they still run, the time of day
+  (`until`, below). A link that still carries the old comparison menu's `compare`, `cfrom` or `cto`
+  is answered as if it didn't. What the pages still set side by side is within what they already
+  hold: each month beside the same month of the two years before in the yearly chart, days against
+  an average day, business events in the Profit sheet, Meta against Google and campaign against
+  campaign, the Google Ads "Spending trend", and a funnel segment or product against the others.
 
-  The answer's `previous` holds the dates (`from`, `to`, `until`) and `imported`; `preset` says how
-  the dates were asked for, so a panel asking about them again (Sales by collection) gets the same
-  days on both sides.
-  **Like for like, as Shopify's Analytics compares:** while the range is still
-  running (it ends on the store's today), the comparison stops at the same time of day on its last
-  day. Today until 4:44:12 pm is compared with yesterday until 4:44:12 pm, and the last 7 days with the 7 before up to the same
-  moment, never with whole days (that made every day look down until it was nearly over).
-  `resolvePreset` returns that time as `previous.until` (store-local "HH:MM:SS", by the clock, so a
-  daylight-saving change doesn't shift it). The comparison's last day is then added up from the orders
-  placed and the sales made before that moment, by the same query that fills daily_store_metrics
-  (`dayTotals` in packages/core/src/persist.ts), and its store visits are the ones that started before
-  it. Ad platforms (Meta, Google, AdSense) report whole days, so their comparisons are whole days
-  only: while the range reaches a day still running (the store's today, or an ad account's today in
-  its own time zone), both the range and the comparison lose that many days at their end
-  (`compared`); Today on its own isn't compared (see "Ads" below). Their rows are
-  read for the range and for the comparison separately.
+  **A range still running (`until`):** while the dates end on the store's today, `resolvePreset`
+  also returns the store-local time it is ("HH:MM:SS", by the clock, so a daylight-saving change
+  doesn't shift it). Shopify's own report figures for the dates, and ours checked against them,
+  are counted up to that moment (a 5-minute mark, see "Shopify's own figures"): our last day is then
+  added up from the orders placed and the sales made before it, by the same query that fills
+  daily_store_metrics (`dayTotals` in packages/core/src/persist.ts). Every other figure of a running
+  range is simply what the dates hold so far.
 
-  **No earlier data:** when the comparison starts before the store's imported history (`historyFrom`,
-  below), `previous.imported` is false: the sales figures of the comparison come back `null`, every
-  sales, refund and returning-customer change is `null`. A period mostly missing would otherwise
-  read as a fake drop (or a fake rise, or 0%). It is the same rule as the month-by-month view's
-  "not imported" months.
-
-  Store visits and ad figures have histories of their own, and the same rule applies to each on its
-  own: the funnel and the ads and AdSense modules return their own `historyFrom` and
-  `previous.imported`, and when the comparison starts before their `historyFrom` their comparison
-  figures come back `null` and every change is `null`. So the sales can compare while the visits or
-  ads don't, and the other way round. A
-  comparison lying entirely before a history gives no change anyway (the change on 0 is `null`); one
-  that straddles its start would show a rise that never happened.
+  **Where each kind of figure starts:** sales, store visits and ad figures each have a history of
+  their own (`historyFrom`), and a day of the dates before it has no figure, which isn't the same
+  as none.
 
   - **Visits** count from when the web pixel was put in place (`stores.pixel_installed_at`: the
     install_pixel job that worked first, or the first events accepted when no install was recorded;
@@ -177,9 +153,8 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
     in full (`ad_connections.history_from`, in the account's own days, kept at the earliest): the 90
     days before it was connected (`ADS_BACKFILL_DAYS`). With several accounts added up, `historyFrom`
     is the latest start among the accounts counted (`commonCoverage`): before it, one of them is in
-    the dates picked and missing from the dates compared with. An account not synced yet has no
-    figures at all, so nothing it is part of is given (its `historyFrom` is null and `notCompared`
-    says why, see "Ads"); hidden accounts and accounts in another currency aren't counted, so their starts
+    the dates picked and another isn't. An account not synced yet has no
+    figures at all, so nothing it is part of is given (its `historyFrom` is null, see "Ads"); hidden accounts and accounts in another currency aren't counted, so their starts
     don't matter.
 
   **Where the imported history starts (`data.historyFrom`):** the first store-local day whose orders
@@ -260,7 +235,6 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 | Funnel step | visits whose furthest step is this one or later | Steps: visited → viewed a product → added to cart → started checkout → purchased |
 | Left at a step | visits whose furthest step is exactly this one | Plus the site section they were last on |
 | Section exit rate | visits that left the site from this section without buying ÷ visits that saw this section | |
-| Δ vs previous | (current − previous) ÷ \|previous\| | The answers' `deltas`, on the period just before, which the pages don't show (Conventions); `null` when previous is 0 or not imported; like for like while the range runs |
 
 ## Total sales breakdown and Custom sales
 
@@ -724,7 +698,7 @@ and day in `adsense_daily`; never in `ad_campaign_daily`.
 - **Earnings are money in, ad spend is money out:** the two modules are separate and never summed.
   Estimated earnings are what AdSense expects to pay, never presented as money paid out.
 - **Freshness:** as for ads (last 3 days hourly, last 30 days daily, 90 days on first connect).
-- **No earlier data:** as for ads, from where every counted AdSense account's figures start.
+- **Where the figures start:** as for ads, where every counted AdSense account's figures do.
 - **By country, by device type:** asked of AdSense for the dates picked (GET `.../ads/adsense/report`,
   `level=country|platform`), limited to the connection's chosen sites like every other AdSense figure
   here (every site when none are chosen; the answer's `sites` says which), shown to members who may see

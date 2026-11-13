@@ -633,10 +633,10 @@ describe("date ranges", () => {
     const today = localDay(new Date(), TZ);
     const res = await overview(a.headers, ws, store.id, `preset=custom&from=${addDays(today, -2)}&to=${addDays(today, 20)}`);
     expect(res.statusCode).toBe(200);
-    const { range, previous, modules } = res.json();
+    const { range, modules } = res.json();
     expect(range).toEqual({ from: addDays(today, -2), to: today });
-    // Today is still running: the period before stops at this time of day on its last day.
-    expect(previous).toEqual({ from: addDays(today, -5), to: addDays(today, -3), until: expect.stringMatching(/^\d{2}:\d{2}:\d{2}$/) });
+    // The answer is about the dates alone: it names no period before them.
+    expect(res.json()).not.toHaveProperty("previous");
     expect(modules.sales_overview.series.map((x: { day: string }) => x.day)).toEqual([addDays(today, -2), addDays(today, -1), today]);
     // The sales are the dates' own: no figures, changes or days of the period before.
     for (const k of ["previous", "deltas", "previousSeries"]) expect(modules.sales_overview).not.toHaveProperty(k);
@@ -673,7 +673,7 @@ describe("date ranges", () => {
       withTenant(ws, (tx) => storeOverview(tx, store, resolvePreset(preset, now, TZ), now)) as unknown as Promise<{
         modules: { sales_overview: { current: Record<string, number> }; refunds: object; customers: object; funnel: { visits: number } };
       }>;
-    expect(resolvePreset("today", now, TZ).previous).toEqual({ from: "2026-03-07", to: "2026-03-07", until: "12:00:00" });
+    expect(resolvePreset("today", now, TZ)).toEqual({ range: { from: "2026-03-08", to: "2026-03-08" }, until: "12:00:00" });
     const { modules: m } = await report("today");
     expect(m.sales_overview.current).toMatchObject({ netSales: 50, orders: 1 });
     // Saturday's orders and refunds are Saturday's: none of them is read into Sunday's answer.
@@ -743,11 +743,9 @@ describe("what the dates are compared with", () => {
     const res = await overview(a.headers, ws, store.id, `preset=custom&from=${from}&to=${to}`);
     expect(res.statusCode).toBe(200);
     const before = res.json();
-    // How the dates were asked for, for a panel that asks about them again.
-    expect(before.preset).toBe("custom");
     expect(before.range).toEqual({ from, to });
-    // Finished dates: whole days, so no time of day. The period just before holds P1.
-    expect(before.previous).toEqual({ from: d(-13), to: d(-11) });
+    // The dates alone: the answer names no period before them, and doesn't say how they were asked for.
+    for (const k of ["previous", "preset"]) expect(before).not.toHaveProperty(k);
     expect(before.modules.sales_overview.current).toMatchObject({ netSales: 150, orders: 2 });
     // P1's $999 is in no figure of the sales: they are the dates' own.
     for (const k of ["previous", "deltas", "previousSeries"]) expect(before.modules.sales_overview).not.toHaveProperty(k);
@@ -760,13 +758,14 @@ describe("what the dates are compared with", () => {
     }
   });
 
-  it("answers a link that still asks for a comparison of its own with the period just before, on the dashboard and its downloads", async () => {
+  it("answers a link that still asks for a comparison as if it didn't, on the dashboard and its downloads", async () => {
     const { a, ws, store } = await owner();
     // What the comparison menu wrote into the address bar while there was one: bookmarks still carry it.
     for (const qs of ["preset=7d&compare=year", `preset=7d&compare=custom&cfrom=${d(-30)}&cto=${d(-24)}`, "preset=7d&compare=custom&cfrom=2026-03-09&cto=2026-03-01", "preset=7d&compare=lastweek"]) {
       const res = await overview(a.headers, ws, store.id, qs);
       expect(res.statusCode, qs).toBe(200);
-      expect(res.json().previous, qs).toEqual({ from: d(-13), to: d(-7), until: expect.stringMatching(/^\d{2}:\d{2}:\d{2}$/) });
+      expect(res.json().range, qs).toEqual({ from: d(-6), to: today });
+      expect(res.json(), qs).not.toHaveProperty("previous");
     }
     const download = (qs: string) => ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${store.id}/export?section=sales&${qs}`, headers: a.headers });
     expect((await download("preset=7d&compare=year")).statusCode).toBe(200);
@@ -814,15 +813,13 @@ describe("what the dates are compared with", () => {
 
     // The 15 days before these, 33 to 19 days ago, are mostly before the first imported order.
     const qs = `preset=custom&from=${d(-18)}&to=${d(-4)}`;
-    const { previous, modules: m } = (await overview(a.headers, ws, store.id, qs)).json();
-    expect(previous).toEqual({ from: d(-33), to: d(-19) });
+    const { modules: m } = (await overview(a.headers, ws, store.id, qs)).json();
     expect(m.sales_overview.current).toMatchObject({ netSales: 40, orders: 1 });
     for (const k of ["previous", "deltas", "previousSeries"]) expect(m.sales_overview).not.toHaveProperty(k);
     expect(Object.keys(m.refunds)).toEqual(["current"]);
     expect(Object.keys(m.customers)).toEqual(["current"]);
     // Dates whose period before holds the first imported order: the same, the dates' own figures.
     const ok = (await overview(a.headers, ws, store.id, `preset=custom&from=${d(-12)}&to=${d(-5)}`)).json();
-    expect(ok.previous).toEqual({ from: d(-20), to: d(-13) });
     expect(ok.modules.sales_overview.current).toMatchObject({ netSales: 40, orders: 1 });
     expect(ok.modules.sales_overview).not.toHaveProperty("deltas");
   });
@@ -840,7 +837,7 @@ describe("what the dates are compared with", () => {
     const compared = async (cfrom: string, cto: string) => {
       const days = daysBetweenInclusive(cfrom, cto);
       const body = (await overview(a.headers, ws, store.id, `preset=custom&from=${addDays(cto, 1)}&to=${addDays(cto, days)}`)).json();
-      expect(body.previous).toMatchObject({ from: cfrom, to: cto });
+      expect(body.range).toEqual({ from: addDays(cto, 1), to: addDays(cto, days) });
       return body;
     };
 
@@ -894,7 +891,6 @@ describe("what the dates are compared with", () => {
     // 9 days against 21 to 13 days ago, reaching back to the pixel's first, partly counted day: the
     // visit on it would read as fewer visits before.
     const early = await compared(d(-12));
-    expect(early.previous).toEqual({ from: d(-21), to: d(-13) });
     expect(early.modules.funnel).toMatchObject({ visits: 2, conversionRate: 0.5, historyFrom: d(-19) });
     for (const k of ["previous", "deltas"]) expect(early.modules.funnel).not.toHaveProperty(k);
     expect(early.modules.ads).toMatchObject({ historyFrom: d(-12), current: { spend: 55 } });
@@ -906,13 +902,11 @@ describe("what the dates are compared with", () => {
 
     // 7 days, from 10 days ago.
     const mid = await compared(d(-10));
-    expect(mid.previous).toMatchObject({ from: d(-17), to: d(-11) });
     expect(mid.modules.funnel).toMatchObject({ visits: 2, conversionRate: 0.5 });
     expect(mid.modules.ads).toMatchObject({ current: { spend: 55 } });
 
     // 4 days, from 7 days ago: the $5 and $2 of the days just before aren't in them.
     const late = await compared(d(-7));
-    expect(late.previous).toMatchObject({ from: d(-11), to: d(-8) });
     expect(late.modules.ads).toMatchObject({ current: { spend: 50 } });
     expect(late.modules.adsense).toMatchObject({ current: { earnings: 4 } });
   });
@@ -1799,7 +1793,7 @@ describe("historical dates, up to 12 months at a time", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.range).toEqual({ from: "2023-01-01", to: "2023-12-31" });
-    expect(body.previous).toEqual({ from: "2022-01-01", to: "2022-12-31" });
+    expect(body).not.toHaveProperty("previous");
     expect(body.modules.sales_overview.current).toMatchObject({ netSales: 80, orders: 1 });
     expect(body.modules.sales_overview).not.toHaveProperty("previous");
     expect(body.modules.sales_overview.series).toHaveLength(365);
@@ -1831,8 +1825,7 @@ describe("historical dates, up to 12 months at a time", () => {
     expect(before.json().message).toContain("first day");
     const from = await overview(a.headers, ws, store.id, "preset=custom&from=2022-03-13&to=2022-12-31");
     expect(from.statusCode).toBe(200);
-    // The period before reaches back before the store: not refused.
-    expect(from.json().previous).toMatchObject({ from: "2021-05-23", to: "2022-03-12" });
+    expect(from.json().range).toEqual({ from: "2022-03-13", to: "2022-12-31" });
     expect(from.json().data).toMatchObject({ createdDay: "2022-03-13", startDay: "2022-03-13" });
     const list = await ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores`, headers: a.headers });
     expect(list.json().stores[0]).toMatchObject({ startDay: "2022-03-13", shopCreatedAt: "2022-03-14T03:00:00.000Z" });

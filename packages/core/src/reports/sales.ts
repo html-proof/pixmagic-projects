@@ -1,5 +1,5 @@
 import { toNumber, type Tx } from "@app/db";
-import { addDays, eachDay, type Comparison, type DailyMetricsRow, type DateRange } from "@app/shared";
+import { addDays, eachDay, type DailyMetricsRow, type DateRange } from "@app/shared";
 import { dayTotals } from "../persist.js";
 import { localMoment, r2, type Scope } from "./common.js";
 
@@ -35,7 +35,7 @@ export async function dailyRows(tx: Tx, workspaceId: string, storeId: string, r:
  * out from the orders and sales placed before that moment, by the same query that fills
  * daily_store_metrics, whose rows only ever hold whole days.
  */
-export async function comparisonRows(tx: Tx, workspaceId: string, storeId: string, c: Comparison, timeZone: string): Promise<DailyMetricsRow[]> {
+export async function dailyRowsUntil(tx: Tx, workspaceId: string, storeId: string, c: DateRange & { until?: string }, timeZone: string): Promise<DailyMetricsRow[]> {
   if (!c.until) return dailyRows(tx, workspaceId, storeId, c);
   const whole = c.from < c.to ? await dailyRows(tx, workspaceId, storeId, { from: c.from, to: addDays(c.to, -1) }) : [];
   type Column =
