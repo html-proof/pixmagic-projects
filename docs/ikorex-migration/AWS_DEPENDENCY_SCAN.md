@@ -21,7 +21,23 @@ What counts: AWS's libraries (`aws4fetch`, `@aws-crypto/*`, `aws-cdk-lib`), its 
 settings (`AWS_*`, `COGNITO_*`, `SES_REGION`, `SES_CONFIGURATION_SET`, `*_SECRET_ARN`). A line that is
 only a comment doesn't count. Markdown and `docs/` don't count: they describe AWS, they run nothing.
 
-## Result, 2026-11-13 (`main` at 2cc436eb with Customer Messaging (SMS) and the email module removed)
+## Result after AWS's deploy code was removed (2026-11-13, evening)
+
+**43 files, 196 lines.** Gone with AWS's side ([LEAVING_AWS.md](LEAVING_AWS.md)): the first two
+groups of the table below, that is `infra/cdk`, `.github/workflows/aws-deploy.yml`, the Lambda entry
+point and the adapters only it loaded, with their tests and the Lambda build. No file uses the AWS
+SDK any more. What is left:
+
+| Group | Files | Lines | Goes |
+| --- | --- | --- | --- |
+| The user pool's template (`infra/aws/cognito.yaml`, the Auth stack) | 1 | 9 | With Cognito, after `AUTH_MODE=local` |
+| The server package's AWS dependency, example settings and tests | 6 | 22 | With the next group |
+| AWS code the server loads, used only when a switch says so | 7 | 23 | Each when its switch is on the AWS-free side, then deleted |
+| Cognito in the app, its settings and its test stand-in | 22 | 108 | After `AUTH_MODE=local` |
+| Lambda's version number in `/api/version` | 2 | 3 | With the last of the above |
+| The migration's own tools (`infra/ikorex/scripts`) | 5 | 31 | With the last of the above: RDS is gone, so the copies have nothing to copy |
+
+## Result, 2026-11-13, before that (`main` at 2cc436eb with Customer Messaging (SMS) and the email module removed)
 
 **79 files, 502 lines.** Documentation that names AWS's settings or endpoints, not counted: 34 files.
 No file of the app uses the AWS SDK: the AWS code signs its own requests with `aws4fetch`, and every
@@ -74,10 +90,11 @@ decommissioning"), one pull request each, so each can be undone alone:
 1. **Sign-in**, once `AUTH_MODE=local`: delete `apps/api/src/cognito.ts`, `migratingAuth.ts`, the
    `COGNITO_*` settings (`packages/core/src/env.ts`, `configReport.ts`), `infra/cognito-local` and the
    e2e suite's Cognito stand-in, and `aws4fetch` from `apps/api`; `AUTH_MODE` keeps only `local`.
-2. **The rest, with the resources**: `infra/cdk`, `infra/aws`, `.github/workflows/aws-deploy.yml`
-   and the deploy role's trust, the Lambda entry point and the adapters only it loads, `awsClient.ts`,
-   `sesMailer.ts`, `aws4fetch` and `@aws-crypto/client-node` from `apps/aws`, the `AWS_*` keys in
-   `infra/ikorex/env/app.env.example`, Lambda's version in `/api/version`, and the migration's own
-   tools once the final dump of RDS is in R2.
+2. **The rest, with the resources.** Done on 2026-11-13: `infra/cdk`,
+   `.github/workflows/aws-deploy.yml`, the Lambda entry point and the adapters only it loaded,
+   `@aws-crypto/client-node`. Still to go, with step 1 or after it: `infra/aws`, `awsClient.ts`,
+   `sesMailer.ts` (SES has no sending identity left) and `aws4fetch` from `apps/aws`, the `AWS_*`
+   keys in `infra/ikorex/env/app.env.example`, Lambda's version in `/api/version`, and the
+   migration's own tools.
 3. **Last**: `pnpm lint` runs `--none-left` instead of `--check`. What still mentions AWS is history
    in `docs/`.
