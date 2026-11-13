@@ -122,8 +122,8 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 - **Comparison period:** the answers' `previous` and `deltas` always compare with the **period just
   before** the dates (`resolvePreset` in packages/shared/src/dates.ts). Since 2026-11-13 the pages
   no longer show these changes (removed at the owner's request): the answers still carry them, and
-  the pages keep their other comparisons (month against month and year against year in the yearly
-  charts, days against an average day, this month so far against the same days last month, business
+  the pages keep their other comparisons (each month beside the same month of earlier years in the
+  yearly chart, days against an average day, business
   events in the Profit sheet, Meta against Google and campaign against campaign, the Google Ads
   "Spending trend", a funnel segment or product against the others, and the Inventory and Staff
   pages' own changes). The period isn't chosen: the comparison menu beside the
@@ -307,8 +307,8 @@ its own, by name (default name "Custom business revenue").
   range, each day or each month of the year) nor the calculation.
 - **Comparisons**: the answer carries the lines for the period before too (`previous`; `null` when
   it isn't imported, as every sales figure), and the pages show no change on it. Each month of the
-  year carries its lines and those of the dates it is compared with (`comparedLines`), so a month's
-  Custom sales has its own change on the month before.
+  year carries its lines and those of the dates it is compared with (`comparedLines`), so the answer
+  can give a month's Custom sales its own change on the month before; the pages show none.
 
 ## Sales breakdown (Sales section)
 
@@ -324,7 +324,7 @@ Reference implementation: `packages/shared/src/sales.ts`.
 **Month by month** (this calendar year in the store's time zone, whatever dates are picked):
 
 - Net sales, orders and average order value per month, January to the current month.
-- **Change**: on the month before (January on December). The current month is compared with the same days of the month before (1–9 Oct with 1–9 Sep), never with the whole month.
+- **Change** (in the answer only; the pages show no change on a month since 2026-11-13, removed at the owner's request): on the month before (January on December). The current month is compared with the same days of the month before (1–9 Oct with 1–9 Sep), never with the whole month.
 - **Average month**: over finished months that were fully imported.
 
 **Custom sales.** While the store shows its Custom sales on the dashboard, both cards measure it
@@ -531,8 +531,7 @@ cards above keep the running total in a strip of its own.
   same month of the two years before, **whole** (`pastYearBreakdown`: August last year is all of
   August, while this August is so far), so a year's columns read as the month to beat. Total sales
   by default, or Custom sales or Net sales ("Comparison shows"; Net sales only without
-  `finance.breakdown`). The percentage over this year's columns is the change on the month before,
-  as Month by month's (the current month on the same days of the month before). A year with nothing
+  `finance.breakdown`). No percentage is drawn over the columns. A year with nothing
   imported isn't drawn; a month not imported has no column, a partly imported one is lighter.
   Team & Access: the whole panel needs `finance.reports`, as Month by month does; the earlier
   years' lines and refunds are redacted as this year's months are (`redactOverview`).

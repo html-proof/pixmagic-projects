@@ -42,7 +42,7 @@ const TERMS: Record<Topic, Terms> = {
     ["Items sold", "Items sold less items returned. Two mugs in one order count as two."],
     ["Shipping and taxes", "Collected on top of your prices and passed on or spent on postage: part of total sales, not of net sales."],
     ["Day-by-day bars", "One bar per day. Darker bars are your stronger days: about 1.5 and 2 times your average day. The orange line underneath adds the days up as you go."],
-    ["Month-by-month bars", "One bar per month this year. The change above each compares it with the month before; this month is compared with the same days of last month."],
+    ["Month-by-month bars", "One bar per month this year."],
     ["Not imported", "Shopify shares only the last 60 days of orders with most apps, so earlier days are marked instead of shown as $0."],
     ["Checked against Shopify", "The same dates in Shopify's own sales report, next to ours, figure by figure. They should agree to the cent. “Catching up” means changes from Shopify are still being counted here, or Shopify's report hasn't included the newest orders yet."],
     ["Gross profit (Shopify)", "Shopify's figure: net sales less the cost of the goods sold, from the cost per item recorded with each sale. Sales with no cost recorded in Shopify count as if they cost nothing, so the card says how much that is. It isn't net profit: fees, postage, apps, staff and ads aren't taken off."],

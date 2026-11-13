@@ -1,6 +1,5 @@
 "use client";
 import type { ReactNode } from "react";
-import { fmtPct } from "@/lib/api";
 import { Icon } from "./Icons";
 
 // ---------------------------------------------------------------------------
@@ -11,13 +10,6 @@ import { Icon } from "./Icons";
 
 /** A figure in a sentence, in bold. */
 export const B = ({ children }: { children: ReactNode }) => <strong className="font-semibold">{children}</strong>;
-
-/** A change as an arrow and a percentage, colored by whether it's good news ("—" with nothing to compare with). */
-export function Change({ value, invert = false }: { value: number | null | undefined; invert?: boolean }) {
-  if (value === null || value === undefined) return <span className="text-muted">—</span>;
-  const good = invert ? value < 0 : value > 0;
-  return <span className={value === 0 ? "text-muted" : good ? "text-good" : "text-danger"}>{value > 0 ? "▲" : value < 0 ? "▼" : "■"} {fmtPct(Math.abs(value))}</span>;
-}
 
 /** The plain-language answer first, before any table. */
 export function InShort({ children }: { children: ReactNode }) {

@@ -1,6 +1,5 @@
 import { StateIllustration } from "@/components/StateIllustration";
 import type { ReactNode } from "react";
-import { fmtPct } from "@/lib/api";
 
 /** A titled dashboard card. `aside` sits top-right (a headline number or a link). */
 export function Panel({
@@ -72,19 +71,6 @@ export function Badge({ tone, children }: { tone: Tone; children: ReactNode }) {
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-border px-2 py-0.5 text-xs">
       <Dot tone={tone} />
       {children}
-    </span>
-  );
-}
-
-/** A month's change on the month before (`label` says which), coloured by whether it's good news (`invert` for costs). */
-export function Delta({ value, invert = false, label = "vs before" }: { value: number | null | undefined; invert?: boolean; label?: string }) {
-  if (value === null || value === undefined) return <span className="text-xs text-muted">no earlier data to compare</span>;
-  const good = invert ? value < 0 : value > 0;
-  const arrow = value > 0 ? "▲" : value < 0 ? "▼" : "■";
-  const tone = value === 0 ? "bg-border/60 text-muted" : good ? "bg-good/12 text-good" : "bg-danger/12 text-danger";
-  return (
-    <span className={`inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}>
-      {arrow} {fmtPct(Math.abs(value))} <span className="font-normal opacity-80">{label}</span>
     </span>
   );
 }
