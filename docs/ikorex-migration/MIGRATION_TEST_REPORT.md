@@ -34,10 +34,24 @@ The first real deploy found three faults, fixed in the same change:
 - With no backup bucket, `archive_mode = on` would have kept every write-ahead log file on the disk.
   `ARCHIVE_MODE=off` in `.env` until the bucket is set.
 
+**The database copy's rehearsal, the same day** (`node infra/ikorex/scripts/copy-db.mjs --rehearsal`,
+16:33 Melbourne time, production live and only read):
+
+| Check | Result |
+| --- | --- |
+| Snapshot on AWS's admin host (started for it, stopped after) | `app`: 130 tables, 121,443 rows, 8.3 MB; `evolution`: 37 tables, 61 rows, 0.1 MB; PostgreSQL 17.11 both sides |
+| Restore into `app_copy_test` and `evolution_copy_test` on the server | 4 s and 1 s |
+| Every table's row count, row-level security and policies against the snapshot | **All equal** (no difference in either database) |
+| Clean-up | The throwaway databases dropped; the dumps deleted from the bucket; the report (counts only) in `~/insights-backups` |
+
+The whole run takes about a minute, so the cutover's write freeze can be short. Its first attempt
+found a fourth fault: the free-disk check printed the server's 44 GB as `4.4389e+10` (Debian's awk)
+and refused; `copy-db.sh` now prints whole numbers. `copy-db.mjs` also takes `SHIP_SSH`, as `ship.sh`
+does, for Git Bash's ssh with its own agent.
+
 Not done, and why: nothing reaches the copy from outside (`cloudflared` is stopped: no tunnel token
 yet); no backups (no bucket yet: the `backup` container logs that and waits); no sign-in test (it
-needs the tunnel, and Cognito's calls need the IAM user's keys); no data (the copy from RDS is the
-next step). `apps/aws/test/ikorexCompose.test.ts` (9, 1 new) and `ikorexShip.test.ts` (17) passed
+needs the tunnel). `apps/aws/test/ikorexCompose.test.ts` (9, 1 new) and `ikorexShip.test.ts` (17) passed
 on the PC.
 
 ## 2026-11-08: the copy back for a rollback, on the owner's PC
