@@ -19,7 +19,7 @@ and the same day the owner had AWS's side deleted, so there is no way back to AW
 | Shopify | Webhooks arrive (23 recorded in the first hour after the switch), scheduled runs refresh tokens | Deliveries counted in the database; an unsigned request refused with 401. **Not checked: a new install** |
 | Jobs and schedules | In PostgreSQL, `SCHEDULES=on` | Worker healthy, the 07:45 UTC run clean |
 | Backups | **On the server's own disk and nowhere else** (the owner's choice: lost with the server). Nightly, the log continuously, 14 days | `pgbackrest check`, 0 archiver failures, a restore test passed ([the guide](PRODUCTION_DEPLOYMENT_GUIDE.md#backups)) |
-| Watching | The Uptime check workflow, every 10 minutes from GitHub. No metrics or log stack: the server is too small for one | By hand it passes and fails as it should. **No scheduled run had started when this was written** |
+| Watching | The Cloudflare Worker `bizinsights-uptime`, every 10 minutes, emailing the owner; the Uptime check workflow on GitHub as a second check. No metrics or log stack: the server is too small for one | GitHub never started the workflow's schedule on 2026-11-13, hence the Worker (PRODUCTION_DEPLOYMENT_GUIDE.md, "The uptime check") |
 | WhatsApp | The service runs. **No number is linked**: someone has to pair again in the app | Container healthy |
 | HTTPS, the edge | Cloudflare and its tunnel; no port of bizinsights is open on the server | HSTS present, `www` redirects |
 | AWS | Emptied on 2026-11-13 ([LEAVING_AWS.md](LEAVING_AWS.md), [AWS_ACCOUNT_AUDIT.md](AWS_ACCOUNT_AUDIT.md)) | Read-only reads of the account through the day |
