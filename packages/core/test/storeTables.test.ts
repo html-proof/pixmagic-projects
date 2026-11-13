@@ -111,8 +111,6 @@ const KEPT_ON_DISCONNECT = [
   // The bell leaves out a disconnected store's alerts. A move removes them (a privacy request's
   // follows the store), and so does shop/redact.
   "alert",
-  // The removed email module's (2026-11-13): it holds no customer data, and goes when its table is dropped.
-  "emailAutomationRule",
   // Customers' data requests still to be answered (Shopify gives 30 days): they follow the store
   // on a move, and shop/redact removes them.
   "dataRequest",
@@ -122,8 +120,6 @@ const KEPT_ON_DISCONNECT = [
 
 /** Left by a move too, in the workspace the store leaves. */
 const KEPT_ON_MOVE = [
-  // The removed email module's (2026-11-13): the old workspace's own, it holds no customer data.
-  "emailAutomationRule",
   // Shopify's deliveries to us, kept by Shopify's webhook id so a redelivery is known, and read by
   // store, not workspace: which topics a store sends stays true. shop/redact unlinks them from it.
   "webhookEvent",

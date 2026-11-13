@@ -69,7 +69,8 @@ describe("the system role", () => {
   it("shows a workspace only its own rows in every table, and none of anyone's without a scope", async () => {
     const { wsA, wsB } = await twoAccounts();
     const tables = await workspaceTables();
-    expect(tables.length).toBeGreaterThan(100);
+    // 84 on 2026-11-13, after the SMS and email module's 33 tables were dropped.
+    expect(tables.length).toBeGreaterThan(80);
     const leaks: string[] = [];
     await asSystem(async () => {
       for (const name of tables) {
