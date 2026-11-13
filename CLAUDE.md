@@ -14,32 +14,48 @@ The owner wants every finished change live there. The road:
 
 1. Commit the change on your branch, push it and open a pull request to `main`.
 2. Once CI is green, merge it.
-3. Ship `main` to the server from the owner's PC, on a clean checkout of the merged commit:
-   `infra/ikorex/scripts/ship.sh deployer@103.146.112.176`. The guide's "From a Windows PC" says how
-   the SSH key is unlocked; the owner types its passphrase, never a session. `deploy.sh` on the
-   server runs the migrations first, switches, checks health, and puts the previous release back if
-   a check fails. Deploy to iKorex (`.github/workflows/ikorex-deploy.yml`) will do this step by
-   itself once its deploy key is set up; until then nothing ships by itself.
+3. Deploy to iKorex (`.github/workflows/ikorex-deploy.yml`) ships it by itself: when CI's run on
+   `main` passes for the merged commit, it sends the release to the server with a deploy-only key
+   and runs `deploy.sh` there, about two minutes in all. `deploy.sh` runs the migrations first,
+   switches, checks health, and puts the previous release back if a check fails. It is on while
+   the repository variable `IKOREX_PRODUCTION` is `on` (the owner, 2026-11-13); a grey, skipped
+   run means it is off, and switching it is the owner's to ask for.
 4. The change is live only when `https://bizinsights.io/api/version` names the merged commit. Check
    it before saying so.
 
-- **A merge alone is live nowhere.** Deploy to AWS (`.github/workflows/aws-deploy.yml`) is switched
+- **A merge is live only once the server names it.** A merge of only Markdown or `docs/` starts
+  no CI run on `main`, so nothing deploys and `/api/version` keeps naming the last commit that
+  did. The workflow never touches the server's `env/` files: a change that needs a setting there
+  still needs that step by hand. And it never puts an older commit over a newer one, so going
+  back is a ship by hand.
+- **By hand, when GitHub can't**: `infra/ikorex/scripts/ship.sh deployer@103.146.112.176` from the
+  owner's PC, on a clean checkout of the commit. The guide's "From a Windows PC" says how the SSH
+  key is unlocked; the owner types its passphrase, never a session. `deploy.sh` holds a lock, so
+  a ship and a workflow run that meet go one after the other, but look first:
+  `gh run list --workflow ikorex-deploy.yml --limit 1`.
+- Deploy to AWS (`.github/workflows/aws-deploy.yml`) is switched
   off in GitHub (the owner, 2026-11-13) and has nothing left to deploy to. Leave it off.
 - **There is no way back to AWS.** The owner had AWS's side deleted the same day (from 07:14 UTC:
   the App stack with the functions, queues and CloudFront, then the rest), after a last dump of
-  its database was put on the server (`~/bizinsights-archive/rds-final-20261113/`). Two things in
-  that account are still in use by production, so nothing may delete them until the owner says
-  each is replaced: **sign-in** (the Cognito pool, its app client and domains, the IAM user
-  `bizinsights-ikorex`: `AUTH_MODE=migrating`, most people's passwords are still checked there)
-  and **the backups** (the bucket `bizinsights-backups-<account>`, the IAM user
-  `bizinsights-backups`, the parameter `/bizinsights/ikorex/backup-cipher-pass`; the owner put
-  the move to R2 off on 2026-11-13). Google sign-in no longer goes through Cognito: the server
-  uses the app's own Google client since that day.
+  its database was put on the server (`~/bizinsights-archive/rds-final-20261113/`). Production
+  uses nothing in that account any more. **Sign-in** is the app's own (`AUTH_MODE=local` on the
+  server since 2026-11-13, Google through the app's own Google client); what is left of Cognito
+  there is the owner's to have deleted. **The backups** left the account's bucket the same day
+  (below); the bucket, the IAM user `bizinsights-backups` and the parameter
+  `/bizinsights/ikorex/backup-cipher-pass` are no longer read or written by the server.
+- **The backups are on the server's own disk, and nowhere else** (the owner's choice,
+  2026-11-13, over Cloudflare R2 and over keeping the bucket, told that losing the server then
+  loses the database and every backup together). pgBackRest writes the nightly backups and the
+  continuous log, encrypted, to the Docker volume `pgbackups`; a restore test runs after
+  Sunday's full backup. So **never `docker compose down -v`, never prune volumes, never delete
+  `pgbackups` or `pgdata` on that server**: either one takes the data or its only backups.
+  Don't offer a copy off the server again unless the owner raises it; if they do, the guide's
+  "Backups" says how a second repository is added.
 - The server is shared and small (about 2.5 GB was free for bizinsights), with no monitoring
   stack: say so before a change that leans on one. What watches it: the Uptime check workflow
   (`.github/workflows/uptime.yml`, every 10 minutes from GitHub; a failed run emails the owner),
-  so a ship that keeps the site down for more than about 30 seconds turns a run red. Its database
-  is backed up to an S3 bucket (nightly, the log continuously; the guide says where the passphrase is).
+  so a ship that keeps the site down for more than about 30 seconds turns a run red. Nothing
+  watches the nightly backup: a failure shows only in `docker compose logs backup`.
 - Work left on a local branch or uncommitted in a worktree never reaches the server.
 - A change of only Markdown files or `docs/` has nothing to ship: its merge is done once it is on
   `main`. Its pull request still runs CI for about a minute (the first job finds nothing to test

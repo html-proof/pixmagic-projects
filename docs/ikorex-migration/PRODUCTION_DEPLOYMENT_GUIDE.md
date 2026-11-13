@@ -32,17 +32,47 @@ Accounts and keys (owner, in each provider's console):
 | Two checks: the nightly backup ping, and `https://bizinsights.io/api/readyz` every 5 minutes | healthchecks.io / UptimeRobot (free tiers) | `env/postgres.env` `BACKUP_PING_URL` |
 | An IAM user `bizinsights-ikorex`, until stage F, with only: Cognito's password check and admin actions on the pool (`AUTH_MODE=migrating`) | AWS IAM | `env/app.env` `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
 
-**Backups as they run since 2026-11-13** (the owner's choice that day, instead of R2 for now): an S3
-bucket in the AWS account, `bizinsights-backups-<account>` in ap-southeast-2 (private, encrypted,
-TLS only, versioned: what the server's key deletes or overwrites stays 14 more days), and an IAM
-user `bizinsights-backups` that can only list that bucket and read, write and delete its objects.
-`env/postgres.env` holds the endpoint `s3.ap-southeast-2.amazonaws.com`,
-`PGBACKREST_REPO1_S3_REGION=ap-southeast-2`, `PGBACKREST_REPO1_S3_URI_STYLE=host`, the key and the
-passphrase. The owner's copy of the passphrase is the encrypted parameter
-`/bizinsights/ikorex/backup-cipher-pass` in AWS Systems Manager Parameter Store: **copy it into a
-password manager before the AWS account closes**, and move the backups to R2 (a new stanza there)
-at stage F, since the bucket goes with the account. No backup ping is set (`BACKUP_PING_URL`): a
-night's failure shows only in `docker compose logs backup` until a check exists.
+### Backups
+
+**As they run since 2026-11-13, 08:18 UTC: on the server's own disk, and nowhere else.** The
+table's R2 row was never used. The owner chose this over Cloudflare R2 (which asks for a payment
+card) and over keeping the S3 bucket the first two hours ran on, told plainly what it means: **if
+the server's disk fails or the machine is deleted, the database and every backup go together, and
+there is no way back from that.** What the backups still do: bring back a table or a day after a
+bad change or a mistaken deletion, to any moment of the last 14 days.
+
+- pgBackRest's only repository is the folder `/var/lib/pgbackrest-local`, the Docker volume
+  `pgbackups`, mounted in `postgres` and `backup`. `env/postgres.env` says so with two lines over
+  `pgbackrest.conf`'s bucket values: `PGBACKREST_REPO1_TYPE=posix` and
+  `PGBACKREST_REPO1_PATH=/var/lib/pgbackrest-local` (the conf file's `repo1-s3-*` lines are
+  ignored for a folder; pgBackRest 2.60.0). The passphrase line stays: the folder is encrypted
+  with it. The backup container's log says `repositories: 1`.
+- **`docker compose down -v`, `docker volume prune` and `docker volume rm` are never run on this
+  server.** `pgdata` is the database and `pgbackups` its only backups. `deploy.sh` and `ship.sh`
+  never remove a volume.
+- The passphrase is in `env/postgres.env` and in the owner's password manager (the owner,
+  2026-11-13). A backup file copied off the server can't be read without it.
+- No backup ping is set (`BACKUP_PING_URL`): a night's failure shows only in
+  `docker compose logs backup`.
+- The settings as they were are beside the file, mode 600: `env/postgres.env.before-repo2` (the
+  bucket alone) and `env/postgres.env.before-local-only` (the bucket and the folder). The bucket's
+  key in them is dead once the IAM user `bizinsights-backups` is deleted.
+
+How it got there, in one sitting: the folder was first added as a second repository beside the
+bucket (`PGBACKREST_REPO2_*`, #401), given its own full backup and a passing restore test
+(`RESTORE_TEST_REPO=2 restore-test.sh`); only then did one edit take the bucket's lines and the
+`REPO2` lines out and make the folder `repo1`, with one restart of `postgres` and `backup` (about
+10 seconds without the database). After it: `pgbackrest check` passed, the archiver had no failure
+after a forced log switch, and `restore-test.sh` restored 121,631 rows against 121,638 live.
+
+**A copy off the server again**, if the owner asks for one: a bucket (R2 or any S3-compatible
+one) goes in as a second repository, the way the folder did. In `env/postgres.env`:
+`PGBACKREST_REPO2_TYPE=s3`, `PGBACKREST_REPO2_PATH=/bizinsights`, `PGBACKREST_REPO2_S3_ENDPOINT`,
+`_S3_BUCKET`, `_S3_KEY`, `_S3_KEY_SECRET`, `_S3_REGION` (`auto` for R2), `_S3_URI_STYLE=path`,
+`PGBACKREST_REPO2_CIPHER_TYPE=aes-256-cbc` and `PGBACKREST_REPO2_CIPHER_PASS` (the same
+passphrase), the two retention lines as for the folder; then `docker compose up -d postgres
+backup`. `backup-loop.sh` sees `PGBACKREST_REPO2_PATH`, logs `repositories: 1 2`, and takes the
+bucket's first full backup at once.
 
 **The uptime check as it runs since 2026-11-13:** the workflow Uptime check
 (`.github/workflows/uptime.yml`) runs `infra/uptime/check.mjs` every 10 minutes on GitHub's own
@@ -238,7 +268,8 @@ before it needs the file copied again into `C:\ProgramData\bizinsights-runner` (
 | Row counts | `docker compose --profile admin run --rm admin counts` |
 | What is configured (names only) | `docker compose --profile admin run --rm admin config` |
 | Who still signs in through Cognito (counts) | `docker compose --profile admin run --rm admin sign-in-move` ([LEAVING_AWS.md](LEAVING_AWS.md#sign-in-off-cognito)) |
-| Backups in the bucket | `docker compose exec backup pgbackrest --stanza=bizinsights info` |
+| The backups there are (the folder on the server's disk, [Backups](#backups)) | `docker compose exec backup pgbackrest --stanza=bizinsights info` |
+| Is the log reaching the backups | `docker compose exec backup pgbackrest --stanza=bizinsights check` |
 | Restore test now | `docker compose exec backup restore-test.sh` |
 | Turn schedules on (production, at the cutover) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=on/' .env && docker compose up -d worker` |
 | Turn schedules off (first step of a copy back to AWS, [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md#the-copy-back-de-after-writes-on-ikorex)) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=off/' .env && docker compose up -d worker` |
