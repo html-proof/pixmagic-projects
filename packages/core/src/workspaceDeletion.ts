@@ -1,7 +1,5 @@
 import { crossTenant, forTenant, systemDb, type Subscription } from "@app/db";
 import { releaseAdLoginsWhere } from "./adConnections.js";
-import { revokeConnection } from "./email/tokens.js";
-import { purgeEmailStoreData } from "./email/events.js";
 import { AppError } from "./errors.js";
 import { logger } from "./logger.js";
 import { purgeStoreData } from "./persist.js";
@@ -17,16 +15,13 @@ import { revokeZapierGrants } from "./zapier/oauth.js";
  *
  * In order, each step safe to run again, so a deletion that stopped half way is finished by running
  * it again (the owner asking again, or the runbook):
- *  1. Access ends: the workspace's API keys and email-event keys are revoked, its Zapier connections
- *     too, and its stores are disconnected (Shopify tokens deleted, so no import or sweep reads them
+ *  1. Access ends: the workspace's API keys are revoked, its Zapier connections too, and its
+ *     stores are disconnected (Shopify tokens deleted, so no import or sweep reads them
  *     any more).
  *  2. Each store is erased as shop/redact erases one (apps/worker webhooks.ts eraseStore): its
  *     WhatsApp instance at Evolution API, its synced data with its ad connections (their grants
- *     taken back at Google and Meta unless another connection still uses them), its customers'
- *     email records.
- *  3. Its email accounts' grants are taken back where the provider allows (Google), unless another
- *     workspace sends from the same mailbox. Then step 2 once more, for what work already under way
- *     wrote meanwhile.
+ *     taken back at Google and Meta unless another connection still uses them).
+ *  3. Step 2 once more, for what work already under way wrote meanwhile.
  *  4. One transaction removes what no foreign key takes with it, then the workspace: members,
  *     invitations, stores and every table that cascades from them go with it. A store connected to
  *     the workspace during the deletion stops it there (the next try erases that one too).
@@ -96,7 +91,6 @@ export interface WorkspaceDeletion {
   workspaceId: string;
   stores: string[];
   members: number;
-  emailAccounts: number;
 }
 
 /** Erase each store's data (step 2), as shop/redact does. */
@@ -105,39 +99,7 @@ async function eraseStores(storeIds: string[], deps: { fetchImpl?: FetchLike }) 
     // Its WhatsApp instance first, while its row says which.
     await dropStoreInstance(id, { fetchImpl: deps.fetchImpl ?? fetch });
     await purgeStoreData(id, deps.fetchImpl);
-    await purgeEmailStoreData(id);
   }
-}
-
-/**
- * Take back the Google grant of each email account (step 3), unless another workspace still sends
- * from the same mailbox: Google's grant is the person's to bizinsights' email client as a whole, so
- * taking it back would stop that workspace's account too. That one check reads across workspaces.
- */
-async function revokeEmailGrants(workspaceId: string, deps: { fetchImpl?: FetchLike }): Promise<number> {
-  const accounts = await systemDb.emailAccount.findMany({
-    where: { workspaceId, deletedAt: null },
-    select: { id: true, workspaceId: true, connectionMethod: true, emailAddress: true, provider: true, providerAccountId: true },
-  });
-  for (const account of accounts) {
-    const shared = await crossTenant("workspace_deleted", () =>
-      systemDb.emailAccount.count({
-        where: {
-          workspaceId: { not: workspaceId },
-          deletedAt: null,
-          connectionMethod: account.connectionMethod,
-          OR: [{ emailAddress: { equals: account.emailAddress, mode: "insensitive" } }, ...(account.providerAccountId ? [{ providerAccountId: account.providerAccountId }] : [])],
-        },
-      }),
-    );
-    if (shared) {
-      logger.info({ workspaceId, accountId: account.id }, "workspace deletion: an email account's grant kept, another workspace sends from the same mailbox");
-      continue;
-    }
-    // Never throws: the credentials go with the workspace either way.
-    await revokeConnection(account, { fetchImpl: deps.fetchImpl ?? fetch });
-  }
-  return accounts.length;
 }
 
 /**
@@ -161,7 +123,6 @@ export async function deleteWorkspace(
 
     // 1. Access ends before anything is erased.
     await systemDb.apiKey.updateMany({ where: { workspaceId, revokedAt: null }, data: { revokedAt: now } });
-    await systemDb.emailIngestKey.updateMany({ where: { workspaceId, revokedAt: null }, data: { revokedAt: now } });
     await revokeZapierGrants({ workspaceId }, "workspace_deleted");
     await systemDb.store.updateMany({ where: { workspaceId, status: { not: "uninstalled" } }, data: { status: "uninstalled", uninstalledAt: now } });
     await systemDb.store.updateMany({ where: { workspaceId }, data: { accessTokenEnc: null, refreshTokenEnc: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null, grantedScopes: [] } });
@@ -171,10 +132,7 @@ export async function deleteWorkspace(
     // A sign-in still waiting for its ad accounts under no store of the list (none should be).
     await releaseAdLoginsWhere({ workspaceId }, deps.fetchImpl).catch((err: unknown) => logger.warn({ err, workspaceId }, "workspace deletion: a waiting ad login wasn't let go"));
 
-    // 3. The email accounts' grants; their rows go below.
-    const emailAccounts = await revokeEmailGrants(workspaceId, deps);
-
-    // Again, for what an import page, an aggregate or the pixel already under way when the stores
+    // 3. Again, for what an import page, an aggregate or the pixel already under way when the stores
     // were disconnected wrote since (usually nothing: a few statements that find no rows).
     await eraseStores(storeIds, deps);
 
@@ -199,7 +157,7 @@ export async function deleteWorkspace(
       return (await tx.workspace.deleteMany({ where: { id: workspaceId } })).count;
     });
     if (!deleted) return null;
-    return { workspaceId, stores: summary.stores.map((s) => s.shopDomain), storeIds, members: summary.members, emailAccounts };
+    return { workspaceId, stores: summary.stores.map((s) => s.shopDomain), storeIds, members: summary.members };
   });
   if (!done) return null;
 
@@ -213,11 +171,11 @@ export async function deleteWorkspace(
         action: "workspace.deleted",
         targetType: "workspace",
         targetId: workspaceId,
-        metadata: { via: actor.via, shops: done.stores, storeIds: done.storeIds, members: done.members, emailAccounts: done.emailAccounts },
+        metadata: { via: actor.via, shops: done.stores, storeIds: done.storeIds, members: done.members },
         ip: actor.ip,
       },
     }),
   ).catch((err: unknown) => logger.error({ err, workspaceId }, "workspace deletion: the workspace is gone but its record wasn't written"));
   logger.info({ workspaceId, userId: actor.userId, via: actor.via, shops: done.stores, members: done.members }, "workspace deleted");
-  return { workspaceId, stores: done.stores, members: done.members, emailAccounts: done.emailAccounts };
+  return { workspaceId, stores: done.stores, members: done.members };
 }

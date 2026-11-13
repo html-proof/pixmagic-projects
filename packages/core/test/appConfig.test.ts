@@ -161,7 +161,7 @@ describe("Shopify app configuration", () => {
   }
 
   /**
-   * Customer Messaging offers a trigger only where Shopify sends its event (core sms/builder.ts):
+   * WhatsApp Automation offers a trigger only where Shopify sends its event (core whatsapp/automations.ts):
    * APP_WEBHOOK_TOPICS says which topics each app's toml subscribes to, since the Admin API can't
    * list a toml's subscriptions. A topic added to or dropped from a toml must be changed there too.
    */

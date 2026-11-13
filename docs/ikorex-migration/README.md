@@ -12,20 +12,25 @@ and the CCTV tunnel already on that server.
 SMS are replaced too; backups to R2, one server accepted, the cutover on a Sunday 20:00-21:00
 Melbourne time, no logs profile. Since then, each live on AWS through Deploy to AWS:
 
+**Update, 2026-11-13.** Customer Messaging (SMS) and the email module were removed from the app at
+the owner's request. Nothing of the move concerns SMS any more: no Twilio account, no `SMS_PROVIDER`
+switch, no SMS events queue and no bridge to read it. Where these pages still name them, they
+record what was true on their date.
+
 - **The database copy and the security audit** (#350, #352, release 169).
 - **The deploy workflow**, built and off (Deploy to iKorex, #351, release 171): it deploys `main` to
   staging, and from the cutover to production, once the deploy key is agreed with the administrator.
 - **The app's own sign-in** (#353, release 171), replacing Cognito. Switched to `migrating` in
   production after it: each user moves over at their next password sign-in. Google moves once the
   owner adds the app's redirect address to the Google client.
-- **Texts through Twilio** (#354, release 172), replacing AWS End User Messaging: built and off until
-  the owner's Twilio account is ready ([docs/sms.md](../sms.md), "Switching to Twilio").
+- **Texts through Twilio** (#354, release 172), replacing AWS End User Messaging: built, never
+  switched on, and removed with Customer Messaging (SMS) on 2026-11-13.
 - **The copy back for a rollback** (2026-11-08): `copy-db-back.mjs` copies the server's databases
   back into RDS and proves them whole ([ROLLBACK_PLAN.md](ROLLBACK_PLAN.md#the-copy-back-de-after-writes-on-ikorex)),
   tested against PostgreSQL; with it, `AWS_WHATSAPP=off`, which keeps AWS's WhatsApp service from
   starting again against the server's through the rollback period.
 
-**The server (2026-11-12): inspected twice, read-only, and no go on memory both times.** It has
+**The server (2026-11-13): inspected three times, read-only, and no go on memory each time.** It has
 3.9 GB in all with about 2.5 GB free beside what already runs there, and bizinsights needs 3.2 to
 4.6 GB ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md)). The administrator has been asked
 for at least 8 GB and 4 cores. Nothing has been installed or changed on the server, and AWS keeps
@@ -45,7 +50,7 @@ running everything.
 | 8. Cost comparison | [AWS_COST_COMPARISON.md](AWS_COST_COMPARISON.md) | Estimate; the real figure comes from the bill after cutover |
 | 9. Rollback plan | [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md) | Done |
 | 10. Production deployment guide | [PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE.md) | Setup, deploy, everyday commands, rollback, restore; not yet run on the server |
-| 2026-11-08 brief: what still uses AWS | [AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md) | 90 files, each with the step that removes it; `scripts/aws-dependency-scan.mjs` keeps new AWS code out (`pnpm lint`) and is stage F's check |
+| 2026-11-08 brief: what still uses AWS | [AWS_DEPENDENCY_SCAN.md](AWS_DEPENDENCY_SCAN.md) | 79 files (2026-11-13), each with the step that removes it; `scripts/aws-dependency-scan.mjs` keeps new AWS code out (`pnpm lint`) and is stage F's check |
 | 2026-11-08 brief: its suggested providers | [PROVIDER_CHOICES.md](PROVIDER_CHOICES.md) | Hetzner, Supabase, Upstash, BullMQ, Better Auth… against what the move uses, and when each would become right; costs at 1,000 to 1,000,000 users in [AWS_COST_COMPARISON.md](AWS_COST_COMPARISON.md#at-scale-1000-to-1000000-users) |
 
 The earlier cost audit of the same day, which this builds on, is in
@@ -56,14 +61,14 @@ database, the WhatsApp service, the WAF and the NAT instances go too, and those 
 ## In one paragraph
 
 The code was already built for this: no AWS SDK, and every AWS service behind an interface
-(`Queues`, `Coord`, `BlobStore`, `Mailer`, `SmsProvider`); stage A added the self-hosted
+(`Queues`, `Coord`, `BlobStore`, `Mailer`); stage A added the self-hosted
 implementations (`apps/aws/src/selfhost.ts` and its parts, `infra/ikorex/`). On iKorex, bizinsights is one Docker
 Compose project with no open port: Cloudflare (already in front) reaches it through a Cloudflare
 Tunnel; PostgreSQL 17 replaces RDS with continuous encrypted backups off the server, and also holds
 the job queue, the schedules and the coordinator (SQS, EventBridge and DynamoDB); Prometheus, Grafana, Loki
 and an external uptime check replace CloudWatch. Resend keeps sending email; the app's own sign-in
-replaces Cognito (each user's password is checked by Cognito once, since Cognito can't export them)
-and Twilio replaces AWS's SMS. The AWS bill falls from ~US$136 a month before GST to nothing once
+replaces Cognito (each user's password is checked by Cognito once, since Cognito can't export them).
+The AWS bill falls from ~US$136 a month before GST to nothing once
 the account closes, at the price of one server instead of a failover database, and of running it
 ourselves.
 
@@ -85,8 +90,7 @@ that didn't exist.
    then `copy-db-back.mjs --rehearsal`): both built and tested on the PC, neither yet run against
    RDS and the server.
 4. The owner: Google's redirect address for the app's own sign-in
-   ([docs/cognito-setup.md](../cognito-setup.md#9-leaving-cognito-the-apps-own-sign-in)), and the
-   Twilio account ([docs/sms.md](../sms.md), "Switching to Twilio"). Each then ships as a one-line
-   settings change.
+   ([docs/cognito-setup.md](../cognito-setup.md#9-leaving-cognito-the-apps-own-sign-in)). It then
+   ships as a one-line settings change.
 5. Stage F, after the rollback period: the checks in [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md) ("Before
    stage F starts"), then the deletions and the owner closing the account.

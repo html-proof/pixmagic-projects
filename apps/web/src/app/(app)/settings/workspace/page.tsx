@@ -14,8 +14,7 @@ import { actionError, api } from "@/lib/api";
 // screen 31): the business's name, with its time zone and currency as Shopify gives them (locked:
 // they come from the store), where its product costs and its own costs are kept, creating another
 // workspace, and deleting this one in the pale red card at the foot. Not drawn: a postal address
-// (bizinsights keeps none for the workspace; marketing email's footer address is in Email
-// integrations), and the SMS rules, which are Customer Messaging's own settings.
+// (bizinsights keeps none for the workspace).
 // ---------------------------------------------------------------------------
 
 /** A value that comes from Shopify, shown as the design's locked field. */

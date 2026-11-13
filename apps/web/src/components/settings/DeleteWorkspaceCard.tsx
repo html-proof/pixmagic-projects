@@ -133,7 +133,7 @@ export function DeleteWorkspaceCard() {
                     ? `The data of its ${plan.stores.length === 1 ? "store" : `${plan.stores.length} stores`} (${plan.stores.map((s) => s.name ?? s.shopDomain).join(", ")}): orders, products, customers, figures and reports.`
                     : "Its settings and records (it has no store)."}
                 </li>
-                <li>Everything set up here: costs, business events, alerts, automations, email, SMS and WhatsApp messaging, staff records.</li>
+                <li>Everything set up here: costs, business events, alerts, WhatsApp automations and messaging, staff records.</li>
                 <li>Its connections: Meta, Google, WhatsApp, email accounts, Zapier and API keys stop working.</li>
                 <li>{plan.members > 1 ? `Access for ${plan.members} people, you included.` : "Your access to it."}</li>
               </ul>

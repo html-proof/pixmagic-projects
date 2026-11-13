@@ -54,17 +54,9 @@ const GOOGLE_SECRET = [/^GOCSPX-[A-Za-z0-9_-]{20,}$/, "a Google OAuth client sec
 const SHOPIFY_SECRET = [/^(shpss_)?[0-9a-f]{32}$/i, "a Shopify app client secret (shpss_ and 32 letters and digits)"];
 // Meta shows an app's secret under App settings → Basic as 32 hexadecimal characters; its App ID is all digits.
 const META_SECRET = [/^[0-9a-f]{32}$/, "a Meta app secret (32 letters and digits, from App settings → Basic)"];
-// Entra shows a new client secret's Value once, next to its Secret ID: the ID (a GUID, like the
-// application's own id) is the wrong one to copy.
-const ENTRA_SECRET = [
-  /^(?![0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$)[A-Za-z0-9_~.-]{30,}$/i,
-  "a Microsoft Entra client secret's Value (not its Secret ID)",
-];
 const SHAPES = {
   GOOGLE_SIGNIN_CLIENT_SECRET: GOOGLE_SECRET,
   GOOGLE_ADS_CLIENT_SECRET: GOOGLE_SECRET,
-  EMAIL_GOOGLE_CLIENT_SECRET: GOOGLE_SECRET,
-  EMAIL_MICROSOFT_CLIENT_SECRET: ENTRA_SECRET,
   META_APP_SECRET: META_SECRET,
   WHATSAPP_APP_SECRET: META_SECRET,
   SHOPIFY_API_SECRET: SHOPIFY_SECRET,
@@ -76,9 +68,6 @@ const SHAPES = {
   ZAPIER_CLIENT_SECRET: [/^[A-Za-z0-9_-]{40,}$/, "a Zapier client secret (at least 40 letters, digits, - or _; docs/zapier.md says how to make one)"],
   // The one before it, still accepted while a rotation is under way (docs/RUNBOOK.md, "Rotate the Zapier client secret").
   ZAPIER_CLIENT_SECRET_PREVIOUS: [/^[A-Za-z0-9_-]{40,}$/, "a Zapier client secret (at least 40 letters, digits, - or _)"],
-  // Texts through Twilio (docs/sms.md, "Twilio"): the Console's Account info shows the Auth Token.
-  // The account SID (AC…) isn't a secret: it is TWILIO_ACCOUNT_SID in apps/aws/src/settings.ts.
-  TWILIO_AUTH_TOKEN: [/^[0-9a-f]{32}$/, "a Twilio Auth Token (32 letters and digits, Console → Account info)"],
 };
 
 /** A secret whose replaced value is kept under another name, still accepted until the rotation is finished. */
@@ -97,9 +86,6 @@ const COPY = [
   "GOOGLE_ADS_CLIENT_SECRET",
   "WHATSAPP_APP_SECRET",
   "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
-  "EMAIL_GOOGLE_CLIENT_SECRET",
-  "EMAIL_MICROSOFT_CLIENT_SECRET",
-  "EMAIL_CREDENTIAL_KEYS",
   "TURNSTILE_SECRET",
   "ZAPIER_CLIENT_SECRET",
   "ZAPIER_CLIENT_SECRET_PREVIOUS",

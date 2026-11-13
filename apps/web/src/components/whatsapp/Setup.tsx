@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AlertTriangle, Check, CheckCircle2, QrCode, ShieldCheck, Smartphone } from "lucide-react";
 import { PROVIDER_INFO, WA_SETUP_STEPS, WA_SETUP_STEP_INFO, type WaProvider, type WaSetupStep } from "@app/shared/whatsapp";
-import { Fact, FactList, SoftBox, StepCard, StepNumber } from "@/components/automations/MarketingKit";
+import { Fact, FactList, SoftBox, StepCard, StepNumber } from "./MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, useApi } from "@/lib/api";

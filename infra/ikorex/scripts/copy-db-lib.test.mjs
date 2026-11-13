@@ -63,9 +63,9 @@ test("the admin host's script reads the login from its secret there and never ca
   assert.throws(() => adminHostScript({ settings: {}, dbSecretArn: arn, copyScript: "echo\nCOPYDB\nrm -rf /" }), /end marker/);
 });
 
-test("drains every queue but the SMS events and the dead letters", () => {
+test("drains every queue but the dead letters", () => {
   const base = "https://sqs.ap-southeast-2.amazonaws.com/123456789012/insights-production-";
-  assert.deepEqual(queuesToDrain([`${base}shopify`, `${base}smsEvents`, `${base}dlq`, `${base}email`]), [`${base}shopify`, `${base}email`]);
+  assert.deepEqual(queuesToDrain([`${base}shopify`, `${base}dlq`, `${base}email`]), [`${base}shopify`, `${base}email`]);
 });
 
 test("reads docker compose ps in both of its JSON shapes", () => {

@@ -20,7 +20,7 @@ const TONE_COLOR: Record<StateTone | "info", string> = { good: "var(--good)", wa
  * How each status of the one scale every connection is told on (@app/shared/integrations) is
  * coloured: green when it works, amber while a step is left, red when someone must act, grey
  * otherwise. The cards whose own states are finer (the ad platforms, Shopify, WhatsApp, Zapier) keep
- * their own colours, which a demo's orange needs; SMS and email are told on this scale alone.
+ * their own colours, which a demo's orange needs.
  */
 export const STATUS_TONE: Record<IntegrationStatus, StateTone> = {
   connected: "good",

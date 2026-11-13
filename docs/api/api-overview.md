@@ -77,7 +77,7 @@ calls no provider: it composes what each module already says about itself.
 ```
 
 Modules, always all of them and in this order: `shopify`, `meta_ads`, `google_ads`, `adsense`,
-`whatsapp`, `sms`, `email`. Zapier isn't one: its Settings card reads `GET …/zapier`
+`whatsapp`. Zapier isn't one: its Settings card reads `GET …/zapier`
 ([../zapier.md](../zapier.md#settings--integrations)). The answer doesn't leave out what an App
 Store workspace doesn't offer: the UI does (`lib/features.ts`).
 
@@ -108,36 +108,21 @@ Where each provider's own states land:
   disconnected → disconnected, with the connection's reason as its `code`. A store can connect once
   bizinsights' Evolution API service is set up (a QR code; Meta's Cloud API needs its settings too);
   without it the module says `not_configured`.
-- **SMS** (the Automations hub's card): connected; needing attention → error when the check at AWS
-  failed (`connection_failed`), pending while the store's setup is left (the first step as `code`);
-  not connected → disconnected.
-- **Email** (each mailbox's status): connected; pending (not tested yet) → pending; testing →
-  syncing; degraded, failed → error; reauthorization_required; disabled, revoked → disconnected. The
-  module: the hub's card when connected, else the worst of the mailboxes still in use and of the
-  workspace's own problems: no verified sender yet or sending paused → pending, suspended by
-  bizinsights → error (so a suspension is an error whatever the mailboxes say, `code` `suspended`).
-  A mailbox's `lastAttemptAt` is its last check that worked or its last failure, whichever is later.
 
 `actions` are what this caller may press, by their permissions and the module's state; each is done
 on the provider's own routes. A shared dashboard link and an API key get none.
 
-Every caller is told the same status for every module. What a channel's own page shows (the SMS
-sender, the mailboxes, why one needs attention) stays with whoever may open that page: SMS needs
-**View campaigns** (`marketing.campaigns`), as the Automations hub does, and a workspace API key
-sees neither SMS nor email beyond its status, since the hub and the email settings refuse keys
-(`emailAccess.ts`). For them the module comes with `accounts: []` and `code: null`.
+Every caller is told the same status for every module.
 
 | Module | Who | Actions |
 | --- | --- | --- |
 | Shopify | owners and admins (`stores:manage`) | `refresh` (active or in error), `reconnect` (lost access), `disconnect` |
 | Ad platforms | Manage integrations | `connect` (set up on this server), `reconnect` (an account needs signing in again), `refresh` (a shown account with a working grant, the demo, or a waiting sign-in), `disconnect` |
 | WhatsApp | Manage integrations; `refresh` ("Check now") View campaigns | `connect` (set up on this server, nothing connected), `reconnect` (logged out or failed), `refresh`, `disconnect` |
-| SMS, email | the hub's own (`hubPermissions`: SMS owners and admins, email Manage integrations) | the hub card's, its test as `refresh` |
 
 `capabilities` are fixed per module: the store's data modules (`CAPABILITIES`), each ad platform's
 report figures, and the messaging channels' counts (WhatsApp sent, delivered, read, failed). Nothing
-secret is in the answer: no token, no password, no full phone number (a number is masked, and the
-SMS sender is never named by its AWS resource name).
+secret is in the answer: no token, no password, no full phone number (a number is masked).
 
 ### Meta, found through Shopify
 

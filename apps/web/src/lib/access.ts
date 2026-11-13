@@ -25,14 +25,9 @@ const MODULE_PAGES: Array<[prefix: string, part: AppModule]> = [
   ["/inventory", "inventory"],
   ["/whatsapp", "whatsapp"],
   ["/dashboard/whatsapp-automation", "whatsapp"],
-  ["/messaging", "sms"],
   ["/staff", "staff"],
   ["/settings/ads", "ads"],
-  ["/settings/email", "email"],
 ];
-
-/** Pages over several parts of the app: closed only when the workspace offers none of them. */
-const MULTI_MODULE_PAGES: Array<[prefix: string, parts: AppModule[]]> = [["/automations", ["sms", "email"]]];
 
 const under = (p: string, prefix: string) => p === prefix || p.startsWith(`${prefix}/`);
 
@@ -102,7 +97,6 @@ export function landingPath(access: MemberAccess, staffRole: StaffRole | null, o
   if (offers("inventory") && allows(access, "inventory.view")) return "/inventory";
   if (offers("staff") && staffAccess(access.role, staffRole, access.permissions).permissions.length) return "/staff";
   if (offers("whatsapp") && allows(access, "marketing.campaigns")) return "/dashboard/whatsapp-automation";
-  if (offers("sms") && allows(access, "marketing.campaigns")) return "/messaging";
   if (allows(access, "integrations.status")) return "/settings/integrations";
   // Nothing granted yet: the dashboard says so ("No access assigned").
   return "/dashboard";
@@ -128,10 +122,6 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   ["/staff", "staff"],
   ["/whatsapp", "marketing.campaigns"],
   ["/dashboard/whatsapp-automation", "marketing.campaigns"],
-  ["/messaging", "marketing.campaigns"],
-  // The Automations hub: either channel's view lets someone in; each channel's own permission decides what they see there.
-  ["/automations", ["marketing.campaigns", "integrations.status"]],
-  ["/automations/audit", "audit:read"],
   ["/settings/workspace", "members:manage"],
   ["/settings/members", "members:manage"],
   ["/settings/integrations", "integrations.status"],
@@ -140,7 +130,6 @@ const PAGE_NEED: Array<[prefix: string, need: AccessNeed | "full" | "staff" | "d
   // The store's own costs: money figures that go with the sales breakdown (Shopify's cost of goods
   // sold beside them needs "View costs and stock value" too).
   ["/settings/costs", "finance.breakdown"],
-  ["/settings/email", "email:read"],
   ["/settings/api-keys", "apikeys:manage"],
   ["/settings/billing", "full"],
   ["/settings/privacy", "audit:read"],
@@ -158,7 +147,6 @@ export function canOpenPage(path: string, access: MemberAccess, staffRole: Staff
   const p = path.replace(/\/$/, "") || "/";
   if (shared && ACCOUNT_PAGES.some((a) => under(p, a))) return false;
   if (MODULE_PAGES.some(([prefix, part]) => under(p, prefix) && !offers(part))) return false;
-  if (MULTI_MODULE_PAGES.some(([prefix, parts]) => under(p, prefix) && !parts.some(offers))) return false;
   let best: (typeof PAGE_NEED)[number] | null = null;
   for (const rule of PAGE_NEED) {
     if ((p === rule[0] || p.startsWith(`${rule[0]}/`)) && (!best || rule[0].length > best[0].length)) best = rule;

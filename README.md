@@ -43,7 +43,6 @@ Then follow [docs/local-dev.md](docs/local-dev.md). Progress and verification hi
 | Webhooks | [docs/webhooks.md](docs/webhooks.md) |
 | WhatsApp Automation (Evolution API: a phone linked by QR code, or Meta's Cloud API): setup, automations, data | [docs/whatsapp.md](docs/whatsapp.md) |
 | Staff Management, attendance and payroll | [docs/staff.md](docs/staff.md) |
-| Email integrations and automation (Gmail, Microsoft 365, SMTP) | [docs/email.md](docs/email.md) · API: [docs/email-api.yaml](docs/email-api.yaml) |
 | KPI formulas | [docs/kpis.md](docs/kpis.md) |
 | Security model | [docs/security.md](docs/security.md) |
 | Deployment (AWS: every merge to `main`) | [docs/aws-deployment.md](docs/aws-deployment.md) |

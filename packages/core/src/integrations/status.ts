@@ -1,15 +1,15 @@
 /**
  * Every connection of a store in one answer (GET /workspaces/:ws/stores/:storeId/integrations):
- * Shopify, Meta Ads, Google Ads, Google AdSense, WhatsApp, SMS and email, each on one scale of six
+ * Shopify, Meta Ads, Google Ads, Google AdSense and WhatsApp, each on one scale of six
  * statuses (@app/shared/integrations), with its accounts, the figures it brings and what this caller
  * may do with it, so every page says the same thing and a new provider needs no logic of a page's own.
  *
  * It composes what each module already says about itself, and decides nothing again: the store's
  * status with the dashboard's reason for an import that stopped (syncProblem), the ad connections'
- * and waiting sign-ins' states as the cards work them out (connectionState, platformState), WhatsApp's
- * connection as its page shows it (waConnectionView), and the Automations hub's SMS and email cards.
- * Nothing here calls a provider. Never a token, a full phone number or a password: each account is
- * named as its page names it (the store, an ad account, a masked number, a mailbox's address).
+ * and waiting sign-ins' states as the cards work them out (connectionState, platformState), and
+ * WhatsApp's connection as its page shows it (waConnectionView). Nothing here calls a provider.
+ * Never a token, a full phone number or a password: each account is named as its page names it (the
+ * store, an ad account, a masked number).
  */
 import { withTenant, type AdConnection, type AdLogin, type Store } from "@app/db";
 import { allows, type MemberAccess } from "@app/shared/access";
@@ -18,15 +18,10 @@ import {
   AD_MODULE,
   adIntegrationStatus,
   connectionState,
-  emailAccountIntegrationStatus,
-  emailIntegrationStatus,
-  emailSetupStatus,
-  hubCardActions,
   INTEGRATION_MODULE_INFO,
   orderedActions,
   platformState,
   shopifyIntegrationStatus,
-  smsIntegrationStatus,
   whatsappIntegrationStatus,
   type AdStateFacts,
   type IntegrationAccount,
@@ -35,12 +30,9 @@ import {
   type IntegrationModuleId,
   type IntegrationStatus,
 } from "@app/shared/integrations";
-import { maskPhone } from "@app/shared/messaging";
 import { adsConfigured } from "../adConnections/config.js";
 import { googleAdsDemoEnabled } from "../adConnections/demo.js";
 import { isDemoConnection } from "../ads/googleAdsSource.js";
-import { hubConnections, hubPermissions, type ChannelConnection, type HubContext, type HubDeps } from "../automations/index.js";
-import { listEmailAccounts } from "../email/accounts.js";
 import { syncProblem } from "../reports/overview.js";
 import { connectionOf } from "../whatsapp/common.js";
 import { evolutionConfigured } from "../whatsapp/evolution.js";
@@ -51,8 +43,6 @@ export interface IntegrationsViewer {
   access: MemberAccess;
   /** A signed-in member in their own session. Only they are offered actions: an API key and a shared link are read-only. */
   acts: boolean;
-  /** A workspace API key: it never reaches email settings nor the Automations hub, so it sees SMS and email by their status alone. */
-  apiKey: boolean;
 }
 
 export interface IntegrationsStatus {
@@ -82,9 +72,6 @@ function moduleOf(id: IntegrationModuleId, status: IntegrationStatus, accounts: 
     href: info.href,
   };
 }
-
-/** A module for someone who couldn't open its own page: how it stands, and nothing of its setup (no account, no reason). */
-const statusOnly = (m: IntegrationModule<Date>): IntegrationModule<Date> => ({ ...m, code: null, accounts: [], lastSyncedAt: null });
 
 // ---------------------------------------------------------------------------
 // Shopify
@@ -219,64 +206,10 @@ async function whatsappModule(store: Store, viewer: IntegrationsViewer): Promise
 }
 
 // ---------------------------------------------------------------------------
-// SMS and email: the Automations hub's cards
-// ---------------------------------------------------------------------------
-
-/** The problems smsConnection doesn't count against a connected store (test mode, marketing texts switched off): never the reason it isn't connected. */
-const SMS_INFORMATIONAL = new Set(["test_mode", "marketing_platform_off", "marketing_off"]);
-
-/** How the SMS card names the sender, made safe to show: a number masked, and never an AWS resource name (it names bizinsights' AWS account). */
-function senderName(label: string): string | null {
-  if (/^arn:/i.test(label)) return null;
-  if (/^\+?[\d\s().-]{7,}$/.test(label)) return maskPhone(label);
-  return label;
-}
-
-function smsModule(card: ChannelConnection, viewer: IntegrationsViewer): IntegrationModule<Date> {
-  const status = smsIntegrationStatus(card);
-  const reason = card.state === "unavailable" ? "not_configured" : card.state === "needs_attention" ? (card.problems.find((p) => !SMS_INFORMATIONAL.has(p.code))?.code ?? null) : null;
-  // One sender per store: it stands where texting stands.
-  const accounts: Account[] = card.accounts.map((a) => ({ id: a.id, name: senderName(a.label), status, lastSyncedAt: null, lastAttemptAt: card.checkedAt, code: a.status === "verified" ? null : a.status, demo: false }));
-  return moduleOf("sms", status, accounts, { code: reason, actions: viewer.acts ? hubCardActions(card.actions) : [] });
-}
-
-async function emailModule(card: ChannelConnection, workspaceId: string, viewer: IntegrationsViewer): Promise<IntegrationModule<Date>> {
-  const rows = card.accounts.length ? await listEmailAccounts(workspaceId) : [];
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  const accounts: Account[] = card.accounts.map((a) => {
-    const row = byId.get(a.id);
-    // The last check that worked, or the last failure (a check, a send or a token refresh), whichever came later.
-    const lastAttemptAt = latest([row?.lastVerifiedAt ?? null, row?.lastErrorAt ?? null]);
-    return { id: a.id, name: a.label, status: emailAccountIntegrationStatus(a.status), lastSyncedAt: null, lastAttemptAt, code: a.status === "connected" ? null : (row?.statusReason ?? a.status), demo: false };
-  });
-  const status = emailIntegrationStatus(card, accounts.map((a) => a.status));
-  // The mailbox that decided the status, else the workspace's own problem that did (a suspension...).
-  // A mailbox switched off doesn't stop the others sending: never the reason.
-  const reason =
-    accounts.find((a) => a.status === status)?.code ??
-    card.problems.find((p) => emailSetupStatus(p.code) === status)?.code ??
-    card.problems.find((p) => p.code !== "account_disabled")?.code ??
-    null;
-  return moduleOf("email", status, accounts, { code: reason, actions: viewer.acts ? hubCardActions(card.actions) : [] });
-}
-
-// ---------------------------------------------------------------------------
 // The answer
 // ---------------------------------------------------------------------------
 
-export async function integrationsStatus(store: Store, viewer: IntegrationsViewer, deps: HubDeps, now = Date.now()): Promise<IntegrationsStatus> {
-  // The hub's cards for this store, worked out in full for every caller so each is told the same
-  // status. Seeing how SMS and email stand is integration status, which the caller holds; what the
-  // channels' own pages show (the SMS sender, the mailboxes, why one needs attention) stays with
-  // whoever could open them: SMS with View campaigns, email with View integration connection status
-  // (hubPermissions), neither with an API key, which the hub and the email settings refuse.
-  const can = hubPermissions(viewer.access);
-  const ctx: HubContext = { workspaceId: store.workspaceId, store, deps, can: { ...can, read: { sms: true, email: true, whatsapp: true } } };
-  const [shopify, ads, whatsapp, cards] = await Promise.all([shopifyModule(store, viewer), adModules(store, viewer, now), whatsappModule(store, viewer), hubConnections(ctx)]);
-  const card = (channel: "sms" | "email") => cards.find((c) => c.channel === channel)!;
-  const sms = smsModule(card("sms"), viewer);
-  const email = await emailModule(card("email"), store.workspaceId, viewer);
-  return {
-    modules: [shopify, ...ads, whatsapp, can.read.sms && !viewer.apiKey ? sms : statusOnly(sms), can.read.email && !viewer.apiKey ? email : statusOnly(email)],
-  };
+export async function integrationsStatus(store: Store, viewer: IntegrationsViewer, now = Date.now()): Promise<IntegrationsStatus> {
+  const [shopify, ads, whatsapp] = await Promise.all([shopifyModule(store, viewer), adModules(store, viewer, now), whatsappModule(store, viewer)]);
+  return { modules: [shopify, ...ads, whatsapp] };
 }

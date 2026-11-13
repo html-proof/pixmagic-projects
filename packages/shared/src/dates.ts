@@ -139,7 +139,7 @@ export function eachDay(from: string, to: string): string[] {
 export const MIN_CUSTOM_DAY = "2000-01-01";
 /** The most days 12 months can hold (`latestRangeEnd`): the ad reports' own limit. */
 export const MAX_CUSTOM_DAYS = 366;
-/** The longest range asked about at once, as the dashboard, its downloads and Customer Messaging take it. */
+/** The longest range asked about at once, as the dashboard and its downloads take it. */
 export const MAX_RANGE_MONTHS = 12;
 
 /** The same calendar day `n` months earlier (a negative `n`: later), or the month's last day when it has none: "2026-08-31", 6 → "2026-02-28". */

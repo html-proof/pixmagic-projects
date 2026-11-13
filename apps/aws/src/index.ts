@@ -13,13 +13,11 @@ import { consumeSqs, isSqsEvent } from "./consumer.js";
 import { costReportDeps, sendCostReport } from "./costReport.js";
 import { dynamoCoord } from "./dynamoCoord.js";
 import { evolutionDbUrl, pruneEvolutionData } from "./evolutionDb.js";
-import { nodeSmtpConnect } from "./nodeSmtp.js";
 import { apiPath } from "./paths.js";
 import { s3Blobs } from "./s3Blobs.js";
 import { loadSecrets } from "./secrets.js";
 import { APP_SETTINGS } from "./settings.js";
 import { chooseMailer } from "./mailers.js";
-import { chooseSmsProvider } from "./smsProviders.js";
 import { parseQueueUrls, sqsApi, sqsQueues } from "./sqsQueues.js";
 import { staticSite } from "./staticSite.js";
 
@@ -28,7 +26,7 @@ import { staticSite } from "./staticSite.js";
  * memory, timeout and trigger, so the UI, the API and the jobs always run the same build:
  *   - api:  the Lambda function URL behind CloudFront. The static UI (the Next.js export) and the
  *           API on one origin, so the session cookie stays first-party.
- *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email, smsEvents, whatsapp) → the worker's consume().
+ *   - jobs: SQS event source mappings (sync, webhooks, aggregate, email, whatsapp) → the worker's consume().
  *   - cron: EventBridge Scheduler ({ "cron": "..." }) → runScheduled(), plus maintenance actions
  *           invoked directly ({ "action": "migrate" | "counts" | "after-move" | "reread" }, or
  *           { "action": "shopify-check", "shop": "<shop>.myshopify.com" }), and the owner's daily
@@ -57,7 +55,7 @@ function droppedQueues(): Queues {
       logger.warn({ queue }, "no queues in this environment: job dropped");
     },
   });
-  return { sync: drop("sync"), webhooks: drop("webhooks"), aggregate: drop("aggregate"), email: drop("email"), smsEvents: drop("smsEvents"), whatsapp: drop("whatsapp") };
+  return { sync: drop("sync"), webhooks: drop("webhooks"), aggregate: drop("aggregate"), email: drop("email"), whatsapp: drop("whatsapp") };
 }
 
 function coordinator(): Coord {
@@ -89,9 +87,6 @@ function workerDeps(): WorkerDeps {
     mailer: chooseMailer(process.env, credentials, fetch),
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
     fetchImpl: withTimeout((input, init) => fetch(input, init)),
-    smtpConnect: nodeSmtpConnect,
-    // Customer Messaging (SMS_PROVIDER): AWS End User Messaging SMS with the function's role (region per call), or Twilio.
-    sms: chooseSmsProvider({ credentials, coord, fetchImpl: withTimeout((i, init) => fetch(i, init), 10_000) }),
   };
 }
 

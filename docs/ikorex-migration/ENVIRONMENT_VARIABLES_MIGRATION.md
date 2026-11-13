@@ -8,11 +8,16 @@ the commands are in [PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE
 
 **Status (2026-11-11): nothing has been exported.** The server has no `~/bizinsights` folder yet.
 
+(Customer Messaging (SMS) and the email module were removed on 2026-11-13; their settings,
+`SMS_*`, `TWILIO_*`, `EMAIL_GOOGLE_*`, `EMAIL_MICROSOFT_*` and `EMAIL_CREDENTIAL_KEYS`, are no
+longer read. `export-env.mjs` copies whatever the AWS secret still holds, so leave any of those
+names out when merging its output into `env/app.env`.)
+
 ## Four sources on AWS, eight files on the server
 
 | On AWS | Holds | On the server |
 | --- | --- | --- |
-| `apps/aws/src/settings.ts`, shipped inside the Lambda package | The app's own settings that aren't secret: Shopify client ids and scopes, feature switches, `AUTH_MODE`, `SMS_PROVIDER`, public ids of the providers | **Unchanged**: the same file ships inside the server's image. A line in `env/app.env` wins over it |
+| `apps/aws/src/settings.ts`, shipped inside the Lambda package | The app's own settings that aren't secret: Shopify client ids and scopes, feature switches, `AUTH_MODE`, public ids of the providers | **Unchanged**: the same file ships inside the server's image. A line in `env/app.env` wins over it |
 | Secrets Manager, six secrets under `insights/production/` | `app` (the app's own secrets and every provider's), `worker-cognito` (Cognito's client secret), `evolution-api` (the WhatsApp service's key), `db-owner`, `db-system`, `evolution-db` (database logins) | `env/app.env`, `env/evolution.env` for the first three. The three database logins are **not copied**: the server's database gets new passwords (`env/owner.env`, `env/postgres.env`) |
 | SSM parameter `/insights/production/runtime` | `APP_URL`, `API_URL`, and Cognito's region, pool, client and domain | `env/app.env` |
 | Each Lambda function's environment (set by CDK) | Where this deployment's AWS resources are: ARNs, the database host, queue addresses, the bucket, the table | Mostly gone with the resources (below) |
@@ -44,13 +49,12 @@ it wrote and the names it left out.
 | Names | Why they must be the same values |
 | --- | --- |
 | `SESSION_SECRET` | Or every signed-in session ends at the cutover |
-| `TOKEN_ENCRYPTION_KEYS`, `EMAIL_CREDENTIAL_KEYS` | They decrypt the Shopify, Meta, Google and mailbox tokens stored in the database: a new key leaves every store disconnected |
+| `TOKEN_ENCRYPTION_KEYS` | It decrypts the Shopify, Meta and Google tokens stored in the database: a new key leaves every store disconnected |
 | `OTP_PEPPER` | Or codes and hashed customer identifiers stop matching |
 | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | Shopify signs webhooks and OAuth with them |
-| `META_APP_SECRET`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_SIGNIN_CLIENT_SECRET`, `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | The providers' own; nothing changes at the providers, since every callback address stays on `bizinsights.io` |
+| `META_APP_SECRET`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_SIGNIN_CLIENT_SECRET` | The providers' own; nothing changes at the providers, since every callback address stays on `bizinsights.io` |
 | `WHATSAPP_APP_SECRET`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `EVOLUTION_API_KEY` (also `AUTHENTICATION_API_KEY` in `evolution.env`) | The WhatsApp service's sessions come over with its database and expect the same key |
 | `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET` | Resend keeps sending |
-| `TWILIO_AUTH_TOKEN` | Once the owner's Twilio account exists |
 | `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `COGNITO_CLIENT_SECRET`, `COGNITO_DOMAIN`, `COGNITO_IDENTITY_PROVIDERS` | Only while `AUTH_MODE=migrating`; removed with `AUTH_MODE=local` before stage F |
 
 ## The Lambda environment, name by name
@@ -66,10 +70,9 @@ it wrote and the names it left out.
 | `COORD_TABLE` | **Gone**: the table `coord_entries` |
 | `PAYLOADS_BUCKET` | `BLOB_DIR=/data/blobs`, a Docker volume |
 | `SES_REGION` | **Gone**: left unset, so the unused SES fallback can't be reached |
-| `SMS_CONFIGURATION_SET` | Only while `SMS_PROVIDER` is `aws`; gone with Twilio |
 | `EVOLUTION_API_URL` | `http://evolution:8080`, with `EVOLUTION_WEBHOOK_URL=http://web:8080/api` |
 | `COST_REPORT_TO` | **Gone**: the server never sends the AWS cost email |
-| The functions' IAM role | Until stage F only: `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` of one IAM user limited to Cognito's calls on this pool and, while SMS is on AWS, sending texts and reading the SMS events queue (`SMS_EVENTS_QUEUE_URL`). Empty after it |
+| The functions' IAM role | Until stage F only: `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` of one IAM user limited to Cognito's calls on this pool. Empty after it |
 
 ## New on the server
 

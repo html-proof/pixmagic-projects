@@ -1,6 +1,8 @@
 # iKorex server capacity
 
-**Status (2026-11-08): measured once; no go on memory as the server is today.** The first
+**Status (2026-11-13): measured three times, the last in business hours; no go on memory as the
+server is today** ([2026-11-12](#inspection-2026-11-12), [2026-11-13](#inspection-2026-11-13): not
+enlarged since the request). The first
 inspection ran on 2026-11-08 ([below](#inspection-2026-11-08)). The server is healthy but has 3.8 GB
 of memory in all, 2.5 GB of it free next to what already runs there, and bizinsights alone needs
 3.2–4.6 GB. The owner chose to ask the administrator to enlarge it to at least 8 GB and 4 cores
@@ -150,6 +152,32 @@ rules still need `sudo`.
 least 8 GB and 4 cores) or the owner takes the alternative in [the test](#the-test-that-decides),
 a server of bizinsights' own. Outbound access, the one row the first run left empty, is no
 obstacle.
+
+## Inspection, 2026-11-13
+
+The same script, run a third time from the owner's PC on Friday 2026-11-13 at 16:12 Melbourne time
+(05:12 UTC), when the owner asked for bizinsights to be pushed to the server. It changed nothing.
+This is the first run in business hours, the busy-hour run [the test](#the-test-that-decides) asks
+for.
+
+**The server is the same size. The verdict stands: no go. Nothing was pushed.**
+
+| | Measured | Since 2026-11-12 | Verdict |
+| --- | --- | --- | --- |
+| Memory available | **2,565 MB** of 3,914 MB. 1,349 MB used (n8n 346 MB). Swap: 6 GB, 92 MB used | Unchanged (2,506 MB then) | **No go** (under 4 GB) |
+| CPU | 2 virtual cores. Load average 0.07–0.09, 95–99 % idle over 5 seconds | Unchanged, in business hours too | Tight |
+| Free disk | 45 GB of 73 GB; 24 GB used. Docker's build cache: 10.3 GB, 8.3 GB of it reclaimable | Unchanged | Go, if SSD |
+| Docker | Engine 29.8.2, Compose v5.6.0 | Unchanged | Go |
+| Outbound HTTPS | Every address answered as on 2026-11-12; the Cloudflare tunnel's port 7844 open to both regions | Unchanged | Go |
+
+Also unchanged: the same twelve containers and six Compose projects, nothing of bizinsights among
+them; up 37 days, so no restart since the request of 2026-11-08; a restart still pending, with 24
+upgradable packages.
+
+The busy hour doesn't change the picture: the server is as idle on a Friday afternoon as it was at
+night. The shortfall is its total memory. Without monitoring, bizinsights' containers (`app`,
+`worker`, `postgres`, `evolution`, `cloudflared` and the backup) still need about 2.1–3.4 GB, which
+is all of the 2.5 GB available or more, beside seven containers that have no memory limit.
 
 ## When one server stops being enough
 

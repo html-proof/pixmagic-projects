@@ -10,17 +10,13 @@
  *    no name, email or address is stored with them;
  *  - WhatsApp Automation (when the store uses it): the contact (number, first name, consent and its
  *    history), the messages to and from it; and how many records the earlier WhatsApp feature's
- *    tables still hold about them, until those are dropped;
- *  - email automations: messages sent to the address and the store events recorded for it.
+ *    tables still hold about them, until those are dropped.
  */
 import { systemDb, type DataRequest, type Store, type Tx } from "@app/db";
 import { normalizePhone } from "@app/shared";
-import { normalizeEmail } from "@app/shared/email";
 import { customerKey } from "./persist.js";
 import { waPhoneHash } from "./whatsapp/common.js";
 import { whatsappExportFor } from "./whatsapp/privacy.js";
-import { isUniqueViolation, recipientHash } from "./email/common.js";
-import { smsExportFor } from "./sms/privacy.js";
 
 export interface DataRequestInput {
   /** Shopify's id for the request (data_request.id). */
@@ -40,7 +36,6 @@ export async function recordDataRequest(store: Pick<Store, "id" | "workspaceId">
   const existing = await systemDb.dataRequest.findUnique({ where });
   if (existing) return { request: existing, created: false };
   const phone = normalizePhone(input.phone ?? null, null);
-  const email = normalizeEmail(input.email);
   try {
     const request = await systemDb.dataRequest.create({
       data: {
@@ -50,13 +45,12 @@ export async function recordDataRequest(store: Pick<Store, "id" | "workspaceId">
         customerId: input.customerId ?? null,
         customerKey: input.customerId ? customerKey(store, input.customerId) : null,
         phoneHash: phone ? waPhoneHash(store.id, phone.waId) : null,
-        emailHash: email ? recipientHash(store.workspaceId, email) : null,
         ordersRequested: input.ordersRequested ?? [],
       },
     });
     return { request, created: true };
   } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
+    if ((err as { code?: unknown }).code !== "P2002") throw err;
     return { request: await systemDb.dataRequest.findUniqueOrThrow({ where }), created: false };
   }
 }
@@ -84,13 +78,6 @@ export async function customerDataExport(tx: Tx, request: DataRequest) {
     : [];
 
   const whatsapp = await whatsappExportFor(tx, workspaceId, storeId, { phoneHash: request.phoneHash, customerId: request.customerId });
-
-  const [emailMessages, emailEvents] = request.emailHash
-    ? await Promise.all([
-        tx.emailMessage.findMany({ where: { workspaceId, storeId, recipientHash: request.emailHash }, orderBy: { createdAt: "asc" } }),
-        tx.emailBusinessEvent.findMany({ where: { workspaceId, storeId, recipientHash: request.emailHash }, orderBy: { occurredAt: "asc" } }),
-      ])
-    : [[], []];
 
   return {
     about:
@@ -126,17 +113,5 @@ export async function customerDataExport(tx: Tx, request: DataRequest) {
       lineItems: o.lineItems.map((l) => ({ title: l.title, sku: l.sku, quantity: l.quantity, price: money(l.price), discount: money(l.discount) })),
     })),
     whatsapp,
-    email: {
-      messages: emailMessages.map((m) => ({
-        kind: m.kind,
-        subject: m.subject,
-        to: m.recipientMasked,
-        status: m.status,
-        sentAt: (m.providerAcceptedAt ?? m.createdAt).toISOString(),
-        deliveredAt: m.deliveredAt?.toISOString() ?? null,
-      })),
-      events: emailEvents.map((e) => ({ type: e.eventType, source: e.source, occurredAt: e.occurredAt.toISOString(), status: e.status })),
-    },
-    sms: await smsExportFor(tx, workspaceId, storeId, { customerKey: request.customerKey, customerId: request.customerId, ordersRequested: request.ordersRequested }),
   };
 }

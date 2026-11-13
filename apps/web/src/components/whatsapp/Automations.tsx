@@ -23,13 +23,13 @@ import {
 } from "@app/shared/whatsapp";
 import { Plus } from "lucide-react";
 import { ConfirmDialog, Skeleton } from "@/components/AppUi";
-import { Chip, FactsLine, SoftBox, StepCard, StepNumber, TableCard } from "@/components/automations/MarketingKit";
+import { Chip, FactsLine, SoftBox, StepCard, StepNumber, TableCard } from "./MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
 import { Card } from "@/components/PageKit";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
-import { CountryPicker, Drawer, fmtDelay, fmtHour, fmtWhen, plural } from "@/components/messaging/MessagingUi";
+import { CountryPicker, Drawer, fmtDelay, fmtHour, fmtWhen, plural } from "./ListUi";
 import type { WaAutomation, WaAutomationRun, WaOverview, WaTemplate, WaTemplatesResponse, WaTriggerAvailability } from "./types";
 import { AUTOMATION_STATUS, MessageStatus, problemsOf, useWaAction, WaBubble, waError, waHref } from "./WaUi";
 

@@ -1,18 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { AD_ERROR_CODES, AD_ERROR_STATUS, googleReportMetrics, metaReportMetrics } from "../src/ads";
-import { CHANNEL_INFO } from "../src/automations";
 import { CAPABILITIES } from "../src/capabilities";
-import { ACCOUNT_STATUSES } from "../src/email/constants";
 import { WA_CONNECTION_STATUSES } from "../src/whatsapp";
 import {
   adIntegrationStatus,
   adLoginOf,
   connectionState,
-  emailAccountIntegrationStatus,
-  emailIntegrationStatus,
-  emailSetupStatus,
   firstSyncOverdue,
-  hubCardActions,
   INTEGRATION_MODULE_INFO,
   INTEGRATION_MODULES,
   INTEGRATION_STATUSES,
@@ -20,7 +14,6 @@ import {
   ownErrorCode,
   platformState,
   shopifyIntegrationStatus,
-  smsIntegrationStatus,
   syncRunning,
   whatsappIntegrationStatus,
   worstStatus,
@@ -173,46 +166,6 @@ describe("the six statuses", () => {
     expect(whatsappIntegrationStatus("something_new")).toBe("error");
   });
 
-  it("maps the hub's SMS card: a failed check at AWS is an error, the store's setup still to finish is pending", () => {
-    expect(smsIntegrationStatus({ state: "connected", problems: [{ code: "test_mode" }] })).toBe("connected");
-    expect(smsIntegrationStatus({ state: "needs_attention", problems: [{ code: "connection_failed" }, { code: "no_sender" }] })).toBe("error");
-    expect(smsIntegrationStatus({ state: "needs_attention", problems: [{ code: "test_mode" }, { code: "no_budget" }] })).toBe("pending");
-    expect(smsIntegrationStatus({ state: "not_connected", problems: [] })).toBe("disconnected");
-    expect(smsIntegrationStatus({ state: "unavailable", problems: [{ code: "platform_off" }] })).toBe("disconnected");
-  });
-
-  it("maps every email account status, and email as a whole from the hub's card", () => {
-    expect(Object.fromEntries(ACCOUNT_STATUSES.map((s) => [s, emailAccountIntegrationStatus(s)]))).toEqual({
-      pending: "pending",
-      connected: "connected",
-      testing: "syncing",
-      degraded: "error",
-      reauthorization_required: "reauthorization_required",
-      disabled: "disconnected",
-      revoked: "disconnected",
-      failed: "error",
-    });
-    expect(emailAccountIntegrationStatus("something_new")).toBe("error");
-    const card = (state: string, ...codes: string[]) => ({ state, problems: codes.map((code) => ({ code })) });
-    expect(emailIntegrationStatus(card("connected", "account_disabled"), ["connected", "disconnected"])).toBe("connected");
-    expect(emailIntegrationStatus(card("not_connected"), [])).toBe("disconnected");
-    expect(emailIntegrationStatus(card("needs_attention", "reauthorization_required"), ["connected", "reauthorization_required"])).toBe("reauthorization_required");
-    // Every mailbox works: the workspace's own step is left, or bizinsights suspended its sending.
-    expect(emailIntegrationStatus(card("needs_attention", "no_verified_sender"), ["connected"])).toBe("pending");
-    expect(emailIntegrationStatus(card("needs_attention", "suspended"), ["connected"])).toBe("error");
-    // A suspension stops every mailbox, whatever they say; a step left outweighs a check under way.
-    expect(emailIntegrationStatus(card("needs_attention", "account_pending", "suspended"), ["connected", "pending"])).toBe("error");
-    expect(emailIntegrationStatus(card("needs_attention", "sending_paused", "suspended"), ["syncing"])).toBe("error");
-    expect(emailIntegrationStatus(card("needs_attention", "sending_paused"), ["connected", "syncing"])).toBe("pending");
-    // Signing in again still comes first: it's what someone must do.
-    expect(emailIntegrationStatus(card("needs_attention", "reauthorization_required", "suspended"), ["reauthorization_required"])).toBe("reauthorization_required");
-    // Needing attention for a reason none of these is: never connected.
-    expect(emailIntegrationStatus(card("needs_attention", "something_new"), ["connected"])).toBe("pending");
-    expect([emailSetupStatus("suspended"), emailSetupStatus("no_verified_sender"), emailSetupStatus("account_pending"), emailSetupStatus("toString")]).toEqual(["error", "pending", null, null]);
-    // Every mailbox switched off or disconnected: nothing sends.
-    expect(emailIntegrationStatus(card("needs_attention", "account_disabled"), ["disconnected", "disconnected"])).toBe("disconnected");
-  });
-
   it("is the same six everywhere", () => {
     expect([...INTEGRATION_STATUSES]).toEqual(["connected", "pending", "reauthorization_required", "syncing", "error", "disconnected"]);
   });
@@ -220,23 +173,17 @@ describe("the six statuses", () => {
 
 describe("the modules", () => {
   it("names each one, links its page and lists the figures it brings from the metric sets that exist", () => {
-    expect([...INTEGRATION_MODULES]).toEqual(["shopify", "meta_ads", "google_ads", "adsense", "whatsapp", "sms", "email"]);
+    expect([...INTEGRATION_MODULES]).toEqual(["shopify", "meta_ads", "google_ads", "adsense", "whatsapp"]);
     expect(INTEGRATION_MODULE_INFO.shopify.capabilities).toEqual(CAPABILITIES.map((c) => c.id));
     expect(INTEGRATION_MODULE_INFO.meta_ads.capabilities).toEqual(Object.keys(metaReportMetrics({})));
     expect(INTEGRATION_MODULE_INFO.meta_ads.capabilities).toContain("purchaseValue");
     expect(INTEGRATION_MODULE_INFO.google_ads.capabilities).toEqual(Object.keys(googleReportMetrics({})));
     expect(INTEGRATION_MODULE_INFO.adsense.capabilities).toEqual(["earnings", "pageViews", "impressions", "clicks", "pageRpm", "perClick", "ctr"]);
+    expect(INTEGRATION_MODULE_INFO.whatsapp.href).toBe("/dashboard/whatsapp-automation");
     expect(INTEGRATION_MODULE_INFO.whatsapp.capabilities).toEqual(["sent", "delivered", "read", "failed"]);
-    // The messaging channels' pages are their homes in the hub.
-    expect(INTEGRATION_MODULE_INFO.whatsapp.href).toBe(CHANNEL_INFO.whatsapp.home);
-    expect(INTEGRATION_MODULE_INFO.sms.href).toBe(CHANNEL_INFO.sms.home);
-    expect(INTEGRATION_MODULE_INFO.email.href).toBe(CHANNEL_INFO.email.home);
   });
 
-  it("orders actions one way, and reads the hub's test as a refresh", () => {
+  it("orders actions one way", () => {
     expect(orderedActions(["disconnect", "connect", "refresh", "connect"])).toEqual(["connect", "refresh", "disconnect"]);
-    expect(hubCardActions(["connect", "test", "reconnect", "disconnect"])).toEqual(["connect", "reconnect", "refresh", "disconnect"]);
-    expect(hubCardActions(["test", "something_else"])).toEqual(["refresh"]);
-    expect(hubCardActions([])).toEqual([]);
   });
 });

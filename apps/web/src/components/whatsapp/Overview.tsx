@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Check } from "lucide-react";
 import { PROVIDER_INFO, WA_AUTOMATION_STATE_LABEL, WA_SETUP_STEPS, WA_SETUP_STEP_INFO } from "@app/shared/whatsapp";
-import { StepNumber, TableCard } from "@/components/automations/MarketingKit";
+import { StepNumber, TableCard } from "./MarketingKit";
 import { Badge, Dot, Empty, type Tone } from "@/components/dashboard/Primitives";
 import { Card, FigureTile } from "@/components/PageKit";
 import { Alert } from "@/components/ui";

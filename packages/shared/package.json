@@ -33,7 +33,6 @@
     "./sales": "./src/sales.ts",
     "./sheet": "./src/sheet.ts",
     "./salesCalculation": "./src/salesCalculation.ts",
-    "./sms": "./src/sms.ts",
     "./messaging": "./src/messaging.ts",
     "./metaDiscovery": "./src/metaDiscovery.ts",
     "./orders": "./src/orders.ts",
@@ -42,7 +41,6 @@
     "./staff": "./src/staff/index.ts",
     "./team": "./src/team.ts",
     "./email": "./src/email/index.ts",
-    "./automations": "./src/automations.ts",
     "./zapier": "./src/zapier.ts"
   },
   "scripts": {

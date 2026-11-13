@@ -2714,7 +2714,10 @@ model PaymentAllocation {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Email integrations and automation (docs/email.md).
+// Email integrations and automation. REMOVED from the app on 2026-11-13: nothing reads or writes
+// these tables any more (email_deliveries, the app's own invitation emails, is not one of them and
+// stays). They are dropped by a later migration.
+// Was: Email integrations and automation (docs/email.md, removed).
 //
 // A workspace is the organization (tenant): every table carries workspace_id and the
 // tenant_isolation RLS policy, and every reference between email tables is a composite
@@ -3210,7 +3213,10 @@ model DataRequest {
 }
 
 // ---------------------------------------------------------------------------
-// Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). Every table carries
+// Customer Messaging (SMS). REMOVED from the app on 2026-11-13: nothing reads or writes these
+// tables any more; a store's rows still go when the store is erased (core persist.ts
+// purgeStoreData). They are dropped by a later migration.
+// Was: Customer Messaging: SMS through AWS End User Messaging (docs/sms.md, removed). Every table carries
 // workspace_id (the tenant) and store_id, under the same row-level-security policy as the rest.
 // Customers' numbers are encrypted (AAD sms:<storeId>:<kind>), found by a keyed hash, and shown
 // masked; a message's text is encrypted and dropped once its outcome is known.

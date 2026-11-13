@@ -13,7 +13,7 @@ change, or the day an owner-only step is done.
 | 3 | X-Ray tracing off | 0.46 | **Live** (#343; checked 2026-11-08: api, jobs and cron `live` on `PassThrough`) | — |
 | 4 | GuardDuty RDS protection off, both features (`RDS_LOGIN_EVENTS` 2.26 and Advanced RDS, `RDS_DATA_RISK`, 6.78) | ~9.04 | Our own checks in its place: change 10. Both features still `ENABLED` on 2026-11-12, 3 trial days left | Owner: one command ([aws-deployment.md](../aws-deployment.md#security-events)), once the alarm email is confirmed |
 | 5 | WhatsApp service on Fargate Spot | up to ~12.10 | **Live** (#343; checked 2026-11-08: `insights-production-evolution-a` 1/1 on `FARGATE_SPOT`) | A week of billing for the real rate |
-| 6 | AWS WAF → Cloudflare's rules | 10.08 (less 0.40 for the lock's secret) | **In progress** (owner's "just do it", 2026-11-12). Step 1 of 3, the origin lock: `"report"` **live** 2026-11-12, release 180 (#375), nothing refused yet; `/edge-lock` answers 403 until Cloudflare sends the header. The WAF still on | Owner: add the header in Cloudflare ([aws-deployment.md](../aws-deployment.md#origin-lock-only-cloudflare-reaches-cloudfront)); then the lock enforces, then the rate rule, then the WAF goes |
+| 6 | AWS WAF → Cloudflare's rules | 10.08 (less 0.40 for the lock's secret) | **In progress** (owner's "just do it", 2026-11-12). Step 1 of 3, the origin lock: `"report"` live since release 180 (#375); Cloudflare sends the header since 2026-11-13 04:56 UTC (`/edge-lock` 204), so this pull request sets `"enforce"`. Cloudflare's rate limiting rule is on and tested (2026-11-12). The WAF still on | The Deploy of `"enforce"`, then the WAF goes in two releases (the distribution lets go of it, then the Edge stack deletes it) |
 | 7 | Secrets Manager → Parameter Store SecureString, all seven secrets, in three steps ([SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md)) | 2.97 (7 × 0.40 and their requests), once the secrets are deleted in step 3; nothing yet | **In progress.** Step 1 of 3 **live** 2026-11-12, release 186 (#384): every release copies each secret, unchanged, into a parameter of the same name, and the functions read the parameter first, the secret as fallback. Checked after it: seven parameters, each equal to its secret; api and cron read all of theirs from the parameters, no fallback. The secrets all still exist | A week of `secrets loaded` log lines on `parameter` (to about 2026-11-19), then step 2 (nothing reads Secrets Manager), then step 3 (the secrets deleted with a 30-day recovery window) |
 | 8 | Database single-AZ | 21.74 | **Live** 2026-11-08, release 174 (#357): `MultiAZ` false, primary 2b, same instance | — |
 | 9 | One NAT instance (nat-b, in the database's zone) | ~8.24 | **Live** 2026-11-08, release 174 (#357): nat-a terminated, both app subnets route to nat-b | — |
@@ -31,7 +31,7 @@ change, or the day an owner-only step is done.
 
 | AWS service | Status | Notes |
 | --- | --- | --- |
-| SNS | Kept | US$0; alarm emails and SMS delivery events |
+| SNS | Kept | US$0; alarm emails (and SMS delivery events until that topic went with Customer Messaging (SMS), removed 2026-11-13) |
 | SQS | Kept | US$0.02 |
 | EventBridge Scheduler | Kept | US$0 |
 | Lambda | Kept | US$0 (free tier) |
@@ -177,3 +177,21 @@ change, or the day an owner-only step is done.
   the NAT role is refused every secret's parameter, the admin host all but its three, and both
   still read `/insights/production/runtime`. Secrets Manager still holds its seven secrets: the
   bill doesn't change until step 3.
+- **2026-11-12/13**: change 6, the two things in Cloudflare (zone `bizinsights.io`, Free plan).
+  **The rate limiting rule** `API per address` (2026-11-12, the owner's "Yes, add it"): `/api/`
+  without `/api/webhooks/` and `/api/pixel/`, 250 requests in 10 seconds per address, blocked for
+  10 seconds (the Free plan offers only that window and that action). Tested the same day from one
+  address: a burst of 400 to `/api/healthz` got 250 answers, then 429 from the 251st; during the
+  block `/api/webhooks/shopify` (401) and `/api/pixel/…` (400) still reached the app and `/login`
+  loaded; 13 seconds later the API answered again. Seen in the dashboard and left as they were: the
+  managed ruleset always active, Bot Fight Mode off. **The header rule** `Origin lock for
+  CloudFront` took until 2026-11-13 04:56 UTC: it was first saved holding the header's own name,
+  then a single space, each time something other than the secret was on the clipboard at the paste
+  (an expired `aws login` copies nothing; the name had been copied out of the instructions).
+  Nothing was refused in that time: the lock was reporting and the WAF attached. What settled it:
+  the value put on the clipboard by a script that never shows it, the owner's own Ctrl+V and Save.
+  Checked after it, values never shown: `https://bizinsights.io/edge-lock` 204 (ten of ten); the
+  WAF's sampled requests of the following minute, every one through Cloudflare (`bizinsights.io`
+  and `www`) carrying a header equal to the secret, compared by a script; the home page 200,
+  release 188. Still open on purpose until `"enforce"` deploys: a POST straight to the
+  cloudfront.net name reaches the app (404 from `/api/healthz`).

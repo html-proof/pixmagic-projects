@@ -1,4 +1,4 @@
-/** Email and WhatsApp jobs, and the ad platforms' sync, its schedule and its alerts. */
+/** Invitation email and WhatsApp jobs, and the ad platforms' sync, its schedule and its alerts. */
 import { systemDb } from "@app/db";
 import {
   logger,
@@ -21,21 +21,18 @@ import {
   processWebhookEvent,
   sendQueuedMessage,
   type WhatsappJob,
-  processBusinessEvent,
   retryInvitationEmail,
-  sendEmailMessage,
   type EmailJob,
 } from "@app/core";
-import { applySmsEvent, noSmsProvider, sendSmsJob, type SmsJob } from "@app/core/sms";
 import { zapierAfterAdSync } from "@app/core/zapier";
 import { UnrecoverableError, type WorkerDeps } from "./common.js";
 
-/** Email integrations: send one message, or run the automations for one business event. */
+/**
+ * The email queue: another attempt at one invitation email. The delivery record counts attempts and
+ * queues the next one itself, so this never throws for a mail failure.
+ */
 export async function runEmailJob(job: EmailJob, deps: WorkerDeps) {
-  if (job.kind === "email_send") return { outcome: await sendEmailMessage(job.messageId, deps) };
-  // The delivery record counts attempts and queues the next one itself, so this never throws for a mail failure.
-  if (job.kind === "team_invitation") return { outcome: await retryInvitationEmail(job.deliveryId, { mailer: deps.mailer, queues: deps.queues }) };
-  return processBusinessEvent(job.eventId, deps);
+  return { outcome: await retryInvitationEmail(job.deliveryId, { mailer: deps.mailer, queues: deps.queues }) };
 }
 
 /**
@@ -48,16 +45,6 @@ export async function runWhatsappJob(job: WhatsappJob, deps: WorkerDeps) {
   if (job.kind === "wapp_send") return { outcome: await sendQueuedMessage(deps, job.messageId) };
   if (job.kind === "wapp_campaign") return { outcome: await dispatchCampaign(deps, job.campaignId) };
   return { outcome: await processWebhookEvent(deps, job.eventId) };
-}
-
-/** One text (Customer Messaging). The row carries its state; the send path never throws for an SMS failure. */
-export async function runSmsJob(job: SmsJob, deps: WorkerDeps) {
-  return { outcome: await sendSmsJob(job.jobId, { ...deps, sms: deps.sms ?? noSmsProvider }) };
-}
-
-/** One AWS delivery event. One that came before its send was recorded throws (SmsEventNotYetKnown), so the queue brings it back. */
-export async function runSmsEvent(body: unknown, deps: WorkerDeps) {
-  return { outcome: await applySmsEvent(body, deps) };
 }
 
 /**

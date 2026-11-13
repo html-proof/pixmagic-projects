@@ -40,29 +40,20 @@ import { staffAttendanceRoutes } from "./routes/staffAttendance.js";
 import { staffPayrollRoutes } from "./routes/staffPayroll.js";
 import { staffReportRoutes } from "./routes/staffReports.js";
 import { staffPortalRoutes } from "./routes/staffPortal.js";
-import { emailAccountRoutes } from "./routes/emailAccounts.js";
-import { emailContentRoutes } from "./routes/emailContent.js";
-import { emailActivityRoutes } from "./routes/emailActivity.js";
-import { emailPublicRoutes } from "./routes/emailPublic.js";
 import { privacyRoutes } from "./routes/privacy.js";
 import { teamRoutes } from "./routes/team.js";
 import { exportRoutes } from "./routes/exports.js";
 import { inventoryRoutes } from "./routes/inventory.js";
-import { smsRoutes } from "./routes/sms.js";
-import { smsPublicRoutes } from "./routes/smsPublic.js";
-import { smsTwilioRoutes } from "./routes/smsTwilio.js";
-import { automationRoutes } from "./routes/automations.js";
 import { zapierOAuthRoutes } from "./routes/zapierOAuth.js";
 import { zapierRoutes } from "./routes/zapier.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /**
- * Machine endpoints with their own authentication: webhooks (HMAC), the pixel (ingest key), the
- * event API (event key, no cookie), one-click unsubscribe (a signed token; mail providers POST
- * it from their own servers, RFC 8058), and Zapier's server (its client secret at /oauth/token, a
- * bearer token at /zapier/*: neither ever reads a cookie).
+ * Machine endpoints with their own authentication: webhooks (HMAC), the pixel (ingest key), and
+ * Zapier's server (its client secret at /oauth/token, a bearer token at /zapier/*: neither ever
+ * reads a cookie).
  */
-const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//, /^\/v1\/events/, /^\/email\/unsubscribe\//, /^\/oauth\/token$/, /^\/zapier\//];
+const CSRF_EXEMPT = [/^\/webhooks\//, /^\/pixel\//, /^\/oauth\/token$/, /^\/zapier\//];
 /**
  * Not subject to the global per-IP limit. Shopify delivers every store's webhooks from a small
  * pool of addresses, so a per-IP cap meant one busy merchant (or a backfill burst) could get
@@ -156,7 +147,7 @@ export function buildApp(deps: Deps): App {
         err.retryAfterSec ? { "retry-after": String(err.retryAfterSec) } : {},
       );
     }
-    // A rule the person broke or a step they must take first (StaffError, EmailError, WhatsappError):
+    // A rule the person broke or a step they must take first (StaffError, WhatsappError):
     // its message is written for them.
     if (err instanceof AppError) {
       return c.json({ error: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) }, err.status as ContentfulStatusCode);
@@ -262,18 +253,10 @@ export function buildApp(deps: Deps): App {
   staffPayrollRoutes(app, deps);
   staffReportRoutes(app, deps);
   staffPortalRoutes(app, deps);
-  emailAccountRoutes(app, deps);
-  emailContentRoutes(app, deps);
-  emailActivityRoutes(app, deps);
-  emailPublicRoutes(app, deps);
   privacyRoutes(app, deps);
   teamRoutes(app, deps);
   exportRoutes(app, deps);
   inventoryRoutes(app, deps);
-  smsRoutes(app, deps);
-  smsPublicRoutes(app, deps);
-  smsTwilioRoutes(app, deps);
-  automationRoutes(app, deps);
   // Zapier (docs/zapier.md): the OAuth provider (consent, token) and Zapier's own API (/zapier/*, bearer tokens only).
   zapierOAuthRoutes(app, deps);
   zapierRoutes(app, deps);

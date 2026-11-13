@@ -14,7 +14,6 @@
 // bundler doesn't map "./ads.js" to ads.ts.
 import { AD_ERROR_STATUS, adsenseTotals, googleReportMetrics, metaReportMetrics, type AdAccountStatus, type AdConnectionStatus, type AdErrorCode, type AdProvider } from "./ads";
 import { CAPABILITIES } from "./capabilities";
-import type { AccountStatus } from "./email/constants";
 import type { WaConnectionStatus } from "./whatsapp";
 
 // ---------------------------------------------------------------------------
@@ -278,74 +277,11 @@ export function whatsappIntegrationStatus(status: string | null | undefined): In
   return WA_STATUS[status as WaConnectionStatus] ?? "error";
 }
 
-/** The Automations hub's card for a channel (core's ChannelConnection): its state and the problems behind it. */
-export interface HubCard {
-  /** connected | needs_attention | not_connected | unavailable | elsewhere */
-  state: string;
-  problems: ReadonlyArray<{ code: string }>;
-}
-
-/**
- * SMS on the scale, from the hub's card: needs_attention is a failed connection check at AWS
- * ("connection_failed"), or the store's setup still standing between automations and phones (no
- * sender yet, sender not verified, no budget...), which is a step left. Not connected, and SMS not
- * offered on this server (unavailable), are both nothing connected.
- */
-export function smsIntegrationStatus(card: HubCard): IntegrationStatus {
-  if (card.state === "connected") return "connected";
-  if (card.state === "needs_attention") return card.problems.some((p) => p.code === "connection_failed") ? "error" : "pending";
-  return "disconnected";
-}
-
-/** An email account (email_accounts.status) on the scale. */
-const EMAIL_STATUS: Record<AccountStatus, IntegrationStatus> = {
-  // Not tested yet.
-  pending: "pending",
-  connected: "connected",
-  testing: "syncing",
-  // Temporarily failing.
-  degraded: "error",
-  reauthorization_required: "reauthorization_required",
-  // Switched off by the workspace: it sends nothing.
-  disabled: "disconnected",
-  revoked: "disconnected",
-  failed: "error",
-};
-
-export function emailAccountIntegrationStatus(status: string): IntegrationStatus {
-  return EMAIL_STATUS[status as AccountStatus] ?? "error";
-}
-
-/**
- * The workspace's own email problems on the scale (the hub card's codes): no verified sender yet, or
- * sending paused, is a step left; bizinsights suspending its sending stops every mailbox.
- */
-const EMAIL_SETUP_STATUS = { no_verified_sender: "pending", sending_paused: "pending", suspended: "error" } as const satisfies Record<string, IntegrationStatus>;
-
-/** One of the hub card's email problems on the scale, when it is the workspace's own (EMAIL_SETUP_STATUS); null for a mailbox's. */
-export const emailSetupStatus = (code: string): IntegrationStatus | null => (Object.hasOwn(EMAIL_SETUP_STATUS, code) ? EMAIL_SETUP_STATUS[code as keyof typeof EMAIL_SETUP_STATUS] : null);
-
-/**
- * Email as a whole, from the hub's card and its accounts' statuses: the worst of the accounts still
- * in use and of the workspace's own problems (EMAIL_SETUP_STATUS), so a suspension is an error
- * whatever the mailboxes say. A card that needs attention for none of these reasons is pending, never
- * connected.
- */
-export function emailIntegrationStatus(card: HubCard, accounts: readonly IntegrationStatus[]): IntegrationStatus {
-  if (card.state === "connected") return "connected";
-  if (card.state !== "needs_attention") return "disconnected";
-  const inUse = accounts.filter((s) => s !== "disconnected");
-  if (!inUse.length) return "disconnected";
-  const setup = card.problems.map((p) => emailSetupStatus(p.code)).filter((s): s is IntegrationStatus => s !== null);
-  const worst = worstStatus([...inUse, ...setup]);
-  return worst === "connected" ? "pending" : worst;
-}
-
 // ---------------------------------------------------------------------------
 // The modules: what each is called, where it's managed, what it can show, and what can be done
 // ---------------------------------------------------------------------------
 
-export const INTEGRATION_MODULES = ["shopify", "meta_ads", "google_ads", "adsense", "whatsapp", "sms", "email"] as const;
+export const INTEGRATION_MODULES = ["shopify", "meta_ads", "google_ads", "adsense", "whatsapp"] as const;
 export type IntegrationModuleId = (typeof INTEGRATION_MODULES)[number];
 
 /** Each ad platform's module. */
@@ -361,40 +297,29 @@ export const orderedActions = (actions: Iterable<IntegrationAction>): Integratio
   return INTEGRATION_ACTIONS.filter((a) => set.has(a));
 };
 
-/** The hub's connection actions (connect, test, reconnect, disconnect) on this scale: a test asks the provider now, which is a refresh. */
-export function hubCardActions(actions: readonly string[]): IntegrationAction[] {
-  return orderedActions(actions.map((a) => (a === "test" ? "refresh" : a)).filter((a): a is IntegrationAction => (INTEGRATION_ACTIONS as readonly string[]).includes(a)));
-}
-
-/** The counts a messaging channel's figures are made of (the hub's message statuses). */
-const MESSAGE_COUNTS = ["sent", "delivered", "undelivered", "failed"] as const;
-
 export interface IntegrationModuleInfo {
   title: string;
   /** The app page where it is connected and managed. */
   href: string;
-  /** The figures it brings (metric keys): the store's data modules, an ad platform's report figures, a channel's message counts. */
+  /** The figures it brings (metric keys): the store's data modules, an ad platform's report figures, WhatsApp's message counts. */
   capabilities: readonly string[];
 }
 
-/** The messaging channels' pages are their homes in the hub's CHANNEL_INFO (@app/shared/automations, left out of this module's imports: the settings pages don't need its weight). */
 export const INTEGRATION_MODULE_INFO: Record<IntegrationModuleId, IntegrationModuleInfo> = {
   shopify: { title: "Shopify", href: "/settings/stores", capabilities: CAPABILITIES.map((c) => c.id) },
   meta_ads: { title: "Meta Ads", href: "/settings/ads", capabilities: Object.keys(metaReportMetrics({})) },
   google_ads: { title: "Google Ads", href: "/settings/ads", capabilities: Object.keys(googleReportMetrics({})) },
   adsense: { title: "Google AdSense", href: "/settings/ads", capabilities: Object.keys(adsenseTotals([])) },
   whatsapp: { title: "WhatsApp", href: "/dashboard/whatsapp-automation", capabilities: ["sent", "delivered", "read", "failed"] },
-  sms: { title: "SMS", href: "/messaging", capabilities: MESSAGE_COUNTS },
-  email: { title: "Email", href: "/settings/email", capabilities: MESSAGE_COUNTS },
 };
 
-/** One account of a module (an ad account, a waiting sign-in, the store, the WhatsApp number, the SMS sender, a mailbox). `D`: how dates travel (Date in core, a string in JSON). */
+/** One account of a module (an ad account, a waiting sign-in, the store, the WhatsApp number). `D`: how dates travel (Date in core, a string in JSON). */
 export interface IntegrationAccount<D = string> {
   id: string;
   /** The name its page shows: never a token, a full phone number or a password. */
   name: string | null;
   status: IntegrationStatus;
-  /** The last sync that worked (Shopify, ad accounts); null for the messaging channels, which send rather than sync. */
+  /** The last sync that worked (Shopify, ad accounts); null for WhatsApp, which sends rather than syncs. */
   lastSyncedAt: D | null;
   /** The last sync or check that started, whatever came of it. */
   lastAttemptAt: D | null;
@@ -412,7 +337,6 @@ export interface IntegrationModule<D = string> {
   code: string | null;
   /** Every account it counts is the Google Ads demo. */
   demo: boolean;
-  /** Empty, with no `code` either, for a caller who may not open the channel's own page (SMS without View campaigns; SMS and email for an API key). */
   accounts: IntegrationAccount<D>[];
   /** The latest of its accounts' last working syncs (an ad platform's: of the accounts shown on the dashboard, as its status). */
   lastSyncedAt: D | null;

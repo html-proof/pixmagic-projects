@@ -1,8 +1,8 @@
 "use client";
-import type { InputHTMLAttributes, ReactNode } from "react";
+import type { ReactNode } from "react";
 
 // ---------------------------------------------------------------------------
-// The Marketing pages' own pieces (Automations, Customer Messaging, WhatsApp, Email), as the
+// The WhatsApp pages' own pieces, as the
 // owner's approved Stitch design draws them (prototype v2, screens 14–20), on top of
 // components/PageKit.tsx (Card, FigureTile, InShortLine): its tables with a tinted head row and
 // hairlines between rows, a channel's small chip, the line of a page's few facts, the numbered
@@ -150,23 +150,6 @@ export function StepCard({
   );
 }
 
-/**
- * A numbered step's heading on its own, for a step whose parts are cards of their own (a step that
- * picks one of several cards): the disc, and "n. " kept in its words for screen readers.
- */
-export function StepTitle({ id, n, level = 2, children }: { id: string; n: ReactNode; level?: 2 | 3; children: ReactNode }) {
-  const H = level === 2 ? "h2" : "h3";
-  return (
-    <H id={id} className="home-h2 flex min-w-0 items-center gap-3">
-      <StepNumber n={n} />
-      <span className="min-w-0">
-        <span className="sr-only">{n}. </span>
-        {children}
-      </span>
-    </H>
-  );
-}
-
 /** The disc a step's number sits in. */
 export function StepNumber({ n, done = false }: { n: ReactNode; done?: boolean }) {
   return (
@@ -177,7 +160,7 @@ export function StepNumber({ n, done = false }: { n: ReactNode; done?: boolean }
 }
 
 /**
- * One channel's card, as screen 18 draws WhatsApp, SMS and Email: the name, one status word on the
+ * WhatsApp's card, as screen 18 draws it: the name, one status word on the
  * right, the one main button under it, then its facts. `footer` holds the quieter buttons.
  */
 export function ChannelPanel({
@@ -256,38 +239,4 @@ export function Fact({ icon, muted = false, children }: { icon?: ReactNode; mute
 /** A label and its value on a soft row (a step's summary: "Estimated cost · About $9.60"). */
 export function SoftBox({ children, className = "" }: { children: ReactNode; className?: string }) {
   return <div className={`rounded bg-home-soft px-4 py-3 text-sm ${className}`}>{children}</div>;
-}
-
-/**
- * The design's switch: a real checkbox with role "switch" (so it is focused, labelled and checked
- * as one), drawn as a track and a knob.
- */
-export function Switch({ className = "", ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "role">) {
-  return (
-    <input
-      type="checkbox"
-      role="switch"
-      className={`relative h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full bg-home-tag transition-colors outline-none before:absolute before:top-0.5 before:left-0.5 before:h-4 before:w-4 before:rounded-full before:bg-surface before:shadow-sm before:transition-transform checked:bg-accent checked:before:translate-x-4 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
-      {...props}
-    />
-  );
-}
-
-/** A page's filters on one white bar (screen 17's dates, channel, status, automation), each with its label. */
-export function FilterBar({ children, label = "Filters" }: { children: ReactNode; label?: string }) {
-  return (
-    <div role="search" aria-label={label} className="home-card animate-rise flex flex-wrap items-end gap-3 p-4 sm:px-5 [&>*]:max-w-full [&>*]:min-w-0">
-      {children}
-    </div>
-  );
-}
-
-/** The quiet line at the foot of a page: what is always true, and where to read more. */
-export function FootLine({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
-      <div className="min-w-0 flex-1">{children}</div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-    </div>
-  );
 }

@@ -132,9 +132,8 @@ describe("who may see an alert (the bell's rule, which Zapier follows)", () => {
   it("gives owners and admins every area, and others only what their permissions open", () => {
     const owner = { role: "owner" as const, permissions: [] };
     const integrations = { role: "manager" as const, permissions: ["integrations.status", "integrations.manage"] };
-    for (const area of ["shopify", "ads", "email", "whatsapp", "privacy", "general", "staff"] as const) expect(mayFixAlert(area, owner, null), area).toBe(true);
+    for (const area of ["shopify", "ads", "whatsapp", "privacy", "general", "staff"] as const) expect(mayFixAlert(area, owner, null), area).toBe(true);
     expect(mayFixAlert("ads", integrations, null)).toBe(true);
-    expect(mayFixAlert("email", integrations, null)).toBe(true);
     expect(mayFixAlert("shopify", integrations, null)).toBe(false);
     expect(mayFixAlert("whatsapp", integrations, null)).toBe(false);
     expect(mayFixAlert("whatsapp", { role: "manager", permissions: ["marketing.campaigns"] }, null)).toBe(true);

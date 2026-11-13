@@ -187,8 +187,6 @@ describe("inviting someone with Customers access only (scenarios 1-6)", () => {
       ["GET", `/workspaces/${b.ws}/audit-logs`],
       ["GET", `/workspaces/${b.ws}/billing`],
       ["GET", `/workspaces/${b.ws}/staff/employees`],
-      ["GET", `/workspaces/${b.ws}/email/overview`],
-      ["GET", `/workspaces/${b.ws}/email/accounts`],
     ] as const) {
       const res = await call(method, url, guest.headers);
       expect(res.statusCode, url).toBe(403);

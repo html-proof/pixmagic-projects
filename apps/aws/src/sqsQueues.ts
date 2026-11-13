@@ -5,8 +5,8 @@ import { jsonApi, type AwsCredentials } from "./awsClient.js";
  * Background jobs on Amazon SQS (one standard queue per job type): producers here, the consumer in
  * consumer.ts. Delivery is at-least-once, and the handlers are idempotent.
  *
- * SQS delays a message by at most 15 minutes; scheduled email sends ask for up to 12 hours
- * (WhatsApp hands later sends to its sweep instead). A longer delay is carried in the body (NOT_BEFORE) and the
+ * SQS delays a message by at most 15 minutes (WhatsApp hands later sends to its sweep instead). A
+ * longer delay is carried in the body (NOT_BEFORE) and the
  * consumer re-sends the message in 15-minute hops until it is due, without spending an attempt.
  */
 export const SQS_MAX_DELAY_S = 900;
@@ -39,14 +39,14 @@ export function sqsQueues(urls: Record<QueueName, string>, o: SqsOptions): Queue
   const producer = <T>(name: QueueName): Producer<T> => ({
     send: (body, opts) => sqsSend(call, urls[name], body, opts?.delaySeconds, o.now),
   });
-  return { sync: producer("sync"), webhooks: producer("webhooks"), aggregate: producer("aggregate"), email: producer("email"), smsEvents: producer("smsEvents"), whatsapp: producer("whatsapp") };
+  return { sync: producer("sync"), webhooks: producer("webhooks"), aggregate: producer("aggregate"), email: producer("email"), whatsapp: producer("whatsapp") };
 }
 
 /** QUEUE_URLS (set by the CDK app): {"sync":"https://sqs...","webhooks":...}. */
 export function parseQueueUrls(raw: string | undefined): Record<QueueName, string> | null {
   if (!raw) return null;
   const parsed = JSON.parse(raw) as Partial<Record<QueueName, string>>;
-  const names: QueueName[] = ["sync", "webhooks", "aggregate", "email", "smsEvents", "whatsapp"];
+  const names: QueueName[] = ["sync", "webhooks", "aggregate", "email", "whatsapp"];
   for (const n of names) if (!parsed[n]) throw new Error(`QUEUE_URLS has no "${n}" queue`);
   return parsed as Record<QueueName, string>;
 }
