@@ -3,6 +3,64 @@
 What has been tested, how, and with what result. Only runs that happened are recorded here; a
 criterion with no run says so. Newest first.
 
+## 2026-11-13: the cutover (stage D), from the owner's PC
+
+The owner's instruction the same afternoon, after the rehearsal below: "when the copy is done make
+it live on the server", then "Yes, go live now". Not the Sunday window the plan named: a Friday,
+16:58–17:03 Melbourne time. Production then held 8 users, 4 stores and 9 workspaces.
+
+Before the freeze: the production project started idle in `~/bizinsights` (release `ff7c01c98186`,
+its own passwords, AWS's settings merged in, schedules off) with staging stopped; the owner
+authorised `cloudflared` for the zone; the tunnel `bizinsights` (made with `cloudflared tunnel
+create`, run by token with `TUNNEL_URL=http://web:8080`, so no dashboard configuration) answered
+`/api/readyz` on a spare name, `server-test.bizinsights.io`; an IAM user `bizinsights-ikorex` with
+four Cognito admin actions on the pool, its key piped into `env/app.env`.
+
+| UTC | Step | Result |
+| --- | --- | --- |
+| 05:58:26 | AWS's three schedules disabled; GitHub variables `AWS_SCHEDULES=off`, `AWS_WHATSAPP=off` | Done |
+| 05:58:45 | Reserved concurrency 0 on `insights-production-api` and `-cron` (the public address answers 429 from here: there is no "webhooks answer 503" switch in the code, which the plan assumed) | **Site down** |
+| 05:58:48 | AWS's WhatsApp service to 0 tasks | No task at 05:59:10 |
+| 05:59:29 | Every queue empty twice running; `insights-production-jobs` to 0 too; the coordinator table scanned (38 items) | Frozen |
+| 05:59:41–06:01:37 | `copy-db.mjs --cutover --replace`: one snapshot each of `app` (130 tables) and `evolution` (37), restored into the server's databases, `admin migrate` (68 applied, none new) | **Every table's count, row-level security and policies equal, before and after `migrate`** |
+| 06:01:5x | `admin import-coord` | 12 items imported (the rest had expired) |
+| 06:02:02 | `web`, `worker`, `evolution` started on the copied data | Healthy; `/api/readyz` 200 on the spare name |
+| 06:02:17 | `cloudflared tunnel route dns --overwrite-dns` for `bizinsights.io`, then `www` | Cloudflare kept answering from CloudFront for about a minute |
+| 06:03:24 | The public address serves the server: `/api/version` names `ff7c01c98186`, `/api/readyz` 200 | **Site up: 4 minutes 39 seconds down** |
+| 06:04:3x | `SCHEDULES=on`, worker restarted | The 06:00 tick ran on the server and refreshed a Shopify token; the nightly tick caught up |
+
+After it, on the public address: `/`, `/login`, `/signup`, `/dashboard`, `/terms`, `/privacy` 200;
+`/api/me` 401 without a session; a hashed script 200 as `text/javascript`; the security headers
+present. On the server: 8 users, 4 stores, 9 workspaces, 340 daily metrics rows; bizinsights at
+about 600 MB with schedules on; 2,027 MB still available; the server's twelve other containers
+running with 0 restarts.
+
+**Not checked, or known to differ:**
+
+- No person has signed in on the server yet (password, emailed code, Google through Cognito): the
+  owner's first sign-in is the test.
+- WhatsApp: no store had a linked number at the switch, so "linked numbers still connected" has
+  nothing to show. The one instance copied was a QR pairing started at 05:50 UTC, eight minutes
+  before the freeze, and never finished; the server's first sweep (06:04:33) timed it out and
+  removed it, as the sweep does on AWS (`pairing_timeout`; the service's last webhooks for it were
+  refused with 401, which is the app not knowing a removed instance). Whoever was pairing starts
+  again, on the server. The service itself is healthy and answers the app.
+- `www.bizinsights.io` used to redirect to `bizinsights.io` (CloudFront's function did it). Through
+  the tunnel it serves the app under `www`: a redirect is still to be added.
+- No backups leave the server (no bucket; `ARCHIVE_MODE=off`), no monitoring stack, no external
+  uptime check. RDS holds the data as of 05:59 UTC.
+- Deploy to AWS fails from here on (its smoke test asks the public address for the Lambda release).
+  Deploy to iKorex is not set up (no deploy key): changes ship with `ship.sh` from the PC.
+- `server-test.bizinsights.io` still points at the tunnel.
+- The first freeze command (05:47) stopped at its second step on a path error and froze nothing; only
+  the two GitHub variables had changed. Production stayed up until the freeze above.
+
+**The way back** while nothing was written on the server that matters: delete the three functions'
+reserved concurrency, enable the schedules, the WhatsApp service back to 1 task, the two variables
+back, and `bizinsights.io` and `www` back to `d2mr8m2p1qkh58.cloudfront.net` in Cloudflare's
+dashboard (cloudflared can't set that record). After writes on the server: the copy back
+([ROLLBACK_PLAN.md](ROLLBACK_PLAN.md#the-copy-back-de-after-writes-on-ikorex)).
+
 ## 2026-11-13: the first deploy to the server (staging), from the owner's PC
 
 The owner decided to run bizinsights on the iKorex server as it is, without waiting for more memory
@@ -185,7 +243,7 @@ capacity claim); everything that touches production (stages D-F).
 | # | Criterion | Status |
 | --- | --- | --- |
 | 1 | Every AWS dependency migrated or justified | Justified in [AWS_INVENTORY.md](AWS_INVENTORY.md); migration not done |
-| 2 | bizinsights runs on iKorex | **A staging copy runs there since 2026-11-13** (empty database, low-memory limits, not reachable from outside yet: [above](#2026-11-13-the-first-deploy-to-the-server-staging-from-the-owners-pc)); production not yet. Before it: first login and inspection 2026-11-08: **no go on memory** (2.5 GB free; bizinsights needs 3.2–4.6 GB) until the server is enlarged to at least 8 GB and 4 cores, as requested of the administrator ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08)). Inspected again 2026-11-12: the same size, still no go; outbound HTTPS open ([second inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-12)). And on 2026-11-13, in business hours, when the owner asked for the push: the same size, still no go, nothing sent ([third inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-13)) |
+| 2 | bizinsights runs on iKorex | **Production runs there since 2026-11-13 06:03 UTC** ([the cutover](#2026-11-13-the-cutover-stage-d-from-the-owners-pc)), with the low-memory limits; the staging copy of the same day is stopped. Before it: first login and inspection 2026-11-08: **no go on memory** (2.5 GB free; bizinsights needs 3.2–4.6 GB) until the server is enlarged to at least 8 GB and 4 cores, as requested of the administrator ([SERVER_CAPACITY_REPORT.md](SERVER_CAPACITY_REPORT.md#inspection-2026-11-08)). Inspected again 2026-11-12: the same size, still no go; outbound HTTPS open ([second inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-12)). And on 2026-11-13, in business hours, when the owner asked for the push: the same size, still no go, nothing sent ([third inspection](SERVER_CAPACITY_REPORT.md#inspection-2026-11-13)) |
 | 3 | Customer accounts accessible | Not yet (stage D) |
 | 4 | Shopify OAuth works | Not yet (stage B/D) |
 | 5 | Shopify sync works | Code path: the queue runs the same handlers (tested above); on the server: not yet |
