@@ -18,7 +18,7 @@ All amounts are US$. AWS Australia adds 10% GST, so US$50 with tax is **US$45.45
 | and the WAF replaced by Cloudflare's rules (change 6) | ~43 | **~47** |
 | The same, but GuardDuty's RDS protection left on (change 4 not done) | ~52 | ~57 |
 
-The first three rows take GuardDuty's RDS protection as off.
+The first three rows take GuardDuty's RDS protection as off. **Every row is without the WhatsApp service**, which the owner switched back on on 2026-11-13: add ~5.43 before GST (~6 with GST) to each, so the third row becomes **~53 with GST**, about US$3 over the ceiling.
 
 - **US$50 holds only with changes 1, 4 and 6 all done.** All three wait on the owner
   ([What is left](#what-is-left)). Nothing else on the account is large enough to replace any of them.
@@ -32,7 +32,7 @@ The first three rows take GuardDuty's RDS protection as off.
 
 ## What a day costs (Cost Explorer, 2026-11-11, by usage type)
 
-US$1.89 that day, of it 0.18 the WhatsApp service, off since release 179. The month each line makes:
+US$1.89 that day, of it 0.18 the WhatsApp service (off from release 179, on again since 2026-11-13 at the owner's request: count it in). The month each line makes:
 
 | Line | US$/day | US$/month | The brief's category |
 | --- | --- | --- | --- |
@@ -89,7 +89,7 @@ without it.
 | EC2 | Elastic IPs, NAT gateways, load balancers, unattached disks | none | 0 | — | — |
 | VPC | Two gateway endpoints (S3, DynamoDB) | available | 0 | Yes | Keep (gateway endpoints are free) |
 | Lambda | `api`, `jobs`, `cron`, `cognito-email`, `migrate-before-live`, `evolution-db-init`, 8 CloudFormation helpers | active | 0 | Yes | Keep |
-| ECS Fargate | `insights-production-evolution-a` (WhatsApp) | 0 of 0 tasks since release 179 | 0 | Off by the owner's choice | Back on = ~5-7 on Spot, above the ceiling's spare room |
+| ECS Fargate | `insights-production-evolution-a` (WhatsApp) | 0 of 0 tasks from release 179; 1 task again since 2026-11-13 | ~5.43 on Spot | On by the owner's choice (2026-11-13) | Off again = `AWS_WHATSAPP=off` + a Deploy; on, the month is above the ceiling's spare room |
 | ECR | CDK's asset repository | 0 images | 0 | — | — |
 | CloudFront | `E17YTBLR04S64C` (the app), `E2O6ERGLFGXQQS` (the outage page) | deployed | 0 | Yes | Keep |
 | WAF (us-east-1) | `insights-production`, five rules | on | 10.10 | Until Cloudflare's rules take over | Change 6 |
@@ -116,7 +116,7 @@ Shopify connections, the workspaces, sign-in (password, emailed code, Google), t
 history, the API, the jobs and schedules, Meta and Google Ads, the dashboard, file storage, HTTPS,
 monitoring: all untouched by every change on this list, and each release's smoke tests check them
 ([../aws-deployment.md](../aws-deployment.md)). Two exceptions, both the owner's earlier decisions:
-**WhatsApp** is switched off since 2026-11-12 (change 13; one repository variable brings it back, at
+**WhatsApp** was switched off on 2026-11-12 and back on the next day at the owner's request (change 13; one repository variable switches it, at
 ~US$5-7 a month) and **Apple sign-in** was removed in October.
 
 ## The brief's replacements
