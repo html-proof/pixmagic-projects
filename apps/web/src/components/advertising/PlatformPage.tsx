@@ -39,7 +39,6 @@ export function PlatformPage({ platform }: { platform: AdProvider }) {
         sub={ABOUT[platform]}
         r={s.dates}
         shown={s.shown}
-        current={!s.older}
         actions={
           <>
             <AccountSelect accounts={accounts} value={s.account} onChange={s.setAccount} all={`All ${P.name} accounts`} />

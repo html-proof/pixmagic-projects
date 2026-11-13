@@ -104,7 +104,7 @@ export function inventoryRoutes(app: App, deps: Deps) {
     );
   });
 
-  /** The overview's figures for the dates asked about (`preset=30d`, `compare=…`). */
+  /** The overview's figures for the dates asked about (`preset=30d`, `preset=custom&from=…&to=…`). */
   app.get(`${base}/overview`, async (c) => {
     const { ws, storeId } = c.req.param();
     const a = await requireWorkspace(c, deps, ws, "inventory.view");

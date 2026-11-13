@@ -39,14 +39,14 @@ Track sales, orders, top products and stock in one place. See which areas need a
 **App details** (500)
 
 ```
-Turn your orders and products into a dashboard your team can follow. Total sales, net sales, orders and value per order are built from Shopify's sales records, compared with the previous period or dates you pick, and explained in plain words. Top products, low stock, discount codes, sales channels and busiest times each open as a report you can save as CSV. History starts with recent orders and grows over time. bizinsights opens in its own tab, with its own login, and installs read-only.
+Turn your orders and products into a dashboard your team can follow. Total sales, net sales, orders and value per order are built from Shopify's sales records, compared with the previous period, and explained in plain words. Top products, low stock, discount codes, sales channels and busiest times each open as a report you can save as CSV. History starts with recent orders and grows over time. bizinsights opens in its own tab, with its own login, and installs read-only.
 ```
 
 **Features** (5, 80 each)
 
 ```
 Break total sales into gross sales, discounts, returns, shipping and taxes
-Compare your dates with the period before or with dates you choose
+See every figure's change on the period before
 Get a one-sentence summary and a health check of each area of your store
 Spot top products, low stock, unshipped orders and your busiest days and hours
 Invite your team by email with a role and the permissions each person needs
@@ -142,7 +142,7 @@ Before you start
 1. Install the app and approve read access to orders and products. bizinsights opens on "<your store> is connected" (if the admin shows "Open bizinsights", click it). The import has already started.
 2. Click Sign in, use the test account, then click "Add store and open dashboard".
 3. The import page counts orders, products and inventory. Click "Go to dashboard".
-4. Dashboard: Total sales, Orders, Average order value and Total products sold with a % change and daily charts. If the earlier period has no sales (for example all orders were made today), the change reads "No earlier data"; that is expected. Click the "Last 30 days" chip (Today, Last 7 days, This month, Pick dates) and the "vs Previous period" chip (Previous year, Pick dates).
+4. Dashboard: Total sales, Orders, Average order value and Total products sold with a % change and daily charts. If the earlier period has no sales (for example all orders were made today), the change reads "No earlier data"; that is expected. Click the "Last 30 days" chip (Today, Last 7 days, This month, Pick dates); each change is on the period just before the dates.
 5. Click an area card (Sales, Best sellers, Stock, Recent orders, Discount codes, Sales channels, Busiest times, Shipping). Each panel opens with "In short" and ends with "What these numbers mean"; "What you could do next" appears when the numbers suggest an action. "Download CSV" saves the section shown and "Print or save as PDF" prints it.
 6. Team & Access > Invite Member: enter an email you can open and pick a role. The invitation shows its delivery status, and its link opens a view-only dashboard.
 7. Create another paid order, then Settings > Shopify > Sync now. It appears in Recent orders (or within about 5 minutes while the dashboard is open).

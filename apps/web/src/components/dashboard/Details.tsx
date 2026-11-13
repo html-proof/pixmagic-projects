@@ -1,7 +1,6 @@
 "use client";
 import type { ReactNode } from "react";
 import { seesModule } from "@app/shared/access";
-import type { CompareMode } from "@app/shared/dates";
 import { useApp } from "@/components/AppContext";
 import { seesTopic } from "@/lib/access";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
@@ -32,13 +31,6 @@ export type { Topic } from "./topics";
 // panels with more detail under the Overview, are here. Loaded when a topic is first opened, so the
 // Home starts without it.
 // ---------------------------------------------------------------------------
-
-/** The sales comparison table's title, by what the dates are compared with. */
-const COMPARE_TITLE: Record<CompareMode, string> = {
-  previous: "This period and the one before",
-  year: "This period and the same dates last year",
-  custom: "This period and the dates compared",
-};
 
 // ---------------------------------------------------------------------------
 // Each topic.
@@ -85,7 +77,7 @@ function SalesMore({ ov, currency }: { ov: Overview; currency: string }) {
       {ov.modules.shopify_check && <ShopifyCheckCard m={ov.modules.shopify_check} currency={currency} />}
       {ov.modules.profit && <ProfitCard m={ov.modules.profit} currency={currency} versus={versus} f={profitCardFigures(ov, currency, { offered: offers("ads"), shown: adsOn }, seesModule(access, "profit"))} />}
 
-      <Panel id="d-sales-compare" title={COMPARE_TITLE[ov.previous.compare ?? "previous"]} help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
+      <Panel id="d-sales-compare" title="This period and the one before" help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
         <div className="-mx-1 overflow-x-auto">
           <table className="w-full min-w-[26rem] text-sm">
             <thead className="text-left text-xs text-muted">

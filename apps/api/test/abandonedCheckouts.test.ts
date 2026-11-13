@@ -19,7 +19,7 @@ const today = localDay(new Date(), "UTC");
 const FROM = addDays(today, -20);
 const TO = addDays(today, -14);
 const RANGE = `preset=custom&from=${FROM}&to=${TO}`;
-const windows = (compare = "previous") => reportWindows(...(Object.values(resolvePreset("custom", new Date(), "UTC", { from: FROM, to: TO }, { mode: compare as "previous" })) as [never, never]));
+const windows = (from = FROM) => reportWindows(...(Object.values(resolvePreset("custom", new Date(), "UTC", { from, to: TO })) as [never, never]));
 
 async function owner(scopes = ["read_orders", "read_products"]) {
   const a = await signIn(ctx, "ua", "a@x.com");
@@ -93,10 +93,13 @@ describe("Shopify's abandoned checkouts (GET .../abandoned-checkouts)", () => {
 
   it("never asks Shopify for a comparison older than the 60 days it shares", async () => {
     const { a, ws, store } = await owner();
-    const res = await get(a.headers, ws, store.id, `${RANGE}&compare=year`);
+    // 27 days ending 14 days ago: the 27 days before them start 67 days ago.
+    const from = addDays(today, -40);
+    const res = await get(a.headers, ws, store.id, `preset=custom&from=${from}&to=${TO}`);
     expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().previous).toEqual({ from: addDays(today, -67), to: addDays(today, -41) });
     expect(res.json().module).toMatchObject({ status: "loading", previousStatus: "beyond_history", previous: null });
-    expect(jobs()[0]!.requests.map((r) => r.window)).toEqual([windows().current]);
+    expect(jobs()[0]!.requests.map((r) => r.window)).toEqual([windows(from).current]);
   });
 
   it("needs View checkout abandonment, and the store's orders", async () => {

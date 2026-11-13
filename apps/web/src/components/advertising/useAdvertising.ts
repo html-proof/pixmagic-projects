@@ -9,7 +9,7 @@ import { useApi, useLiveApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // What every Advertising page asks: the dashboard's dates (the same address-bar state, ?preset=&from=
-// &to=&compare=…, kept for the tab as on the dashboard), the platform and ad account picked
+// &to=, kept for the tab as on the dashboard), the platform and ad account picked
 // (?platform=, ?account=), and the dashboard's own answer narrowed to the advertising modules
 // (GET …/overview?parts=advertising, apps/api/src/routes/dashboard.ts). The figures are the
 // dashboard's: worked out by the API, never here.

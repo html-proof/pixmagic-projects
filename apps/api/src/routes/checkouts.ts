@@ -35,7 +35,7 @@ export function checkoutRoutes(app: App, deps: Deps) {
       const answer = await abandonedCheckoutsModule(tx, store, dates, { today: localDay(now, store.timezone), now });
       polled = store;
       refresh = answer.refresh;
-      return { range: dates.range, previous: { ...dates.previous, compare: q.compare }, module: answer.module };
+      return { range: dates.range, previous: dates.previous, module: answer.module };
     });
     // What Shopify hasn't answered yet, or answered a while ago: the worker asks, a later poll shows it.
     if (polled && refresh.length) await requestShopifyReports(deps, polled, refresh).catch((err) => logger.warn({ err, storeId }, "abandoned checkouts request failed"));

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { withTenant } from "@app/db";
-import { AD_PROVIDERS, allows, COMPARE_MODES, COUNTRY_CODE, DATE_PRESETS, FUNNEL_DEVICES, isFunnelAction, redactOverview, resolvePreset, salesCalculationInput, seesModule, SITE_SECTIONS, TRAFFIC_SOURCES, VISITOR_KINDS, type FunnelFilter, type MemberAccess, type RangeLimits, type ShopifyMarketing } from "@app/shared";
+import { AD_PROVIDERS, allows, COUNTRY_CODE, DATE_PRESETS, FUNNEL_DEVICES, isFunnelAction, redactOverview, resolvePreset, salesCalculationInput, seesModule, SITE_SECTIONS, TRAFFIC_SOURCES, VISITOR_KINDS, type FunnelFilter, type MemberAccess, type RangeLimits, type ShopifyMarketing } from "@app/shared";
 import {
   audit,
   latestReconciliation,
@@ -21,17 +21,14 @@ import { autoRefresh } from "../sync.js";
 import { limit, LIMITS } from "../rateLimit.js";
 
 /**
- * The dates asked about and what they are compared with, as the dashboard and its downloads ask:
- * `preset=7d`, `preset=custom&from=…&to=…`, plus `compare=year` or `compare=custom&cfrom=…&cto=…`
- * (the period just before when absent).
+ * The dates asked about, as the dashboard and its downloads ask: `preset=7d`,
+ * `preset=custom&from=…&to=…`. They are compared with the period just before them
+ * (`resolvePreset` in @app/shared).
  */
 export const datesQuery = {
   preset: z.enum(DATE_PRESETS).default("30d"),
   from: z.string().optional(),
   to: z.string().optional(),
-  compare: z.enum(COMPARE_MODES).default("previous"),
-  cfrom: z.string().optional(),
-  cto: z.string().optional(),
 };
 type DatesQuery = z.infer<z.ZodObject<typeof datesQuery>>;
 
@@ -111,12 +108,12 @@ const overviewQuery = z.object({ ...datesQuery, ...adsViewQuery, ...funnelQuery,
 /**
  * The dates in the store's zone, at most 12 months at a time, within the store's `limits`
  * (`storeLimits` in core: custom dates no earlier than its first day once Shopify's creation date is
- * known; without them, from 2000). Custom dates or comparison dates that can't be reported on are a
- * 400 `invalid_range`.
+ * known; without them, from 2000). Custom dates that can't be reported on are a 400
+ * `invalid_range`.
  */
 export function resolveQueryDates(q: DatesQuery, now: Date, timeZone: string, limits: RangeLimits = {}) {
   try {
-    return resolvePreset(q.preset, now, timeZone, q.from && q.to ? { from: q.from, to: q.to } : undefined, { mode: q.compare, from: q.cfrom, to: q.cto }, limits);
+    return resolvePreset(q.preset, now, timeZone, q.from && q.to ? { from: q.from, to: q.to } : undefined, limits);
   } catch (e) {
     throw new HttpError(400, (e as Error).message, "invalid_range");
   }
@@ -234,9 +231,13 @@ export function dashboardRoutes(app: App, deps: Deps) {
       return {
         store: publicStore(store),
         syncProblem: report.syncProblem,
+        // The dates as they were asked for, so a panel that asks about them again (Sales by
+        // collection) gets the same days on both sides: "this week" is compared with the same days
+        // of the week before, which the same days picked by hand are not.
+        preset: q.preset,
         range: dates.range,
-        // What the range is compared with, how it was chosen, and whether the imported orders reach back to it.
-        previous: { ...dates.previous, compare: q.compare, imported: report.previousImported },
+        // What the range is compared with (the period just before), and whether the imported orders reach back to it.
+        previous: { ...dates.previous, imported: report.previousImported },
         today: report.today,
         // When the numbers last matched Shopify, and any changes still waiting (dataFreshness in core).
         freshness: report.freshness,

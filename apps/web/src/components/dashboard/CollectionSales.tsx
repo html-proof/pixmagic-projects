@@ -72,7 +72,7 @@ export const collectionName = (c: { collectionId: string; title: string }) => c.
  */
 export function useCollectionSales(ov: Overview, shown: boolean) {
   const { workspace } = useApp();
-  const params = collectionSalesParams(ov.range, ov.previous);
+  const params = collectionSalesParams(ov);
   const path = shown ? `/workspaces/${workspace.id}/stores/${ov.store.id}/analytics/collections/sales?${params}` : null;
   const live = useLiveApi<CollectionSalesReport>(path, LIVE_EVERY_MS);
   // Never the figures of other dates under these ones.
