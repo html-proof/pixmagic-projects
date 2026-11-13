@@ -12,6 +12,7 @@ import { CloudSignup } from "./CloudSignup";
 import { SettingsForm } from "./SettingsForm";
 import type { WaMessage, WaMessageEvent, WaOverview, WaPairing, WaTemplatesResponse } from "./types";
 import { CONNECTION_TONE, MessageStatus, waError, waHref, WhatsappIcon, useWaAction } from "./WaUi";
+import { WA_OFF } from "./waErrors";
 
 // ---------------------------------------------------------------------------
 // The four-step setup: 1 Connect (choose how), 2 Authorize (scan WhatsApp's own QR code, type the
@@ -100,7 +101,7 @@ function ConnectStep({ overview, provider, setProvider, next }: { overview: WaOv
   if (!overview.platform.evolution) {
     return (
       <StepCard id="wa-step-connect" n={1} title="Connect">
-        <Alert kind="info">WhatsApp connections aren&apos;t set up on bizinsights yet, so nothing can be connected and nothing is sent. Nothing needs changing in your accounts.</Alert>
+        <Alert kind="info">{WA_OFF} Nothing can be connected until it is back on, and nothing needs changing in your accounts.</Alert>
       </StepCard>
     );
   }

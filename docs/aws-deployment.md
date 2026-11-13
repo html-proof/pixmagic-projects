@@ -204,7 +204,7 @@ One-time setup in the repository's Settings → Environments → `production`: v
 `cdk deploy`. They hold the same values as production's in config.ts, so they change nothing; a different
 value overrides config.ts's for that deploy. Unset, each reaches the deploy empty, which keeps
 config.ts's (production's schedules stay on); `AWS_SCHEDULES=off` still switches the schedules off
-for every Deploy run while it is set. `AWS_WHATSAPP` (**`off` since 2026-11-12**: nobody was using WhatsApp, [whatsapp.md](whatsapp.md), "Cost")
+for every Deploy run while it is set. `AWS_WHATSAPP` (unset since 2026-11-13, so the service runs; it was `off` from 2026-11-12, when nobody was using WhatsApp, until the owner asked for it back the next day: [whatsapp.md](whatsapp.md), "Cost")
 works the same way: `off` leaves the WhatsApp service with no task, gives the functions no
 `EVOLUTION_API_URL` and drops the three `whatsapp-service-*` alarms; it was made for the time from
 the iKorex cutover to stage F (docs/ikorex-migration/AWS_TO_IKOREX_MIGRATION_MATRIX.md, cutover
@@ -1323,7 +1323,7 @@ day it had), by usage type, with the month each line makes at 30 days:
 | --- | --- | --- | --- |
 | Database instance, db.t4g.micro single-AZ | 0.600 | 18.00 | Stays |
 | WAF: web ACL 5 + five rules | 0.334 | 10.02 | Stays until Cloudflare's rules replace it (MIGRATION_STATUS.md, change 6) |
-| WhatsApp service, Fargate Spot | 0.181 | 5.43 | **Off** since release 179 (`AWS_WHATSAPP=off`) |
+| WhatsApp service, Fargate Spot | 0.181 | 5.43 | Off from release 179 (`AWS_WHATSAPP=off`); **on again** since 2026-11-13 (the owner's request) |
 | NAT instance, t4g.nano | 0.127 | 3.81 | Stays |
 | Its public IPv4 address | 0.120 | 3.60 | Stays |
 | CloudWatch alarms above the 10 free (31 on 2026-11-12: US$2.10) | 0.110 | 3.30 | Stays |
