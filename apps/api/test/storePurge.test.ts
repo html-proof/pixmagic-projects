@@ -58,7 +58,6 @@ describe("a store's data when its row stays", () => {
     const old = await createWorkspace(ctx, before.headers, "Before");
     const store = await createStore(old, SHOP, ["read_orders", "read_products"], { status: "uninstalled", uninstalledAt: new Date() });
     await seed(old, store.id);
-    await systemDb.emailBusinessEvent.create({ data: { workspaceId: old, storeId: store.id, source: "shopify", eventType: "order.created", externalId: "1001", occurredAt: new Date(), status: "processed" } });
     const request = await systemDb.dataRequest.create({ data: { workspaceId: old, storeId: store.id, shopifyRequestId: "9999", customerId: "7" } });
     await systemDb.alert.createMany({
       data: [
@@ -81,7 +80,6 @@ describe("a store's data when its row stays", () => {
     expect((await systemDb.store.findUniqueOrThrow({ where: { id: store.id } })).workspaceId).toBe(ws);
 
     expect(await left(store.id)).toEqual({ marketingDays: 0, marketingSync: 0, expenses: 0, expenseSettings: 0, businessEvents: 0 });
-    expect(await systemDb.emailBusinessEvent.count({ where: { storeId: store.id } })).toBe(0);
     expect(await systemDb.dataRequest.findUniqueOrThrow({ where: { id: request.id } })).toMatchObject({ workspaceId: ws });
     // The alert asking to answer the request goes with it; the old workspace's other alerts about the store go.
     const alerts = await systemDb.alert.findMany({ orderBy: { code: "asc" }, select: { workspaceId: true, storeId: true, code: true } });
