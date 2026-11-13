@@ -28,10 +28,6 @@ const KEYS = [
   "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
   "EVOLUTION_API_URL",
   "EVOLUTION_API_KEY",
-  "EMAIL_GOOGLE_CLIENT_ID",
-  "EMAIL_GOOGLE_CLIENT_SECRET",
-  "EMAIL_MICROSOFT_CLIENT_ID",
-  "EMAIL_MICROSOFT_CLIENT_SECRET",
   "RESEND_API_KEY",
   "COGNITO_USER_POOL_ID",
   "COGNITO_CLIENT_ID",
@@ -89,10 +85,6 @@ const EVERYTHING = {
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: "secret-verify-token-0000",
   EVOLUTION_API_URL: "http://evolution-a.internal-test:8080",
   EVOLUTION_API_KEY: "secret-evolution-4545454545",
-  EMAIL_GOOGLE_CLIENT_ID: "public-gmail-1212.apps.googleusercontent.com",
-  EMAIL_GOOGLE_CLIENT_SECRET: "GOCSPX-secret-gmail-3434",
-  EMAIL_MICROSOFT_CLIENT_ID: "0f0f0f0f-1111-2222-3333-444444444444",
-  EMAIL_MICROSOFT_CLIENT_SECRET: "secret-outlook-5656~abc",
   RESEND_API_KEY: "re_secret_resend_7878",
   COGNITO_USER_POOL_ID: "ap-southeast-2_public9090",
   COGNITO_CLIENT_ID: "public-cognito-client-1313",
@@ -108,7 +100,7 @@ const half = (vars: Record<string, string>) => halfConfigured(vars).map((c) => c
 
 describe("which provider has its public id but not its secret", () => {
   it("names each provider whose id is set and whose secret is missing, and no other", () => {
-    const vars = { META_APP_ID: "971575545351940", GOOGLE_ADS_CLIENT_ID: "x.apps.googleusercontent.com", GOOGLE_ADS_CLIENT_SECRET: "GOCSPX-y", EMAIL_MICROSOFT_CLIENT_SECRET: "a secret without its id" };
+    const vars = { META_APP_ID: "971575545351940", GOOGLE_ADS_CLIENT_ID: "x.apps.googleusercontent.com", GOOGLE_ADS_CLIENT_SECRET: "GOCSPX-y", ZAPIER_CLIENT_SECRET: "a secret without its id" };
     expect(half(vars)).toEqual(["Meta Ads"]);
     const meta = providerCredentials(vars).find((c) => c.provider === "Meta Ads")!;
     expect(meta).toEqual({
@@ -120,7 +112,7 @@ describe("which provider has its public id but not its secret", () => {
       effect: 'Meta Ads says "Coming soon" and its connections stop syncing',
     });
     // A secret without its id is not half of anything: the provider just isn't used.
-    expect(providerCredentials(vars).find((c) => c.provider.startsWith("Outlook"))).toMatchObject({ idSet: false, secretSet: true });
+    expect(providerCredentials(vars).find((c) => c.provider === "Zapier")).toMatchObject({ idSet: false, secretSet: true });
   });
 
   it("finds nothing when every id has its secret, or nothing is set at all", () => {
@@ -138,8 +130,6 @@ describe("which provider has its public id but not its secret", () => {
       "GOOGLE_ADS_CLIENT_ID/GOOGLE_ADS_CLIENT_SECRET",
       // No WHATSAPP_APP_ID: WhatsApp runs on the Meta Ads app, with its secret.
       "WHATSAPP_CONFIG_ID/META_APP_SECRET",
-      "EMAIL_GOOGLE_CLIENT_ID/EMAIL_GOOGLE_CLIENT_SECRET",
-      "EMAIL_MICROSOFT_CLIENT_ID/EMAIL_MICROSOFT_CLIENT_SECRET",
       "ZAPIER_CLIENT_ID/ZAPIER_CLIENT_SECRET",
     ]);
   });
@@ -195,7 +185,7 @@ describe("the configuration report", () => {
     const r = configReport();
     expect(r.ads).toEqual({ configured: { meta: true, google: true, adsense: true }, restricted: { meta: true, google: false, adsense: false } });
     expect(r.whatsapp).toEqual({ evolution: true, evolutionNeeds: [], embeddedSignup: true, embeddedSignupNeeds: [], webhookVerifyToken: true });
-    expect(r.email).toEqual({ google: true, microsoft: true, resend: true });
+    expect(r.email).toEqual({ resend: true });
     expect(r.auth).toEqual({ cognito: true, google: true, emailOtp: false, loginCode: false, loginCodeExempt: 0 });
     expect(r.zapier).toEqual({ configured: true, inviteUrl: false });
     expect(r.halfConfigured).toEqual([]);

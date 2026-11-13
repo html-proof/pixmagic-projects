@@ -129,32 +129,6 @@ export const LIMITS = {
   /** WhatsApp: messages a person sends from the dashboard, per store. */
   waSend: { max: 60, windowSec: 600 },
 
-  // ---- Customer Messaging (SMS) ----
-  /** "Check with AWS" on the sender (a few AWS calls each), per store. */
-  smsVerify: { max: 10, windowSec: 600 },
-  /** Automations hub: changes to automations and channel connections, per workspace. */
-  automations: { max: 120, windowSec: 600 },
-  /** Verification codes AWS texts to a test number, per store (each costs a text). */
-  smsVerificationCode: { max: 5, windowSec: 3600 },
-  /** Codes typed in for one test number (AWS's codes are short: this stops guessing). */
-  smsVerificationCheck: { max: 10, windowSec: 3600 },
-  /** Test texts to the team's own numbers, per store. */
-  smsTest: { max: 10, windowSec: 600 },
-  /** Set up SMS: "Request sender name" (each one emails the platform owner), per store. */
-  smsSenderRequest: { max: 5, windowSec: 3600 },
-  /** Set up SMS: Connect, and the setup's other changes (drafts, messages, automatic texts), per store. */
-  smsSetup: { max: 120, windowSec: 600 },
-  /** One-off texts to a customer from the Send SMS page, per store. */
-  smsManual: { max: 30, windowSec: 600 },
-  /** Sends to chosen customers (up to 200 each) from the Send SMS page, per store: with the monthly limit's hard stop, this keeps a stolen session from texting a store's whole list over and over. */
-  smsSend: { max: 10, windowSec: 600 },
-  /** The template editor's live preview (as the merchant types), per store. */
-  smsPreview: { max: 300, windowSec: 600 },
-  /** Segment and campaign estimates and rule dry runs, per store. */
-  smsEstimate: { max: 120, windowSec: 600 },
-  /** The /stop page's look-ups and confirmations, per IP (a code is ~59 random bits; this only slows guessing). */
-  smsOptOutIp: { max: 30, windowSec: 600 },
-
   // ---- Staff Management ----
   /** Employee invitation page loads, per IP (a token is 256 bits; this only slows scanning). */
   joinLookupIp: { max: 60, windowSec: 600 },
@@ -175,28 +149,6 @@ export const LIMITS = {
   staffAnalytics: { max: 180, windowSec: 600 },
   /** "Sign out everywhere", per user. */
   revokeSessions: { max: 5, windowSec: 3600 },
-
-  // ---- Email integrations (per workspace unless named otherwise) ----
-  /** Connecting accounts: OAuth sign-ins started and SMTP connections saved. */
-  emailConnect: { max: 20, windowSec: 3600 },
-  /** "Test connection": a token refresh or an SMTP sign-in each. */
-  emailTest: { max: 20, windowSec: 600 },
-  /** Test emails to oneself. */
-  emailTestSend: { max: 10, windowSec: 600 },
-  /** "Check DNS now", per domain. */
-  emailDomainCheck: { max: 6, windowSec: 300 },
-  /** Sender verification codes sent, and guesses at them, per sender. */
-  emailSenderCode: { max: 5, windowSec: 3600 },
-  emailSenderConfirm: { max: 10, windowSec: 900 },
-  /** Template previews and automation dry runs, per user. */
-  emailPreview: { max: 120, windowSec: 600 },
-  /** Manual retries of failed messages. */
-  emailRetry: { max: 60, windowSec: 600 },
-  /** POST /v1/events, per key and per IP. */
-  emailIngestKey: { max: 600, windowSec: 60 },
-  emailIngestIp: { max: 1200, windowSec: 60 },
-  /** Unsubscribe page loads and clicks, per IP. */
-  emailUnsubscribeIp: { max: 60, windowSec: 600 },
 
   // ---- Zapier (docs/zapier.md) ----
   /** Allowing Zapier on the consent page, per user: each one issues an authorization code. */
@@ -224,8 +176,6 @@ export const LIMITS = {
    * and no longer logged. Meta's own (signed) deliveries aren't counted.
    */
   waUnsignedIp: { max: 300, windowSec: 60 },
-  /** Twilio webhook deliveries (SMS status reports, replies) whose signature doesn't verify, per IP: as for WhatsApp's. */
-  smsUnsignedIp: { max: 300, windowSec: 60 },
   /**
    * Password resets tried with one address's code, per address, whichever IPs they come from
    * (auth.ts, POST /auth/password/reset): codeVerifyIp alone lets guesses spread over many IPs,

@@ -966,7 +966,11 @@ export async function purgeStoreData(storeId: string, fetchImpl?: FetchLike) {
     // WhatsApp Automation: customers' numbers, consent, messages, automations, campaigns and the
     // store's connection (its Evolution API instance goes first: the erase's caller deletes it).
     ...purgeWhatsappStoreOps(storeId),
-    // Customer Messaging (SMS): customers' numbers, consent history, texts, costs, and the store's sender.
+    // Customer Messaging (SMS) and the email module were removed on 2026-11-13; nothing reads or
+    // writes their tables any more. Until those are dropped, what they hold about the store and
+    // its customers still goes with it.
+    systemDb.emailBusinessEvent.deleteMany({ where: { storeId } }),
+    systemDb.emailMessage.deleteMany({ where: { storeId } }),
     systemDb.smsDeliveryEvent.deleteMany({ where: { storeId } }),
     systemDb.smsCostRecord.deleteMany({ where: { storeId } }),
     systemDb.smsMessageJob.deleteMany({ where: { storeId } }),

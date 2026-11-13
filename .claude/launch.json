@@ -67,20 +67,6 @@
         "http://localhost:8125"
       ],
       "port": 8795
-    },
-    {
-      "name": "email-demo-nodocker",
-      "runtimeExecutable": "node",
-      "runtimeArgs": [
-        ".claude/email-demo-server.mjs",
-        "--pg",
-        "5443",
-        "--auth",
-        "127.0.0.1:9299",
-        "--mail",
-        "http://localhost:8126"
-      ],
-      "port": 8797
     }
   ]
 }

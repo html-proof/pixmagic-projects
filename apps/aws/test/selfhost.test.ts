@@ -10,8 +10,6 @@ import { Registry } from "../src/metrics.js";
 import { DEFAULT_CONCURRENCY, queueConcurrency } from "../src/pgQueues.js";
 import { cronField, latestDue, parseCron } from "../src/schedules.js";
 import { cloudflareGeo, selfHostSettings, webHandler } from "../src/selfhost.js";
-import { bridgeCall, bridgeOnce, sqsQueueRegion, startSqsBridge, type BridgeOptions } from "../src/sqsBridge.js";
-import type { SqsCall } from "../src/sqsQueues.js";
 
 /**
  * The self-hosted runtime's parts that need no database (docs/ikorex-migration): the cron reader,
@@ -178,83 +176,5 @@ describe("metrics", () => {
     expect(text).toContain('job_seconds_sum{queue="sync"} 3');
     expect(text).toContain('depth{queue="we\\"ird"} 4');
     expect(text).not.toContain("broken");
-  });
-});
-
-describe("SMS events from AWS's queue", () => {
-  const url = "https://sqs.ap-southeast-2.amazonaws.com/123456789012/insights-production-smsEvents";
-  /** SQS as far as the bridge sees it: each receive hands out the next batch, then nothing. */
-  function fakeSqs(batches: string[][], failFirst = 0) {
-    const calls: Array<{ op: string; body: Record<string, unknown> }> = [];
-    let received = 0;
-    let failures = failFirst;
-    const call = (async (op: string, body: Record<string, unknown>) => {
-      calls.push({ op, body });
-      if (op !== "ReceiveMessage") return {};
-      if (failures-- > 0) throw new Error("sqs away");
-      const batch = batches[received++];
-      if (!batch) {
-        await new Promise((r) => setTimeout(r, 5));
-        return {};
-      }
-      return { Messages: batch.map((Body, i) => ({ MessageId: `m${received}-${i}`, ReceiptHandle: `r${received}-${i}`, Body })) };
-    }) as SqsCall;
-    return { call, calls };
-  }
-  const collector = () => {
-    const sent: Array<Record<string, unknown>> = [];
-    return { sent, target: { send: async (b: Record<string, unknown>) => void sent.push(b) } };
-  };
-
-  it("reads the region from the queue's URL and refuses anything else", () => {
-    expect(sqsQueueRegion(url)).toBe("ap-southeast-2");
-    expect(sqsQueueRegion("http://sqs.ap-southeast-2.amazonaws.com/123456789012/q")).toBeNull();
-    expect(sqsQueueRegion("https://sqs.ap-southeast-2.amazonaws.com.evil.example/123456789012/q")).toBeNull();
-    expect(sqsQueueRegion("https://sqs.ap-southeast-2.amazonaws.com/q")).toBeNull();
-    expect(() => bridgeCall("https://example.com/q", { accessKeyId: "a", secretAccessKey: "b" }, fetch)).toThrow(/SMS_EVENTS_QUEUE_URL/);
-  });
-
-  it("moves each event into the local queue, then deletes the batch from SQS", async () => {
-    const sqs = fakeSqs([['{"eventType":"TEXT_DELIVERED","messageId":"a"}', "not json", "[1]", '{"eventType":"TEXT_SUCCESSFUL","messageId":"b"}']]);
-    const { sent, target } = collector();
-    const o: BridgeOptions = { call: sqs.call, queueUrl: url, target };
-    expect(await bridgeOnce(o)).toBe(4);
-    expect(sent).toEqual([
-      { eventType: "TEXT_DELIVERED", messageId: "a" },
-      { eventType: "TEXT_SUCCESSFUL", messageId: "b" },
-    ]);
-    expect(sqs.calls[0]).toEqual({ op: "ReceiveMessage", body: { QueueUrl: url, MaxNumberOfMessages: 10, WaitTimeSeconds: 20, VisibilityTimeout: 120 } });
-    // The unreadable ones go too: they would never read better.
-    expect(sqs.calls[1]?.op).toBe("DeleteMessageBatch");
-    expect((sqs.calls[1]?.body.Entries as unknown[]).length).toBe(4);
-    expect(await bridgeOnce(o)).toBe(0);
-    expect(sqs.calls.map((c) => c.op)).toEqual(["ReceiveMessage", "DeleteMessageBatch", "ReceiveMessage"]);
-  });
-
-  it("deletes nothing when the local queue refuses an event, so SQS hands it out again", async () => {
-    const sqs = fakeSqs([['{"messageId":"a"}', '{"messageId":"b"}']]);
-    const refusing = {
-      send: async (b: Record<string, unknown>) => {
-        if (b.messageId === "b") throw new Error("db away");
-      },
-    };
-    await expect(bridgeOnce({ call: sqs.call, queueUrl: url, target: refusing })).rejects.toThrow(/db away/);
-    expect(sqs.calls.map((c) => c.op)).toEqual(["ReceiveMessage"]);
-  });
-
-  it("keeps polling after a failed read, and stops when asked", async () => {
-    const sqs = fakeSqs([['{"messageId":"a"}'], ['{"messageId":"b"}']], 2);
-    const { sent, target } = collector();
-    let errors = 0;
-    let moved = 0;
-    const bridge = startSqsBridge({ call: sqs.call, queueUrl: url, target, errorPauseMs: 1, onError: () => void errors++, onMoved: (k) => void (moved += k) });
-    for (let i = 0; i < 200 && sent.length < 2; i++) await new Promise((r) => setTimeout(r, 5));
-    await bridge.stop();
-    expect(errors).toBe(2);
-    expect(moved).toBe(2);
-    expect(sent.map((b) => b.messageId)).toEqual(["a", "b"]);
-    const receives = sqs.calls.filter((c) => c.op === "ReceiveMessage").length;
-    await new Promise((r) => setTimeout(r, 30));
-    expect(sqs.calls.filter((c) => c.op === "ReceiveMessage").length).toBe(receives);
   });
 });

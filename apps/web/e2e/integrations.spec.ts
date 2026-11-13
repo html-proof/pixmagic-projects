@@ -4,7 +4,7 @@ import { E2E_ENV } from "../playwright.config";
 import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
- * Settings → Integrations (a card each for Shopify, Meta Ads, Google Ads, Google AdSense, WhatsApp, SMS, Email and Zapier)
+ * Settings → Integrations (a card each for Shopify, Meta Ads, Google Ads, Google AdSense, WhatsApp and Zapier)
  * and Settings → Advertising (every ad account), through the real app. Google, Meta and AdSense can't run here and
  * e2e/server.env sets none of them up, so Meta and AdSense say Coming soon until an account is
  * connected, while Google Ads offers its demo instead (server.env sets GOOGLE_ADS_DEMO_ENABLED;
@@ -41,19 +41,18 @@ async function apiSendsReasons(page: Page, ws: string, storeId: string): Promise
   }, [ws, storeId] as const);
 }
 
-test("Integrations shows Shopify, Meta Ads, Google Ads, Google AdSense, WhatsApp, SMS, Email and Zapier; one not set up says Coming soon or offers its demo", async ({ page }) => {
+test("Integrations shows Shopify, Meta Ads, Google Ads, Google AdSense, WhatsApp and Zapier; one not set up says Coming soon or offers its demo", async ({ page }) => {
   await ownerWithStore(page, "hub");
   await quietMeta(page);
   await page.goto("/settings/integrations");
 
   await expect(page.getByRole("heading", { level: 1, name: "Integrations" })).toBeVisible();
   const cards = page.locator('section[data-testid^="int-"]');
-  // In the Stitch design's order (screen 30). SMS and Email are told by GET …/integrations.
-  await expect(cards).toHaveCount(8);
-  expect(await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))).toEqual(["int-shopify", "int-meta", "int-google", "int-adsense", "int-whatsapp", "int-sms", "int-email", "int-zapier"]);
+  // In the Stitch design's order (screen 30).
+  await expect(cards).toHaveCount(6);
+  expect(await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")))).toEqual(["int-shopify", "int-meta", "int-google", "int-adsense", "int-whatsapp", "int-zapier"]);
   // Each card says where it stands on the one scale of six as well (@app/shared/integrations).
   await expect(page.getByTestId("int-shopify")).toHaveAttribute("data-status", "connected");
-  await expect(page.getByTestId("int-sms").getByTestId("platform-state")).not.toHaveText("Checking…");
   // Zapier: server.env has no ZAPIER_CLIENT_SECRET, so it isn't set up here, and there is nothing to open.
   const zapier = page.getByTestId("int-zapier");
   await expect(zapier).toContainText("Not set up yet");

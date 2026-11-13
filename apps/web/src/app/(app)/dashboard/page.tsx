@@ -19,13 +19,13 @@ import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
 import { costsOf, leftOverOf, leftOverWords, type LeftOver } from "@/components/dashboard/profitFigures";
 import { needsOf } from "@/components/dashboard/homeNeeds";
-import { greeting, NeedsYou, NumberTile, SalesByDay, useHomeAlerts, useHomeLayout, WhatChanged, WorkingForYou } from "@/components/dashboard/SimpleHome";
+import { greeting, NeedsYou, NumberTile, SalesByDay, useHomeAlerts, useHomeLayout, WhatChanged } from "@/components/dashboard/SimpleHome";
 import { TourOffer } from "@/components/Tour";
 import { FIGURE_HELP, visitsThatBoughtHelp } from "@/components/dashboard/figureHelp";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { signInFinished } from "@/lib/adSignIn";
 import { api, ApiError, apiHref, fmtMoney, fmtNum, fmtPct, friendlyError, isTransient, useLiveApi } from "@/lib/api";
-import { AUTOMATIONS_HUB, SIMPLE_HOME } from "@/lib/features";
+import { SIMPLE_HOME } from "@/lib/features";
 import { scopeList } from "@app/shared/capabilities";
 import { ALL_HISTORY } from "@app/shared/dates";
 import { hasFullAccess, ROLE_INFO, seesModule } from "@app/shared/access";
@@ -444,8 +444,6 @@ export default function DashboardPage() {
   const leftOver = ov && costs ? leftOverOf(ov, costs, cur, { offered: offers("ads"), shown: adsOn }, costsOn) : null;
   // Only once some cost was taken off: net sales again under another name says nothing.
   const showLeftOver = !!leftOver && (leftOver.isNet || leftOver.taken > 0);
-  // The menu's own rule for the Automations hub (AppShell.tsx).
-  const automationsOn = AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")));
   const needs = ov && simple ? needsOf({ ov, alerts, costs: costsOn ? costs : null, money, stockHref: offers("inventory") && allowed("inventory.view") ? "/inventory/low-stock" : null }) : [];
   const funnel = m?.funnel && m.funnel.visits > 0 ? m.funnel : null;
   // What each of the four numbers measures is behind its "i" (components/dashboard/figureHelp.ts).
@@ -773,28 +771,17 @@ export default function DashboardPage() {
       {ov && <EmptyStoreNote store={ov.store} data={ov.data} />}
 
       {/* The simple Home (the owner's approved Stitch design, 2026-11-05): what needs you, four
-          numbers, sales by day, then what changed beside the automations working; with no
-          automations offered (an App Store store), what changed beside the chart instead
+          numbers, and sales by day with what changed beside it
           (components/dashboard/SimpleHome.tsx). */}
       {simple && ov && <TourOffer />}
       {simple && ov && <NeedsYou needs={needs} onOpen={detail.open} />}
       {simple && simpleTiles}
-      {simple &&
-        ov &&
-        (automationsOn ? (
-          <>
-            {s && <SalesByDay ov={ov} currency={cur} />}
-            <div className="grid gap-6 lg:grid-cols-2">
-              <WhatChanged ov={ov} currency={cur} onOpen={detail.open} />
-              <WorkingForYou />
-            </div>
-          </>
-        ) : (
-          <div className={`grid gap-6 ${s ? "lg:grid-cols-3" : ""}`}>
-            {s && <SalesByDay ov={ov} currency={cur} className="lg:col-span-2" />}
-            <WhatChanged ov={ov} currency={cur} onOpen={detail.open} stacked={!!s} />
-          </div>
-        ))}
+      {simple && ov && (
+        <div className={`grid gap-6 ${s ? "lg:grid-cols-3" : ""}`}>
+          {s && <SalesByDay ov={ov} currency={cur} className="lg:col-span-2" />}
+          <WhatChanged ov={ov} currency={cur} onOpen={detail.open} stacked={!!s} />
+        </div>
+      )}
 
       {!simple && (
         <>

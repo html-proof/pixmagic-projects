@@ -7,8 +7,8 @@
 //
 // Jobs land in the DLQ only after SQS gave up on them (maxReceiveCount, after the worker's own
 // retries): a crash, or a long outage. Look first, fix the cause, then redrive. Every job is safe
-// to run twice: a text or email is claimed before it is sent, so a redriven send that already went
-// out finds its row taken and stops (docs/automations.md, "Dead-letter queue").
+// to run twice: a message is claimed before it is sent, so a redriven send that already went
+// out finds its row taken and stops.
 //
 // Peeking shows each job's kind and ids only, never its body: bodies can name a store's webhook.
 // It receives with a visibility timeout of 0, so the messages stay where they are.
@@ -46,7 +46,7 @@ if (args.includes("--status")) {
   const task = aws(["sqs", "start-message-move-task", "--source-arn", attrs.QueueArn, "--max-number-of-messages-per-second", String(rate)]);
   console.log(`Redrive started (${rate}/s): ${task.TaskHandle}. Follow it with --status.`);
 } else {
-  /** The job's kind and its ids, from a queue body like {"kind":"sms","jobId":"…"}; nothing else. */
+  /** The job's kind and its ids, from a queue body like {"kind":"wapp_send","messageId":"…"}; nothing else. */
   const summary = (body) => {
     try {
       const b = JSON.parse(body);

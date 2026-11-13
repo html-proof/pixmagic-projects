@@ -14,17 +14,15 @@ import { staffAccess, staffCan, type StaffRole } from "./staff/access";
 export type AlertSeverity = "info" | "warning" | "critical";
 
 /** Where the problem gets fixed: the bell and the alert email link each to its page. */
-export type AlertArea = "shopify" | "ads" | "email" | "staff" | "whatsapp" | "sms" | "privacy" | "inventory" | "integrations" | "general";
+export type AlertArea = "shopify" | "ads" | "staff" | "whatsapp" | "privacy" | "inventory" | "integrations" | "general";
 
 /** The app page each area's alerts link to (a path: the email puts APP_URL in front of it). */
 export const ALERT_PATH: Record<AlertArea, string> = {
   shopify: "/settings/stores",
   ads: "/settings/ads",
   integrations: "/settings/integrations",
-  email: "/settings/email/accounts",
   staff: "/staff/timesheets",
   whatsapp: "/dashboard/whatsapp-automation",
-  sms: "/messaging/billing",
   privacy: "/settings/privacy",
   inventory: "/inventory/low-stock",
   general: "/support",
@@ -130,8 +128,6 @@ export function describeAlert(alert: { code: string; severity: string; message: 
   // (an ad account's: its name and the wording of its error code, adErrorMessage in ./ads).
   const ads = /^ads_(reconnect|expiring|failing|unavailable):/.exec(code);
   if (ads) return { severity, area: "ads", title: ADS_TITLE[ads[1]!]!, body: message || "Open Settings → Advertising to see what it needs." };
-  if (code.startsWith("email_account_reauth:")) return { severity, area: "email", title: "An email account needs reconnecting", body: message };
-  if (code.startsWith("email_sender_rejected:")) return { severity, area: "email", title: "A sender address was refused", body: message };
   // Composed from the app's wording and the store's own counts (core's inventory alerts).
   if (code === "inventory_stock") return { severity, area: "inventory", title: "Stock is running low", body: message };
   if (code === "staff_open_shifts") return { severity, area: "staff", title: "Shifts left open", body: message };
@@ -159,26 +155,6 @@ export function describeAlert(alert: { code: string; severity: string; message: 
       body: "QR-code linking was switched off for a day, so your linked phone was disconnected, the messages waiting were cancelled (none was sent) and your automations were paused. QR-code linking is back: open WhatsApp Automation, link the phone again, then turn your automations back on.",
     };
   }
-  // Customer Messaging (core/sms): worded here from the code alone.
-  const budget = /^sms_budget_(50|80|100)$/.exec(code);
-  if (budget) {
-    const pct = budget[1]!;
-    return {
-      severity,
-      area: "sms",
-      title: pct === "100" ? "Your SMS budget for this month is used up" : `You've used ${pct}% of this month's SMS budget`,
-      body:
-        pct === "100"
-          ? "Texts that would go over the budget aren't sent while its hard stop is on. Raise the budget in Customer Messaging → SMS billing, or wait for next month."
-          : "Customer Messaging → SMS billing shows what was spent, by country and campaign, from what AWS charged for each text.",
-    };
-  }
-  if (code === "sms_sender_problem") {
-    return { severity, area: "sms", title: "Your SMS sender needs attention", body: "AWS refused the sender this store texts from, so texts are on hold. Customer Messaging → Sender configuration shows what AWS reported." };
-  }
-  if (code === "sms_account_limit") {
-    return { severity, area: "sms", title: "Texts are on hold: the SMS spending limit is reached", body: "The account's monthly SMS spending limit is reached, so texts wait until it is raised or the month ends. Contact support if this stays." };
-  }
   // Zapier (core zapier/delivery.ts): an event Zapier never took, after its tries. Worded from the code alone.
   if (code === "zapier_delivery_failed") {
     return {
@@ -202,8 +178,6 @@ export function mayFixAlert(area: AlertArea, access: MemberAccess, staffRole: St
   switch (area) {
     case "staff":
       return staffCan(staffAccess(access.role, staffRole, access.permissions), "attendance:view");
-    case "email":
-      return allows(access, "email:read");
     case "privacy":
       return allows(access, "audit:read");
     case "whatsapp":

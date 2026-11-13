@@ -139,8 +139,7 @@ describe("allows", () => {
     expect(allows(m, ["products.view", "customers.list"])).toBe(true);
     expect(allows(m, "dashboard:read")).toBe(true);
     expect(allows(m, "customers:contact")).toBe(true);
-    expect(allows(m, "email:manage")).toBe(true);
-    for (const p of ["stores:manage", "members:manage", "apikeys:manage", "billing:manage", "audit:read", "workspace:delete", "email:automate"] as const) expect(allows(m, p), p).toBe(false);
+    for (const p of ["stores:manage", "members:manage", "apikeys:manage", "billing:manage", "audit:read", "workspace:delete"] as const) expect(allows(m, p), p).toBe(false);
     // Unknown strings in a stored list grant nothing.
     expect(grantedKeys(member(["admin", "*"])).size).toBe(0);
   });
@@ -444,7 +443,6 @@ describe("a session opened from a shared link", () => {
     const manager = linkSessionAccess({ role: "manager", permissions: ["integrations.status", "integrations.manage", "staff.team", "staff.timesheets", "staff.manage", "reports.export"] });
     expect(manager.permissions).toEqual(["integrations.status", "staff.team", "staff.timesheets", "reports.export"]);
     expect(allows(manager, "integrations.manage")).toBe(false);
-    expect(allows(manager, "email:manage")).toBe(false);
     expect(allows(manager, "reports.export")).toBe(true);
   });
 
@@ -455,7 +453,7 @@ describe("a session opened from a shared link", () => {
       expect(a.permissions).toContain("customers.contact");
       expect(a.permissions).not.toContain("integrations.manage");
       expect(a.permissions).not.toContain("staff.manage");
-      for (const need of ["members:manage", "stores:manage", "billing:manage", "apikeys:manage", "audit:read", "workspace:delete", "email:manage", "email:automate"] as const) {
+      for (const need of ["members:manage", "stores:manage", "billing:manage", "apikeys:manage", "audit:read", "workspace:delete"] as const) {
         expect(allows(a, need), `${role} ${need}`).toBe(false);
       }
     }

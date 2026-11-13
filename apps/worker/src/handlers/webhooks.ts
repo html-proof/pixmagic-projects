@@ -1,7 +1,6 @@
 /** The webhooks queue: each Shopify topic applied to the store's data (orders, products, refunds, app and GDPR topics). */
 import { systemDb, type Store } from "@app/db";
-import { applySubscriptionUpdate, audit, customerKey, customersFromChange, deleteProduct, endBillingForStore, env, getAccessToken, gidToId, INSTALLATION_QUERY, logger, MAX_ATTEMPTS, shopifyGraphql, ShopifyHttpError, StoreDisconnectedError, withAccessToken, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, dropStoreInstance, disconnectStore, emailOnShopifyEvent, purgeEmailStoreData, redactEmailCustomer, onInventoryItemWebhook, onLevelDisconnect, onLevelWebhook, onLocationWebhook } from "@app/core";
-import { redactSmsCustomer, smsOnShopifyEvent } from "@app/core/sms";
+import { applySubscriptionUpdate, audit, customerKey, customersFromChange, deleteProduct, endBillingForStore, env, getAccessToken, gidToId, INSTALLATION_QUERY, logger, MAX_ATTEMPTS, shopifyGraphql, ShopifyHttpError, StoreDisconnectedError, withAccessToken, normalizeRestOrder, normalizeRestProduct, normalizeRestProductVariants, parseShopify, pruneVariants, purgeStoreData, raiseAlert, recordDataRequest, resolveAlerts, customersDataRequestSchema, customersRedactSchema, restOrderSchema, restProductDeleteSchema, restOrderDeleteSchema, removeOrders, restProductSchema, restRefundWebhookSchema, scopesUpdateSchema, subscriptionUpdateSchema, syncBillingFromShopify, upsertOrder, upsertProduct, upsertVariant, seedScopeFollowUp, type WebhookJobData, redactWhatsappCustomer, whatsappOnShopifyEvent, dropStoreInstance, disconnectStore, onInventoryItemWebhook, onLevelDisconnect, onLevelWebhook, onLocationWebhook } from "@app/core";
 import { zapierOrderPaid } from "@app/core/zapier";
 import { enqueueAggregate, UnrecoverableError, type WorkerDeps } from "./common.js";
 import { readProductCollections, readSalesAfterWebhook, SHOP_UNAVAILABLE, shopifyReader } from "./shopifyRead.js";
@@ -33,7 +32,7 @@ async function deletedRecently(deps: WorkerDeps, storeId: string, productId: str
 const unreadableGdprRequest = (topic: string) => new UnrecoverableError(`Shopify's ${topic} payload couldn't be read, so the request was not carried out`);
 
 /**
- * shop/redact: erase the store. Its synced data, its WhatsApp and email records, its import jobs,
+ * shop/redact: erase the store. Its synced data, its WhatsApp records, its import jobs,
  * alerts and privacy requests go, and so does the store row itself: a later install starts from
  * nothing (a new workspace and a new claim) instead of being joined to the account that had it
  * before. A workspace made for the store that nobody ever claimed goes with it.
@@ -46,7 +45,6 @@ async function eraseStore(store: Store, deps: WorkerDeps): Promise<{ workspaceEr
   // The store's WhatsApp instance at Evolution API goes first (best effort), while its row says which.
   await dropStoreInstance(store.id, deps);
   await purgeStoreData(store.id, deps.fetchImpl);
-  await purgeEmailStoreData(store.id);
   // One transaction: a retry after a failure finds the store still there and does it all again.
   return systemDb.$transaction(async (tx) => {
     // A claim of the workspace takes the same lock (apps/api/src/routes/shopify.ts).
@@ -406,12 +404,9 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
           await enqueueAggregate(deps, store.id, days.map((d) => d.localDay));
         }
         const whatsappRecords = await redactWhatsappCustomer(store, redact);
-        // Email automations: the customer's events and the messages sent to them from this store.
-        const emailRecords = await redactEmailCustomer(store, redact.customer?.email);
-        const smsRecords = await redactSmsCustomer(store, redact);
         // A data request for the same customer names them too (by hashes): it goes as well.
         if (redact.customer?.id != null) await systemDb.dataRequest.deleteMany({ where: { storeId: store.id, customerId: String(redact.customer.id) } });
-        await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_redacted", metadata: { whatsappRecords, emailRecords, smsRecords } });
+        await audit({ workspaceId: store.workspaceId, action: "gdpr.customer_redacted", metadata: { whatsappRecords } });
         break;
       }
       case "shop/redact": {
@@ -441,16 +436,12 @@ export async function processWebhook(data: WebhookJobData, deps: WorkerDeps) {
         break;
       }
       default:
-        // checkouts/* and fulfillments/* are only for the automations (below), customers/* for SMS consent and WhatsApp.
+        // checkouts/* and fulfillments/* are only for the automations (below), customers/* for WhatsApp.
         if (!data.topic.startsWith("checkouts/") && !data.topic.startsWith("fulfillment") && !data.topic.startsWith("customers")) logger.info({ topic: data.topic }, "unhandled webhook topic");
     }
     // WhatsApp Automation's workflows (a no-op for a store without a live WhatsApp connection).
     // After the analytics write, and idempotent, so a retry of this delivery repeats nothing.
     await whatsappOnShopifyEvent(store, data.topic, p, deps);
-    // Email automations listening to orders and checkouts (a no-op unless one is enabled). Idempotent too.
-    await emailOnShopifyEvent(store, data.topic, p, deps);
-    // Customer Messaging: contacts, consent, attribution and SMS rules (a no-op without a sender). Idempotent too.
-    await smsOnShopifyEvent(store, data.topic, p, deps, { webhookId: data.eventId });
   }
   await systemDb.webhookEvent.update({ where: { id: ev.id }, data: { status: "succeeded", processedAt: new Date(), error: null } });
   if (data.payloadKey) await deps.payloads.delete(data.payloadKey).catch(() => {});

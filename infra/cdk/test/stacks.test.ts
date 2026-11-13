@@ -327,7 +327,7 @@ describe("the app stack", () => {
   it("emails the owner the day's AWS cost every morning, letting only the cron function read Cost Explorer", () => {
     const costSchedules = (tpl: Template) => Object.values(tpl.findResources("AWS::Scheduler::Schedule", { Properties: { Target: { Input: '{"action":"cost-report"}' } } }));
     const ceGrants = (tpl: Template) =>
-      // The ce: service prefix itself, not "sms-voice:", which ends in "ce:" too.
+      // The ce: service prefix itself, not another service's name that ends in "ce:".
       Object.values(tpl.findResources("AWS::IAM::Policy")).filter((p) => JSON.stringify(p.Properties.PolicyDocument).includes('"ce:'));
     // Once a day at 07:00 in Victoria, on even while the sweeps' schedules are off.
     const [report, ...others] = costSchedules(t.app);
@@ -360,12 +360,12 @@ describe("the app stack", () => {
 
   it("gives every job queue a dead-letter queue and covers the jobs timeout", () => {
     const queues = Object.values(t.app.findResources("AWS::SQS::Queue")).filter((q) => q.Properties.RedrivePolicy);
-    expect(queues).toHaveLength(6);
+    expect(queues).toHaveLength(5);
     for (const q of queues) {
       expect(q.Properties.RedrivePolicy.maxReceiveCount).toBe(10);
       expect(q.Properties.VisibilityTimeout).toBeGreaterThanOrEqual(900);
     }
-    t.app.resourceCountIs("AWS::Lambda::EventSourceMapping", 6);
+    t.app.resourceCountIs("AWS::Lambda::EventSourceMapping", 5);
     t.app.allResourcesProperties("AWS::Lambda::EventSourceMapping", { FunctionResponseTypes: ["ReportBatchItemFailures"] });
   });
 
@@ -378,35 +378,13 @@ describe("the app stack", () => {
     expect(statements.flatMap((st) => [st.Action].flat()).filter((a) => String(a).startsWith("xray:"))).toEqual([]);
   });
 
-  it("routes SMS delivery events from the configuration set to the jobs function, publishable only by this account's SMS service", () => {
-    t.app.hasResourceProperties("AWS::SMSVOICE::ConfigurationSet", {
-      ConfigurationSetName: "insights-production-sms",
-      EventDestinations: [Match.objectLike({ Enabled: true, MatchingEventTypes: ["TEXT_ALL"], SnsDestination: { TopicArn: { Ref: Match.stringLikeRegexp("^SmsEvents") } } })],
-    });
-    t.app.hasResourceProperties("AWS::SNS::TopicPolicy", {
-      Topics: [{ Ref: Match.stringLikeRegexp("^SmsEvents") }],
-      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({ Action: "sns:Publish", Principal: { Service: "sms-voice.amazonaws.com" }, Condition: { StringEquals: { "aws:SourceAccount": Match.anyValue() } } })]) },
-    });
-    t.app.hasResourceProperties("AWS::SNS::Subscription", { Protocol: "sqs", RawMessageDelivery: true, Endpoint: { "Fn::GetAtt": [Match.stringLikeRegexp("^QueuesmsEvents"), "Arn"] } });
-    t.app.hasResourceProperties("AWS::Lambda::EventSourceMapping", { EventSourceArn: { "Fn::GetAtt": [Match.stringLikeRegexp("^QueuesmsEvents"), "Arn"] }, FunctionResponseTypes: ["ReportBatchItemFailures"] });
-    const vars = (name: string) => Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: name } }))[0]!.Properties.Environment.Variables as Record<string, unknown>;
-    expect(vars("insights-production-jobs").SMS_CONFIGURATION_SET).toBe("insights-production-sms");
-  });
-
-  it("gives each function only the SMS calls it makes, and sending only on this account's own SMS resources", () => {
-    const policies = Object.values(t.app.findResources("AWS::IAM::Policy"));
-    const statementsOf = (role: RegExp) =>
-      policies.filter((p) => (p.Properties.Roles as Array<{ Ref: string }>).some((r) => role.test(r.Ref))).flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown }>);
-    const smsActions = (role: RegExp) => statementsOf(role).flatMap((st) => [st.Action].flat()).filter((a) => a.startsWith("sms-voice:"));
-    expect(smsActions(/^FnjobsServiceRole/)).toEqual(["sms-voice:SendTextMessage"]);
-    expect(smsActions(/^FncronServiceRole/)).toContain("sms-voice:DescribeOptedOutNumbers");
-    expect(smsActions(/^FncronServiceRole/)).not.toContain("sms-voice:SendTextMessage");
-    expect(smsActions(/^FnapiServiceRole/)).toEqual(expect.arrayContaining(["sms-voice:SendTextMessage", "sms-voice:CreateVerifiedDestinationNumber", "sms-voice:DescribeSenderIds", "sms-voice:ListTagsForResource"]));
-    for (const st of statementsOf(/ServiceRole/)) {
-      if ([st.Action].flat().includes("sms-voice:SendTextMessage")) {
-        for (const r of [st.Resource].flat()) expect(JSON.stringify(r)).toMatch(/arn:aws:sms-voice:\*:\d+:(configuration-set|phone-number|sender-id|pool|protect-configuration)\/\*/);
-      }
-    }
+  it("has nothing of the removed SMS module: no configuration set, events topic, queue or sms-voice permission", () => {
+    t.app.resourceCountIs("AWS::SMSVOICE::ConfigurationSet", 0);
+    expect(Object.values(t.app.findResources("AWS::SQS::Queue")).map((q) => q.Properties.QueueName).sort()).toEqual(["aggregate", "cron-missed", "dlq", "email", "sync", "webhooks", "whatsapp"].map((n) => `insights-production-${n}`).sort());
+    const actions = Object.values(t.app.findResources("AWS::IAM::Policy")).flatMap((p) => (p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[] }>).flatMap((st) => [st.Action].flat()));
+    expect(actions.filter((x) => x.startsWith("sms-voice:"))).toEqual([]);
+    const vars = Object.values(t.app.findResources("AWS::Lambda::Function", { Properties: { FunctionName: "insights-production-jobs" } }))[0]!.Properties.Environment.Variables as Record<string, unknown>;
+    expect(vars.SMS_CONFIGURATION_SET).toBeUndefined();
   });
 
   it("parks a scheduled run that never ran, instead of dropping it", () => {
@@ -421,9 +399,9 @@ describe("the app stack", () => {
       DestinationConfig: { OnFailure: { Destination: missed } },
     });
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-cron-missed-ticks" });
-    // Bursts of automated messages refused by SMS, email or WhatsApp providers (the Automations hub).
+    // Bursts of WhatsApp messages refused by the provider.
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-messaging-send-failures", Threshold: 25, EvaluationPeriods: 2 });
-    t.app.hasResourceProperties("AWS::Logs::MetricFilter", { FilterPattern: '?"sms send refused" ?"email send failed" ?"whatsapp send refused by the provider"' });
+    t.app.hasResourceProperties("AWS::Logs::MetricFilter", { FilterPattern: '"whatsapp send refused by the provider"' });
     // The functions can't reach WhatsApp's service.
     t.app.hasResourceProperties("AWS::CloudWatch::Alarm", { AlarmName: "insights-production-whatsapp-service-unreachable" });
   });
@@ -544,7 +522,6 @@ describe("the app stack", () => {
   });
 
   it("emails the alarms to the owner in production, and to nobody in staging", () => {
-    // The stack's other subscription is SMS events → their queue.
     const emails = (tpl: Template) => Object.values(tpl.findResources("AWS::SNS::Subscription")).filter((s) => s.Properties.Protocol === "email").map((s) => s.Properties);
     expect(emails(t.app)).toEqual([{ Protocol: "email", Endpoint: "bizinsightsaus@yahoo.com", TopicArn: { Ref: expect.stringMatching(/^Alarms/) } }]);
     expect(emails(synth({ env: "staging" }).app)).toEqual([]);

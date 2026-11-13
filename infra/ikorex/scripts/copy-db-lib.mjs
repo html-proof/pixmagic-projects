@@ -174,9 +174,9 @@ export function compareFacts(source, target, { afterMigrate = false } = {}) {
   return { ok: mismatches === 0, mismatches, lines };
 }
 
-/** Queues that must be empty before the cutover's copy: all but the SMS events (read after) and the dead letters. */
+/** Queues that must be empty before the cutover's copy: all but the dead letters. */
 export function queuesToDrain(urls) {
-  return urls.filter((u) => !/(smsEvents|-dlq)$/.test(u));
+  return urls.filter((u) => !/-dlq$/.test(u));
 }
 
 /** `docker compose ps --format json`: one object per line (Compose 2.21+) or one array. */

@@ -169,12 +169,8 @@ test.describe("signed in", () => {
     ["/settings/costs", /Costs/],
     ["/staff", /./],
     ["/whatsapp", /./],
-    ["/messaging", /./],
-    ["/automations", /./],
     ["/sheet", /Profit sheet/],
     ["/profit", /Profit & Loss|Connect your store/],
-    // A new email template: its live preview renders before it has a name.
-    ["/settings/email/templates/edit", /./],
   ];
   for (const [name, viewport] of [
     ["on desktop", { width: 1366, height: 860 }],

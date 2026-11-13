@@ -9,8 +9,7 @@ import type { WaMessage } from "./types";
 // ---------------------------------------------------------------------------
 // Shared pieces of WhatsApp Automation (/dashboard/whatsapp-automation): where we are, the API's own
 // words when it refuses, status pills, the WhatsApp mark and a phone-style bubble. The rules are in
-// @app/shared/whatsapp; paged lists, the drawer and the country picker come from the SMS area's
-// MessagingUi, which does the same jobs.
+// @app/shared/whatsapp; paged lists, the drawer and the country picker are in ./ListUi.
 // ---------------------------------------------------------------------------
 
 export const WA_PAGE = "/dashboard/whatsapp-automation";

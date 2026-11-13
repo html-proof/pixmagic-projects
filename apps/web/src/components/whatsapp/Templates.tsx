@@ -15,11 +15,11 @@ import {
 } from "@app/shared/whatsapp";
 import { ConfirmDialog, Dialog, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
-import { Chip, SoftBox } from "@/components/automations/MarketingKit";
+import { Chip, SoftBox } from "./MarketingKit";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
-import { Drawer, plural } from "@/components/messaging/MessagingUi";
+import { Drawer, plural } from "./ListUi";
 import type { WaOverview, WaTemplate, WaTemplatesResponse } from "./types";
 import { fmtAgo, useWaAction, WaBubble } from "./WaUi";
 

@@ -39,7 +39,6 @@ describe("a job's workspace", () => {
     expect(await jobWorkspace("webhooks", { eventId: orphan.id })).toBeNull();
     expect(await jobWorkspace("sync", { storeId: "no-such-store", kind: "orders" })).toBeNull();
     expect(await jobWorkspace("whatsapp", { kind: "wapp_event", eventId: "e" })).toBeNull();
-    expect(await jobWorkspace("smsEvents", { eventType: "TEXT_DELIVERED" })).toBeNull();
     expect(await jobWorkspace("sync", {})).toBeNull();
   });
 

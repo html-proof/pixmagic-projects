@@ -25,15 +25,8 @@ export const BILLING_PAGE: boolean = BILLING_ENABLED || process.env.NEXT_PUBLIC_
 export const API_KEYS_ENABLED: boolean = false;
 
 /**
- * Automations (/automations): one four-step setup and one message history over SMS and email
- * (docs/automations.md). Flip to `false` to take it out of the menus again; Customer Messaging's
- * and Email's own pages, and every automation already running, are unaffected either way.
- */
-export const AUTOMATIONS_HUB: boolean = true;
-
-/**
  * The simpler Home (2026-11-05, the owner's approved prototype): what needs you, four numbers,
- * sales by day, what changed and the automations working for you
+ * sales by day and what changed
  * (components/dashboard/SimpleHome.tsx). "Show the full dashboard" under the greeting brings back
  * every panel on that device, and "Back to the simple Home" returns. Flip to `false` to make the
  * full dashboard everyone's Home again, with no way to the simple one.
@@ -60,13 +53,13 @@ export const ZAPIER_ENABLED: boolean = true;
 export const ZAPIER_CARD: boolean = ZAPIER_ENABLED || process.env.NODE_ENV !== "production";
 
 /** The parts of the app beyond the Shopify dashboard, each built on another company's accounts. */
-export type AppModule = "whatsapp" | "staff" | "ads" | "email" | "inventory" | "sms" | "zapier";
+export type AppModule = "whatsapp" | "staff" | "ads" | "inventory" | "zapier";
 
 /**
  * What a workspace whose stores came in through the App Store app offers (`MeWorkspace.appStore`,
  * packages/core/src/apps.ts `appStoreWorkspace`): only what the App Store listing describes
- * (shopify-app/listing/listing-copy.md). WhatsApp, advertising (Meta Ads, Google Ads, AdSense) and
- * email need the merchant's own Meta, Google or mail accounts and approvals Shopify's reviewer can't
+ * (shopify-app/listing/listing-copy.md). WhatsApp and advertising (Meta Ads, Google Ads, AdSense)
+ * need the merchant's own Meta or Google accounts and approvals Shopify's reviewer can't
  * complete, and Staff (timesheets and payroll) is no part of a Shopify analytics listing, so they
  * are left out there: the menus, the pages, Team & Access's permissions for them and the
  * dashboard's Advertising section. Every other workspace keeps all of them, and the API routes and
@@ -78,9 +71,8 @@ export type AppModule = "whatsapp" | "staff" | "ads" | "email" | "inventory" | "
 // listing doesn't describe yet: on there once its toml declares them (shopify app deploy
 // --config appstore) and the listing says so (docs/inventory.md, "Turning it on").
 //
-// Customer Messaging (SMS through AWS) isn't offered to App Store workspaces until the listing
-// describes it. Nor is Zapier, which needs the merchant's own Zapier account.
-export const APP_STORE_MODULES: Record<AppModule, boolean> = { whatsapp: false, staff: false, ads: false, email: false, inventory: false, sms: false, zapier: false };
+// Zapier isn't offered to App Store workspaces: it needs the merchant's own Zapier account.
+export const APP_STORE_MODULES: Record<AppModule, boolean> = { whatsapp: false, staff: false, ads: false, inventory: false, zapier: false };
 
 /** Whether a workspace offers `part` of the app (`appStore`: it came in through the App Store app). */
 export const offersModule = (appStore: boolean | undefined, part: AppModule): boolean => !appStore || APP_STORE_MODULES[part];

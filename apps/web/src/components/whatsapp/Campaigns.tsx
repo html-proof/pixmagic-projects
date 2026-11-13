@@ -4,12 +4,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Plus } from "lucide-react";
 import { describeWaAudience, renderWaText, WA_CAMPAIGN_MAX, type WaAudience } from "@app/shared/whatsapp";
 import { ConfirmDialog, Dialog, Skeleton } from "@/components/AppUi";
-import { ROW, SoftBox, StepCard, TableCard, TableHead, TD, Th } from "@/components/automations/MarketingKit";
+import { ROW, SoftBox, StepCard, TableCard, TableHead, TD, Th } from "./MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
 import { LoadError } from "@/components/LoadError";
 import { Alert, EmptyState } from "@/components/ui";
 import { api, ApiError, fmtNum, useApi } from "@/lib/api";
-import { CountryPicker, fmtWhen, plural } from "@/components/messaging/MessagingUi";
+import { CountryPicker, fmtWhen, plural } from "./ListUi";
 import type { WaCampaign, WaOverview, WaTemplate, WaTemplatesResponse } from "./types";
 import { CAMPAIGN_STATUS, useWaAction, WaBubble, waError, waHref } from "./WaUi";
 
@@ -19,7 +19,7 @@ import { CAMPAIGN_STATUS, useWaAction, WaBubble, waError, waHref } from "./WaUi"
 // shows the exact number of recipients and asks the merchant to confirm it; opening this tab never
 // sends anything. Results are counted by the API from the campaign's messages. Laid out as the
 // Stitch design's Campaigns screen (15): the campaigns as a table first, then the editor in numbered
-// parts. WhatsApp reports read; orders that followed and a cost are SMS's alone, so they aren't here.
+// parts. WhatsApp reports read; it reports no orders that followed and no cost, so they aren't here.
 // ---------------------------------------------------------------------------
 
 interface AudienceDraft {

@@ -17,10 +17,10 @@ export const metadata: Metadata = {
  *
  * Every promise here must stay true of the code, and agree with /privacy: read-only use of the
  * Google and Meta ad platforms, deletion on disconnect, no selling of data, opt-outs honoured by
- * WhatsApp and email sending, and charges approved in Shopify (apps/api/src/routes/workspaces.ts).
+ * WhatsApp messaging, and charges approved in Shopify (apps/api/src/routes/workspaces.ts).
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to these terms").
  */
-const UPDATED = "2026-10-16";
+const UPDATED = "2026-11-13";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -143,13 +143,12 @@ export default function TermsPage() {
 
       <LegalSection {...section("messages")}>
         <p>
-          If you turn on WhatsApp messaging or connect an email account, bizinsights sends the messages you set up, in your business&apos;s
-          name and from the accounts you connect. You are responsible for their content, for having each recipient&apos;s consent where
-          the law requires it, and for following the anti-spam and privacy laws that apply to you and the policies of WhatsApp and your
-          email provider.
+          If you turn on WhatsApp messaging, bizinsights sends the messages you set up, in your business&apos;s
+          name and from the number you connect. You are responsible for their content, for having each recipient&apos;s consent where
+          the law requires it, and for following the anti-spam and privacy laws that apply to you and the policies of WhatsApp.
         </p>
         <p>
-          bizinsights records opt-outs and does not message anyone again who replied STOP on WhatsApp or unsubscribed from your emails.
+          bizinsights records opt-outs and does not message anyone again who replied STOP on WhatsApp.
         </p>
       </LegalSection>
 

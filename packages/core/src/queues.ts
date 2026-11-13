@@ -9,8 +9,6 @@ export const QUEUE = {
   webhooks: "webhooks",
   aggregate: "aggregate",
   email: "email",
-  /** AWS End User Messaging's SMS delivery events (configuration set → SNS → this queue; core/sms/delivery.ts). */
-  smsEvents: "smsEvents",
   /** WhatsApp Automation (core/whatsapp): sends, Evolution API's webhook events, campaign batches. */
   whatsapp: "whatsapp",
 } as const;
@@ -118,14 +116,10 @@ export interface AggregateJobData {
 }
 
 /**
- * Email integrations (packages/core/src/email): send one message, or run the automations for one
- * business event. And the app's own invitation emails (core/mail): another attempt at one that hit
- * a transient failure. The rows carry the state; a message only says which one to look at.
+ * The app's own invitation emails (core/mail): another attempt at one that hit a transient failure.
+ * The delivery's row carries the state; a message only says which one to look at.
  */
-export type EmailJob = { kind: "email_send"; messageId: string } | { kind: "email_event"; eventId: string } | { kind: "team_invitation"; deliveryId: string };
-
-/** One SMS delivery event as AWS publishes it (raw SNS delivery), checked by core/sms smsEventSchema. */
-export type SmsEventMessage = Record<string, unknown>;
+export type EmailJob = { kind: "team_invitation"; deliveryId: string };
 
 /**
  * WhatsApp Automation (core/whatsapp): send one message, apply one stored webhook event from
@@ -142,7 +136,6 @@ export interface Queues {
   webhooks: Producer<WebhookJobData>;
   aggregate: Producer<AggregateJobData>;
   email: Producer<EmailJob>;
-  smsEvents: Producer<SmsEventMessage>;
   whatsapp: Producer<WhatsappJob>;
 }
 
@@ -171,13 +164,12 @@ export type MemoryQueues = Queues & {
 };
 
 export function memoryQueues(): MemoryQueues {
-  const sent = { sync: [] as SyncJobData[], webhooks: [] as WebhookJobData[], aggregate: [] as AggregateJobData[], email: [] as EmailJob[], smsEvents: [] as SmsEventMessage[], whatsapp: [] as WhatsappJob[] };
+  const sent = { sync: [] as SyncJobData[], webhooks: [] as WebhookJobData[], aggregate: [] as AggregateJobData[], email: [] as EmailJob[], whatsapp: [] as WhatsappJob[] };
   const sentOpts = {
     sync: [] as Array<SendOptions | undefined>,
     webhooks: [] as Array<SendOptions | undefined>,
     aggregate: [] as Array<SendOptions | undefined>,
     email: [] as Array<SendOptions | undefined>,
-    smsEvents: [] as Array<SendOptions | undefined>,
     whatsapp: [] as Array<SendOptions | undefined>,
   };
   const producer = <T>(list: T[], opts: Array<SendOptions | undefined>): Producer<T> => ({
@@ -193,10 +185,9 @@ export function memoryQueues(): MemoryQueues {
     webhooks: producer(sent.webhooks, sentOpts.webhooks),
     aggregate: producer(sent.aggregate, sentOpts.aggregate),
     email: producer(sent.email, sentOpts.email),
-    smsEvents: producer(sent.smsEvents, sentOpts.smsEvents),
     whatsapp: producer(sent.whatsapp, sentOpts.whatsapp),
     clear() {
-      for (const k of ["sync", "webhooks", "aggregate", "email", "smsEvents", "whatsapp"] as const) {
+      for (const k of ["sync", "webhooks", "aggregate", "email", "whatsapp"] as const) {
         sent[k].length = 0;
         sentOpts[k].length = 0;
       }

@@ -18,7 +18,6 @@ import {
   type QueueName,
   setWebhookEventAside,
   sweepWhatsapp,
-  sweepEmail,
   type EmailJob,
   type ShopifyMarketingJob,
   type ShopifyReportsJob,
@@ -31,7 +30,6 @@ import {
   failHistoryWindows,
   type WhatsappJob,
 } from "@app/core";
-import { noSmsProvider, sweepSms, type SmsJob } from "@app/core/sms";
 import {
   AccessRevokedError,
   NotApprovedError,
@@ -44,8 +42,6 @@ import {
   runAdsSync,
   runAggregate,
   runEmailJob,
-  runSmsEvent,
-  runSmsJob,
   runWhatsappJob,
   runSync,
   scheduleAdsSync,
@@ -154,9 +150,9 @@ async function consumeInScope(queue: QueueName, msg: QueueMessage, deps: Consume
   try {
     // Ad account syncs ride the sync queue too (see adsQueue), told apart by their kind.
     const kind = (job as { kind?: string }).kind;
-    if (queue === "sync" && kind === "ads") await runAdsSync(job as AdsSyncData, deps);
-    // Texts (Customer Messaging) ride the sync queue too; the job rows carry their own state.
-    else if (queue === "sync" && kind === "sms") await runSmsJob(job as SmsJob, deps);
+    // A job of the SMS or email module (removed 2026-11-13) that was still on its queue: nothing sends it any more.
+    if ((queue === "sync" && kind === "sms") || (queue === "email" && kind !== "team_invitation")) logger.info({ queue, kind, messageId: msg.id }, "a removed module's job was dropped");
+    else if (queue === "sync" && kind === "ads") await runAdsSync(job as AdsSyncData, deps);
     // The check against Shopify rides the sync queue too; its run's row is its record.
     else if (queue === "sync" && kind === "verify") await runVerify(job as VerifyJob, deps);
     // Shopify's report figures for the dashboard ride the sync queue too; the kept rows carry their state.
@@ -168,7 +164,6 @@ async function consumeInScope(queue: QueueName, msg: QueueMessage, deps: Consume
     else if (queue === "sync") await runSync(job as SyncJobData, deps);
     else if (queue === "webhooks") await processWebhook(job as WebhookJobData, deps);
     else if (queue === "email") await runEmailJob(job as EmailJob, deps);
-    else if (queue === "smsEvents") await runSmsEvent(job, deps);
     // WhatsApp Automation: sends, Evolution API's events, campaign batches; the rows carry their own state.
     else if (queue === "whatsapp") await runWhatsappJob(job as WhatsappJob, deps);
     else await runAggregate(job as AggregateJobData);
@@ -281,13 +276,7 @@ async function onFailure(queue: QueueName, body: unknown, err: Error, final: boo
   const error = err.message.slice(0, 500);
   const kind = (body as { kind?: string })?.kind;
   if (queue === "email") {
-    // The message and event rows are the record: a send that keeps failing for infrastructure
-    // reasons is put back by sendEmailMessage itself, and the sweep re-queues anything left waiting.
-    return;
-  }
-  if ((queue === "sync" && kind === "sms") || queue === "smsEvents") {
-    // The job row is the record (an SMS send never throws for a provider failure); a delivery event
-    // that keeps failing is left to the queue's dead-letter queue, with its alarm.
+    // The invitation's delivery row is the record: it counts its own attempts and queues the next.
     return;
   }
   if (queue === "whatsapp") {
@@ -516,16 +505,6 @@ async function runSweeps(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "open-shift sweep failed; the next tick tries again");
       return null;
     });
-    // Email integrations: due and lost sends, abandoned checkouts, domain checks, token upkeep, retention.
-    const email = await sweepEmail(deps).catch((err: unknown) => {
-      logger.error({ err }, "email sweep failed; the next tick tries again");
-      return null;
-    });
-    // Customer Messaging: due texts, cut-off sends, delivery timeouts, campaigns, opt-out lists, the daily checks.
-    const sms = await sweepSms({ ...deps, sms: deps.sms ?? noSmsProvider }).catch((err: unknown) => {
-      logger.error({ err }, "sms sweep failed; the next tick tries again");
-      return null;
-    });
     const pixelDedupePruned = await prunePixelDedupe().catch((err: unknown) => {
       logger.error({ err }, "pixel dedupe prune failed; the next tick tries again");
       return null;
@@ -574,7 +553,7 @@ async function runSweeps(cron: string, deps: WorkerDeps) {
       logger.error({ err }, "zapier sweep failed; the next tick tries again");
       return null;
     });
-    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, email, sms, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyMarketing, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, expensePayments, zapier };
+    return { refreshed, staleJobsFailed, reconciled, salesRereads, adsSynced, adAlerts, adLogins, whatsapp, staffOpenShifts, pixelDedupePruned, signInsPruned, teamPruned, checksPruned, shopifyMarketing, shopifyReportsPruned, inventory, inventoryPruned, adSyncRunsPruned, expensePayments, zapier };
   }
   logger.warn({ cron }, "unknown cron trigger");
   return {};

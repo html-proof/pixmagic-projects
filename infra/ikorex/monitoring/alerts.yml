@@ -43,15 +43,6 @@ groups:
         labels: { severity: warn }
         annotations:
           summary: "Jobs in the {{ $labels.queue }} queue keep failing"
-      # A failed read every 30 s for 30 minutes: wrong keys, a missing permission or AWS unreachable.
-      # The events wait in SQS (4 days), so nothing is lost while this is fixed.
-      - alert: SmsEventsUnread
-        expr: increase(bizinsights_sms_events_receive_errors_total[30m]) >= 30
-        for: 5m
-        labels: { severity: warn }
-        annotations:
-          summary: "The worker can't read AWS's SMS delivery events"
-          description: "docker compose -p bizinsights logs --tail 100 worker | grep 'SMS events'; check SMS_EVENTS_QUEUE_URL and the IAM user's sqs:ReceiveMessage / sqs:DeleteMessage on the queue."
       # Only once a schedule has succeeded at least once (staging and the time before the cutover run none).
       - alert: ScheduleMissed
         expr: (time() - max by (schedule) (bizinsights_schedule_last_success_timestamp_seconds{schedule="every15min"})) > 3600

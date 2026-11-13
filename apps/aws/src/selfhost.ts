@@ -15,14 +15,11 @@ import { fsBlobs } from "./fsBlobs.js";
 import { chooseMailer } from "./mailers.js";
 import { Registry, serveMetrics, statusClass } from "./metrics.js";
 import { send, toRequest } from "./nodeHttp.js";
-import { nodeSmtpConnect } from "./nodeSmtp.js";
 import { apiPath } from "./paths.js";
 import { pgCoord } from "./pgCoord.js";
 import { pgQueues, pruneDead, queueConcurrency, queueStats, startQueueRunner } from "./pgQueues.js";
 import { pruneTicks, startSchedules, type Schedule } from "./schedules.js";
 import { APP_SETTINGS } from "./settings.js";
-import { chooseSmsProvider } from "./smsProviders.js";
-import { bridgeCall, startSqsBridge } from "./sqsBridge.js";
 import { staticSite } from "./staticSite.js";
 
 /**
@@ -38,8 +35,8 @@ import { staticSite } from "./staticSite.js";
  * large webhook bodies and WhatsApp media are files under BLOB_DIR (a volume both roles mount);
  * settings and secrets come from the environment (Compose's env file), not Secrets Manager. Email
  * goes through Resend; sign-in is the app's own (AUTH_MODE), with Cognito behind it until the AWS
- * account closes; SMS through Twilio (SMS_PROVIDER), or AWS's while it lasts. What still reaches AWS
- * uses keys from the environment where AWS used the function's role.
+ * account closes. What still reaches AWS uses keys from the environment where AWS used the
+ * function's role.
  */
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -93,9 +90,6 @@ export function selfHostDeps(pool: pg.Pool, env: NodeJS.ProcessEnv = process.env
     mailer: chooseMailer(env, credentials, fetch),
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
     fetchImpl: withTimeout((input, init) => fetch(input, init)),
-    smtpConnect: nodeSmtpConnect,
-    // Customer Messaging (SMS_PROVIDER): Twilio, or AWS End User Messaging SMS with an IAM user's keys (AWS_ACCESS_KEY_ID ...).
-    sms: chooseSmsProvider({ credentials, coord, fetchImpl: withTimeout((i, init) => fetch(i, init), 10_000) }),
   };
 }
 
@@ -309,42 +303,18 @@ export async function startWorker(env: NodeJS.ProcessEnv = process.env): Promise
         })
       : null;
   if (!schedules) logger.warn({}, "SCHEDULES is not on: no scheduled runs here");
-  const smsEvents = startSmsEventsBridge(env, deps, registry);
   const metrics = await serveMetrics(registry, port(env.METRICS_PORT, 9464));
-  logger.info({ concurrency, schedules: !!schedules, smsEvents: !!smsEvents }, "worker ready");
+  logger.info({ concurrency, schedules: !!schedules }, "worker ready");
 
   return {
     async close() {
-      // At once: the bridge's long poll (up to 20 s) and the jobs' grace both fit Docker's 60 s.
-      await Promise.all([schedules?.stop(), smsEvents?.stop(), runner.stop(Number(env.STOP_GRACE_MS) || 45_000)]);
+      // At once: the jobs' grace fits Docker's 60 s.
+      await Promise.all([schedules?.stop(), runner.stop(Number(env.STOP_GRACE_MS) || 45_000)]);
       await new Promise((done) => metrics.close(done));
       await pool.end();
       await disconnectDb();
     },
   };
-}
-
-/**
- * AWS's SMS delivery events (sqsBridge.ts), read only by the copy that is live: SCHEDULES=on is the
- * cutover's switch for that. A staging copy, or production before the cutover, would take events
- * the AWS functions should get, and apply them to the wrong database.
- */
-function startSmsEventsBridge(env: NodeJS.ProcessEnv, deps: SelfHostDeps, registry: Registry) {
-  const queueUrl = env.SMS_EVENTS_QUEUE_URL?.trim();
-  if (!queueUrl) return null;
-  if (env.SCHEDULES !== "on") {
-    logger.warn({}, "SMS_EVENTS_QUEUE_URL is set but SCHEDULES is not on: AWS's SMS events are left for the live copy");
-    return null;
-  }
-  const moved = registry.counter("bizinsights_sms_events_moved_total", "SMS delivery events moved from AWS's queue into this server's.");
-  const failed = registry.counter("bizinsights_sms_events_receive_errors_total", "Failed reads of AWS's SMS events queue.");
-  return startSqsBridge({
-    call: bridgeCall(queueUrl, roleCredentials(env), withTimeout((input, init) => fetch(input, init), 30_000)),
-    queueUrl,
-    target: deps.queues.smsEvents,
-    onMoved: (n) => moved.inc({}, n),
-    onError: () => failed.inc({}),
-  });
 }
 
 /** `server.mjs web|worker`: start the role, stop cleanly on SIGTERM (docker stop) or SIGINT. */

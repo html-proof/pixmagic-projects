@@ -34,10 +34,10 @@ export const JOB_TIMEOUT_MS = 900_000;
 /** How long a claim holds a job: its time limit and a minute more, so a slow job is never taken twice. */
 export const HOLD_S = JOB_TIMEOUT_MS / 1000 + 60;
 
-export const QUEUE_NAMES: QueueName[] = ["sync", "webhooks", "aggregate", "email", "smsEvents", "whatsapp"];
+export const QUEUE_NAMES: QueueName[] = ["sync", "webhooks", "aggregate", "email", "whatsapp"];
 
 /** Jobs at once per queue in one worker process: the jobs function's maxConcurrency per queue on AWS (infra/cdk app-stack.ts). */
-export const DEFAULT_CONCURRENCY: Record<QueueName, number> = { sync: 2, webhooks: 2, aggregate: 2, email: 2, smsEvents: 2, whatsapp: 3 };
+export const DEFAULT_CONCURRENCY: Record<QueueName, number> = { sync: 2, webhooks: 2, aggregate: 2, email: 2, whatsapp: 3 };
 
 /**
  * QUEUE_CONCURRENCY ({"sync":4,...}) over the defaults. Each running job holds a database
@@ -71,7 +71,7 @@ export function pgQueues(pool: Pool, o: { now?: () => number } = {}): Queues {
       ]);
     },
   });
-  return { sync: producer("sync"), webhooks: producer("webhooks"), aggregate: producer("aggregate"), email: producer("email"), smsEvents: producer("smsEvents"), whatsapp: producer("whatsapp") };
+  return { sync: producer("sync"), webhooks: producer("webhooks"), aggregate: producer("aggregate"), email: producer("email"), whatsapp: producer("whatsapp") };
 }
 
 interface Claimed {

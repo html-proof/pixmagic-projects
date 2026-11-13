@@ -23,7 +23,6 @@ import {
   Menu,
   MessageCircle,
   MessageCircleMore,
-  MessageSquareText,
   OctagonAlert,
   Package,
   PanelLeftClose,
@@ -44,7 +43,6 @@ import {
   UserRound,
   Users,
   UsersRound,
-  Workflow,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -60,7 +58,7 @@ import { closeSharedDashboard } from "@/components/team/AccessStates";
 import { leaveTo, signOut } from "@/lib/auth";
 import { CONTACT } from "@/lib/contact";
 import { SETTINGS_PAGES } from "@/lib/settingsNav";
-import { AUTOMATIONS_HUB, SIMPLE_MENU } from "@/lib/features";
+import { SIMPLE_MENU } from "@/lib/features";
 import { FOLD_FROM, folds, groupFolds, groupOpen, parseOpenGroups, toggleGroup, type MenuGroupId, type MenuLayout } from "@/lib/menu";
 import { MENU_LAYOUT_KEY, MENU_OPEN_KEY, MENU_RAIL_KEY, notesSeenKey, readLocal, removeLocal, TOUR_SEEN_KEY, writeLocal } from "@/lib/storage";
 import { startTour, TOUR_EVENT } from "@/lib/tour";
@@ -298,13 +296,9 @@ function Sidebar({ onNavigate, prefs, rail = false }: { onNavigate?: () => void;
     ...(offers("staff") && staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
     ...(me.employments?.length ? [area("/portal", "My work", Briefcase)] : []),
   ];
-  // The ad platforms by name (each its own pages in the Advertising area), then the ways of messaging customers.
-  const automationsHub = AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")));
+  // The ad platforms by name (each its own pages in the Advertising area), then WhatsApp.
   const marketing: NavItem[] = [
     ...(ads ? [{ ...area("/advertising/google", "Google Ads", Megaphone), glyph: <GoogleAdsIcon size={17} /> }, { ...area("/advertising/meta", "Meta Ads", Megaphone), glyph: <MetaIcon size={17} /> }] : []),
-    // Automations: one setup and one message history over SMS and email (WhatsApp keeps its own pages).
-    ...(automationsHub ? [area("/automations", "Automations", Workflow)] : []),
-    ...(offers("sms") && allowed("marketing.campaigns") ? [area("/messaging", "Customer Messaging", MessageSquareText)] : []),
     ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/dashboard/whatsapp-automation", "WhatsApp", MessageCircle)] : []),
   ];
   const settings: NavItem[] = [
@@ -951,12 +945,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             ...(allowed("marketing.campaigns") ? [{ id: "advertising-campaigns", label: "Campaign comparison", group: "Advertising", icon: Megaphone, keywords: "campaigns meta google side by side", go: go("/advertising/campaigns") }] : []),
             { id: "advertising-reports", label: "Advertising reports", group: "Advertising", icon: Megaphone, keywords: "csv export download ads", go: go("/advertising/reports") },
           ]
-        : []),
-      ...(AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")))
-        ? [{ id: "automations", label: "Automations", group: "Marketing", icon: Workflow, keywords: "automation workflow trigger sms email whatsapp message history delivery", go: go("/automations") }]
-        : []),
-      ...(offers("sms") && allowed("marketing.campaigns")
-        ? [{ id: "messaging", label: "Customer Messaging", group: "Marketing", icon: MessageSquareText, keywords: "sms text messages campaigns automations templates opt-out", go: go("/messaging") }]
         : []),
       ...(offers("whatsapp") && allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/dashboard/whatsapp-automation") }] : []),
       ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),

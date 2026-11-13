@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { AAD, encryptAdTokens, encryptTokenFields, getAccessToken, seal, sealedKeyVersion, waEncrypt, type FetchLike } from "@app/core";
+import { encryptAdTokens, encryptTokenFields, getAccessToken, waEncrypt, type FetchLike } from "@app/core";
 import { systemDb } from "@app/db";
 import { queryAs } from "@app/db/testing";
 import { sha256Hex } from "@app/shared";
@@ -25,7 +25,7 @@ beforeEach(async () => {
   evo = evolutionFake();
   revoked = { meta: [], google: [], other: [] };
   // Each provider set up, so its grant is taken back (Meta's revoke needs the app's keys, adConnections/config.ts).
-  ctx.setEnv({ ...EVOLUTION_ENV, EMAIL_GOOGLE_CLIENT_ID: "g-email", EMAIL_GOOGLE_CLIENT_SECRET: "g-secret", META_APP_ID: "meta_app", META_APP_SECRET: "meta_secret" });
+  ctx.setEnv({ ...EVOLUTION_ENV, META_APP_ID: "meta_app", META_APP_SECRET: "meta_secret" });
   ctx.setFetch((async (input: Parameters<FetchLike>[0], init?: RequestInit) => {
     const u = new URL(String(input instanceof Request ? input.url : input));
     if (u.host === new URL(EVOLUTION_ENV.EVOLUTION_API_URL).host) return evo.fetch(input as string, init);
@@ -126,10 +126,9 @@ async function business(tag: string) {
   });
   // A WhatsApp number linked through an Evolution API instance.
   await systemDb.wappConnection.create({ data: { workspaceId: ws, storeId: store.id, provider: "qr", shard: "a", status: "connected", instanceName: `bi-${tag}`, instanceTokenEnc: waEncrypt(store.id, "instance_token", `evo-${tag}`) } });
-  // A Gmail account bizinsights sends from.
+  // Rows the removed email module (2026-11-13) left in its tables, until those are dropped: they go with the workspace.
   const account = await systemDb.emailAccount.create({ data: { workspaceId: ws, provider: "google", connectionMethod: "oauth_google", emailAddress: `shop@${tag}.test`, status: "connected", connectedByUserId: o.user.id } });
-  const refresh = seal(`GMAIL_${tag}`, AAD.oauthRefresh(account.id));
-  await systemDb.emailOAuthCredential.create({ data: { workspaceId: ws, emailAccountId: account.id, refreshTokenEnc: refresh, encryptionKeyVersion: sealedKeyVersion(refresh) } });
+  await systemDb.emailOAuthCredential.create({ data: { workspaceId: ws, emailAccountId: account.id, refreshTokenEnc: `sealed-${tag}`, encryptionKeyVersion: 1 } });
   await systemDb.department.create({ data: { workspaceId: ws, name: "Warehouse" } });
   // A finalized payroll and a paid shift: the staff freeze triggers refuse deleting their items and
   // breaks one by one, so the workspace's deletion has to take them in the right order.
@@ -142,7 +141,7 @@ async function business(tag: string) {
   await systemDb.breakSession.create({ data: { workspaceId: ws, sessionId: shift.id, employeeId: employee.id, startAt: new Date("2026-10-02T12:00:00Z"), kind: "meal", paid: false } });
   await systemDb.attendanceSession.update({ where: { id: shift.id }, data: { lockedAt: new Date() } });
   await systemDb.payrollPeriod.update({ where: { id: period.id }, data: { lockedAt: new Date() } });
-  // Zapier, and the workspace's own API key and email-event key.
+  // Zapier, and the workspace's own API key (and an event key of the removed email module).
   const grant = await systemDb.zapierGrant.create({ data: { workspaceId: ws, storeId: store.id, userId: o.user.id, clientId: "zapier" } });
   await systemDb.zapierToken.create({ data: { workspaceId: ws, grantId: grant.id, kind: "access", tokenHash: sha256Hex(`zat-${tag}`), expiresAt: new Date(Date.now() + 3_600_000) } });
   await systemDb.zapierHook.create({ data: { workspaceId: ws, storeId: store.id, grantId: grant.id, event: "new_alert", targetUrl: `https://hooks.zapier.com/${tag}` } });
@@ -177,13 +176,13 @@ describe("deleting a workspace", () => {
     // The record outlives it: no workspace, who asked, which shops.
     const record = await systemDb.auditLog.findFirstOrThrow({ where: { action: "workspace.deleted" } });
     expect(record).toMatchObject({ workspaceId: null, actorUserId: a.owner.user.id, targetType: "workspace", targetId: a.ws });
-    expect(record.metadata).toMatchObject({ via: "workspace", shops: ["acme.myshopify.com", "acme-old.myshopify.com"], members: 2, emailAccounts: 1 });
+    expect(record.metadata).toMatchObject({ via: "workspace", shops: ["acme.myshopify.com", "acme-old.myshopify.com"], members: 2 });
 
-    // What it was given elsewhere: the WhatsApp instance, the Meta grant, the Gmail grant.
+    // What it was given elsewhere: the WhatsApp instance and the Meta grant.
     expect(evo.calls.map((c) => `${c.method} ${c.path}`)).toContain("DELETE /instance/delete/bi-acme");
     expect(evo.calls.some((c) => c.path.endsWith("/bi-other"))).toBe(false);
     expect(revoked.meta).toEqual(["META_acme"]);
-    expect(revoked.google).toEqual(["GMAIL_acme"]);
+    expect(revoked.google).toEqual([]);
 
     // The people stay; their way in is gone.
     expect(await systemDb.user.count({ where: { id: { in: [a.owner.user.id, a.member.user.id] } } })).toBe(2);
@@ -269,17 +268,6 @@ describe("deleting a workspace", () => {
     expect((await del(a.ws, a.member.headers, code)).statusCode).toBe(200);
     expect(await systemDb.workspace.count({ where: { id: a.ws } })).toBe(0);
     expect((await call("GET", `/workspaces/${a.ws}/stores`, a.owner.headers)).statusCode).toBe(404);
-  });
-
-  it("keeps the Google grant of a mailbox another workspace also sends from", async () => {
-    const a = await business("mailbox");
-    const b = await business("mailshare");
-    await systemDb.emailAccount.updateMany({ where: { workspaceId: b.ws }, data: { emailAddress: "Shop@Mailbox.test" } });
-    const code = await workspaceDeletionCode(ctx, a.owner.headers, a.ws, "owner@mailbox.test");
-    expect((await del(a.ws, a.owner.headers, code)).statusCode).toBe(200);
-    expect(revoked.google).toEqual([]);
-    expect(await systemDb.emailOAuthCredential.count({ where: { workspaceId: b.ws } })).toBe(1);
-    expect(revoked.meta).toEqual(["META_mailbox"]);
   });
 
   it("waits while Shopify bills a paid plan for it, without spending the code", async () => {
