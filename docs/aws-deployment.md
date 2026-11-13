@@ -889,9 +889,10 @@ UTC the owner's "delete everything in AWS" took the stacks
 ([LEAVING_AWS.md](ikorex-migration/LEAVING_AWS.md)): the distribution, its viewer function and the
 WAF are gone, and the cloudfront.net name no longer resolves. Two things outlived them:
 
-- **Cloudflare's rule `Origin lock for CloudFront`** still adds the header on both names. It now
-  arrives at the server through the tunnel, which doesn't read it, and opens nothing. It can be
-  deleted (the owner's to decide: Rules → Overview, the rule's menu → Delete).
+- **Cloudflare's rule `Origin lock for CloudFront`** kept adding the header on both names, to the
+  server through the tunnel, which doesn't read it. Deleted on 2026-11-13 at 07:50 UTC (the owner's
+  "Yes, delete it"; Rules → Overview, the rule's menu → Delete): Cloudflare sends the secret to
+  nobody now.
 - **The secret** `insights/production/origin-lock` and its Parameter Store copy
   `/insights/production/origin-lock`: the Data stack kept it on purpose (`RETAIN`), US$0.40 a
   month until it is deleted with the rest of Secrets Manager.
