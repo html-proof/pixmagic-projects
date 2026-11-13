@@ -1,7 +1,5 @@
-import { createServer, type AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { consumeSqs, isSqsEvent, type SqsEvent } from "../src/consumer.js";
-import { nodeSmtpConnect } from "../src/nodeSmtp.js";
 import { s3Blobs } from "../src/s3Blobs.js";
 import { NOT_BEFORE, parseQueueUrls, sqsApi, sqsQueues } from "../src/sqsQueues.js";
 
@@ -11,7 +9,6 @@ const urls = {
   webhooks: "https://sqs.ap-southeast-2.amazonaws.com/123/insights-test-webhooks",
   aggregate: "https://sqs.ap-southeast-2.amazonaws.com/123/insights-test-aggregate",
   email: "https://sqs.ap-southeast-2.amazonaws.com/123/insights-test-email",
-  smsEvents: "https://sqs.ap-southeast-2.amazonaws.com/123/insights-test-smsEvents",
   whatsapp: "https://sqs.ap-southeast-2.amazonaws.com/123/insights-test-whatsapp",
 };
 
@@ -46,10 +43,10 @@ describe("SQS producers", () => {
   it("carry a delay past SQS's 15 minutes in the body", async () => {
     const sqs = fakeSqs();
     const queues = sqsQueues(urls, { region: "ap-southeast-2", credentials: creds, fetchImpl: sqs.fetchImpl, now: () => 1_000_000 });
-    await queues.email.send({ kind: "email_send", messageId: "x" }, { delaySeconds: 7200 });
+    await queues.email.send({ kind: "team_invitation", deliveryId: "x" }, { delaySeconds: 7200 });
     const sent = sqs.calls[0]!.body;
     expect(sent.DelaySeconds).toBe(900);
-    expect(JSON.parse(sent.MessageBody as string)).toEqual({ kind: "email_send", messageId: "x", [NOT_BEFORE]: 1_000_000 + 7_200_000 });
+    expect(JSON.parse(sent.MessageBody as string)).toEqual({ kind: "team_invitation", deliveryId: "x", [NOT_BEFORE]: 1_000_000 + 7_200_000 });
   });
 
   it("refuse a QUEUE_URLS without every queue", () => {
@@ -96,7 +93,7 @@ describe("the SQS consumer", () => {
     const sqs = fakeSqs();
     let ran = false;
     const now = 5_000_000;
-    const result = await consumeSqs({ Records: [record("email", { kind: "email_send", messageId: "x", [NOT_BEFORE]: now + 3_600_000 })] } as SqsEvent, {
+    const result = await consumeSqs({ Records: [record("email", { kind: "team_invitation", deliveryId: "x", [NOT_BEFORE]: now + 3_600_000 })] } as SqsEvent, {
       call: sqsApi({ region: "ap-southeast-2", credentials: creds, fetchImpl: sqs.fetchImpl }),
       urls,
       now: () => now,
@@ -114,7 +111,7 @@ describe("the SQS consumer", () => {
   it("runs a due message without the bookkeeping field", async () => {
     const sqs = fakeSqs();
     let body: unknown;
-    await consumeSqs({ Records: [record("email", { kind: "email_send", messageId: "x", [NOT_BEFORE]: 1 })] } as SqsEvent, {
+    await consumeSqs({ Records: [record("email", { kind: "team_invitation", deliveryId: "x", [NOT_BEFORE]: 1 })] } as SqsEvent, {
       call: sqsApi({ region: "ap-southeast-2", credentials: creds, fetchImpl: sqs.fetchImpl }),
       urls,
       run: async (_q, msg) => {
@@ -122,7 +119,7 @@ describe("the SQS consumer", () => {
         msg.ack();
       },
     });
-    expect(body).toEqual({ kind: "email_send", messageId: "x" });
+    expect(body).toEqual({ kind: "team_invitation", deliveryId: "x" });
   });
 
   it("reports a message from an unknown queue as failed (the redrive policy parks it)", async () => {
@@ -152,32 +149,5 @@ describe("S3 payloads", () => {
     await blobs.delete("webhooks/a b.json");
     expect(await blobs.get("webhooks/a b.json")).toBeNull();
     expect(seen[0]).toBe("PUT b.s3.ap-southeast-2.amazonaws.com/webhooks/a%20b.json signed");
-  });
-});
-
-describe("SMTP over Node sockets", () => {
-  it("reads what the server says and writes what the client sends", async () => {
-    const server = createServer((sock) => {
-      sock.write("220 hello\r\n");
-      sock.on("data", (d) => {
-        if (d.toString().startsWith("QUIT")) sock.end("221 bye\r\n");
-      });
-    });
-    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
-    const { port } = server.address() as AddressInfo;
-    try {
-      const sock = await nodeSmtpConnect({ host: "127.0.0.1", port, implicitTls: false });
-      expect(new TextDecoder().decode((await sock.read())!)).toBe("220 hello\r\n");
-      await sock.write(new TextEncoder().encode("QUIT\r\n"));
-      expect(new TextDecoder().decode((await sock.read())!)).toBe("221 bye\r\n");
-      expect(await sock.read()).toBeNull();
-      await sock.close();
-    } finally {
-      server.close();
-    }
-  });
-
-  it("fails to connect to a closed port", async () => {
-    await expect(nodeSmtpConnect({ host: "127.0.0.1", port: 1, implicitTls: false })).rejects.toThrow();
   });
 });

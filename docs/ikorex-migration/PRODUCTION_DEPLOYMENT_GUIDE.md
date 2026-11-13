@@ -7,7 +7,7 @@ each gets its evidence in [MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md) w
 
 The files: `infra/ikorex/` (Compose files, images, scripts, monitoring) and the runtime in
 `apps/aws/src/` (`selfhost.ts`, `server.ts`, `admin.ts`, `pgQueues.ts`, `schedules.ts`, `pgCoord.ts`,
-`fsBlobs.ts`, `metrics.ts`, `sqsBridge.ts`).
+`fsBlobs.ts`, `metrics.ts`).
 
 ## Before anything: the owner and the server's administrator
 
@@ -30,9 +30,7 @@ Accounts and keys (owner, in each provider's console):
 | An R2 bucket `bizinsights-backups` and an API token (Object Read & Write, this bucket only) | Cloudflare → R2 | `env/postgres.env` `PGBACKREST_REPO1_*` |
 | A backup passphrase (`openssl rand -base64 48`), also in the owner's password manager | — | `env/postgres.env` `PGBACKREST_REPO1_CIPHER_PASS` |
 | Two checks: the nightly backup ping, and `https://bizinsights.io/api/readyz` every 5 minutes | healthchecks.io / UptimeRobot (free tiers) | `env/postgres.env` `BACKUP_PING_URL` |
-| An IAM user `bizinsights-ikorex`, until stage F, with only: Cognito's password check and admin actions on the pool (`AUTH_MODE=migrating`); and only if SMS is still on AWS at the cutover, `sms-voice:SendTextMessage` (and what `smsProvider.ts` reads) and `sqs:ReceiveMessage` + `sqs:DeleteMessage` on the `insights-production-smsEvents` queue | AWS IAM | `env/app.env` `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
-| Twilio's Auth Token (SMS, `SMS_PROVIDER=twilio`; [docs/sms.md](../sms.md), "Twilio") | Twilio Console → Account info | `env/app.env` `TWILIO_AUTH_TOKEN` |
-| Only if SMS is still on AWS: the `smsEvents` queue's URL, `https://sqs.ap-southeast-2.amazonaws.com/<account>/insights-production-smsEvents` (also the `smsEvents` entry of the functions' `QUEUE_URLS`) | AWS | `env/app.env` `SMS_EVENTS_QUEUE_URL`, production only, read only once `SCHEDULES=on` |
+| An IAM user `bizinsights-ikorex`, until stage F, with only: Cognito's password check and admin actions on the pool (`AUTH_MODE=migrating`) | AWS IAM | `env/app.env` `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
 
 On the server, as `deployer`, the project folder (nothing outside it is touched):
 
@@ -183,7 +181,7 @@ before it needs the file copied again into `C:\ProgramData\bizinsights-runner` (
 | What is configured (names only) | `docker compose --profile admin run --rm admin config` |
 | Backups in the bucket | `docker compose exec backup pgbackrest --stanza=bizinsights info` |
 | Restore test now | `docker compose exec backup restore-test.sh` |
-| Turn schedules on (production, at the cutover; with SMS still on AWS, also starts reading its SMS events) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=on/' .env && docker compose up -d worker` |
+| Turn schedules on (production, at the cutover) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=on/' .env && docker compose up -d worker` |
 | Turn schedules off (first step of a copy back to AWS, [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md#the-copy-back-de-after-writes-on-ikorex)) | `sed -i 's/^SCHEDULES=.*/SCHEDULES=off/' .env && docker compose up -d worker` |
 
 ## Rolling back a release
@@ -235,7 +233,7 @@ drained), the real copy replaces the server's `app` and `evolution`:
 node infra/ikorex/scripts/copy-db.mjs --cutover --replace
 ```
 
-It refuses while any AWS queue but the SMS events holds a message, stops `web`, `worker` and
+It refuses while any AWS queue but the dead-letter queue holds a message, stops `web`, `worker` and
 `evolution` on the server, and ends with `admin migrate` and the comparison again. Exit 1 means a
 difference: the cutover stops there (ROLLBACK_PLAN.md). The report (counts only) is saved in
 `C:\Users\Seban\insights-backups`; the dumps are deleted from the bucket.

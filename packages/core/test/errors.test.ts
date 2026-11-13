@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { AppError, EmailError, providerDetail, StaffError, WhatsappError } from "../src/index.js";
+import { AppError, providerDetail, StaffError, WhatsappError } from "../src/index.js";
 
 describe("errors", () => {
   it("every module's rule violation is an AppError the API can answer as is", () => {
-    for (const err of [new StaffError(409, "locked", "Locked."), new EmailError("Gone.", 410, "gone"), new WhatsappError("Connect first.", 409, "not_connected")]) {
+    for (const err of [new StaffError(409, "locked", "Locked."), new WhatsappError("Connect first.", 409, "not_connected")]) {
       expect(err).toBeInstanceOf(AppError);
       expect(err.name).not.toBe("AppError");
     }

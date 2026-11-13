@@ -19,7 +19,7 @@ browser ──► CloudFront + WAF ──► Lambda "api"           or  Node HTT
               everything else                            ──► static UI (apps/web, Next.js static export)
                                                              (if the function can't answer: apps/web's /unavailable page, from S3)
 
-jobs   SQS (sync, webhooks, aggregate, email, smsEvents, whatsapp) ──► Lambda "jobs"   or  in-process queues ──► consume()       (apps/worker)
+jobs   SQS (sync, webhooks, aggregate, email, whatsapp) ──► Lambda "jobs"   or  in-process queues ──► consume()       (apps/worker)
 cron   EventBridge Scheduler (*/15, 03:15)    ──► Lambda "cron"   or  POST /__scheduled ──► runScheduled()  (apps/worker)
 
 apps/api and apps/worker ──► packages/core (Shopify, Meta, Google, WhatsApp, email, staff, persistence)
@@ -44,9 +44,9 @@ Each package may import only the ones above it in this table, never one below.
 
 | Package | Holds | Must not |
 | --- | --- | --- |
-| `packages/shared` | Pure functions and constants: KPI formulas, dates, roles and permissions, HMAC/AES, WhatsApp template rules, Zod schemas shared by API and UI, the staff pay/time engine (`@app/shared/staff`), the email rule and template engine (`@app/shared/email`), Customer Messaging's SMS rules (`@app/shared/sms`: parts and encoding, variables, consent, delivery statuses), the Automations hub's trigger catalog and status scale (`@app/shared/automations`), the Google Ads demo's generator and the Google Ads analytics figures (`adsDemo.ts`, `adsAnalytics.ts`). Browser-safe subpath exports (`@app/shared/roles`, `/dates`, `/whatsapp`, `/staff`, `/email`, ...). | Do I/O, read env, import Prisma. The UI imports subpaths only: the root barrel pulls `node:crypto` into the browser. |
+| `packages/shared` | Pure functions and constants: KPI formulas, dates, roles and permissions, HMAC/AES, WhatsApp template rules, Zod schemas shared by API and UI, the staff pay/time engine (`@app/shared/staff`), email addresses as the app's own mail checks, normalizes and masks them (`@app/shared/email`), the Google Ads demo's generator and the Google Ads analytics figures (`adsDemo.ts`, `adsAnalytics.ts`). Browser-safe subpath exports (`@app/shared/roles`, `/dates`, `/whatsapp`, `/staff`, `/email`, ...). | Do I/O, read env, import Prisma. The UI imports subpaths only: the root barrel pulls `node:crypto` into the browser. |
 | `packages/db` | Prisma schema, migrations (with RLS policies), `systemDb` / `tenantDb` / `withTenant` / `withDb`. | Contain business rules. |
-| `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync (the GraphQL documents in `shopifyQueries.ts`), token encryption and key rotation (`keyRotation.ts`), normalizers, persistence and aggregates, alerts and audit, ad platforms (`ads/`: one client per platform, and `googleAdsSource.ts`, the source a Google Ads connection reads from: Google's API, or the generator behind the Google Ads demo, [ads-demo.md](ads-demo.md); `adConnections/`: connected accounts, their tokens, sync and reports, `demo.ts` the demo connection), WhatsApp, email integrations (`email/`: OAuth, SMTP, delivery, rules; docs/email.md), the Inventory module (`inventory/`: stock levels and locations, alerts, stock changes, its reports; docs/inventory.md), Customer Messaging (`sms/`, imported as `@app/core/sms`: SMS through AWS End User Messaging behind an `SmsProvider`; docs/sms.md), the Automations hub (`automations/`, imported as `@app/core/automations`: one adapter per channel over the SMS and email engines, the merged history; docs/automations.md), Zapier (`zapier/`, imported as `@app/core/zapier`: bizinsights as the OAuth provider of its Zapier app, the event outbox and its deliveries; [zapier.md](zapier.md)), the store's own costs (`expenses.ts`: Profit & Loss, Settings → Costs and the dashboard's `expenses` module, the recurring costs' payments recorded by the cron sweep; the rules, net profit included, in `@app/shared/expenses`; [kpis.md](kpis.md) "Costs and net profit"). Every Meta Graph API call, ads and WhatsApp alike, goes through `metaGraph.ts` (token in the Authorization header, paging links only to graph.facebook.com). The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
+| `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync (the GraphQL documents in `shopifyQueries.ts`), token encryption and key rotation (`keyRotation.ts`), normalizers, persistence and aggregates, alerts and audit, ad platforms (`ads/`: one client per platform, and `googleAdsSource.ts`, the source a Google Ads connection reads from: Google's API, or the generator behind the Google Ads demo, [ads-demo.md](ads-demo.md); `adConnections/`: connected accounts, their tokens, sync and reports, `demo.ts` the demo connection), WhatsApp, the Inventory module (`inventory/`: stock levels and locations, alerts, stock changes, its reports; docs/inventory.md), Zapier (`zapier/`, imported as `@app/core/zapier`: bizinsights as the OAuth provider of its Zapier app, the event outbox and its deliveries; [zapier.md](zapier.md)), the store's own costs (`expenses.ts`: Profit & Loss, Settings → Costs and the dashboard's `expenses` module, the recurring costs' payments recorded by the cron sweep; the rules, net profit included, in `@app/shared/expenses`; [kpis.md](kpis.md) "Costs and net profit"). Every Meta Graph API call, ads and WhatsApp alike, goes through `metaGraph.ts` (token in the Authorization header, paging links only to graph.facebook.com). The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
 | `apps/api` | HTTP: routing, auth, permission checks, input validation, response shapes. | Hold business logic that a job or another route could need: put it in core. |
 | `apps/worker` | Queue consumers and cron sweeps (`src/handlers/`: one module per job, re-exported by `handlers.ts`): retries, backoff, failure bookkeeping, then a call into core. `ops/` holds one-off maintenance tasks (RUNBOOK.md). | |
 | `apps/aws` | The Lambda entry (one build, three functions: api, jobs, cron; plus `cognitoEmail.ts`, its own small entry in the same package for the Cognito pool's email trigger): loads secrets at cold start, wires DynamoDB, SQS, S3 and SES into `Deps`, serves the UI and the API on one origin, gives every outbound call its timeout (`withTimeout`), runs migrations on request. The app's shared settings (`settings.ts`) and the local server (`local.ts`, `dev.ts`, `localQueues.ts`), which wires the same app to in-process stand-ins. | Contain logic beyond that wiring. |
@@ -107,19 +107,17 @@ Where a new piece of code goes:
 
 Where every connection of a store stands is worked out once, on the server:
 `GET /workspaces/:ws/stores/:storeId/integrations` (`routes/integrations.ts`) answers each module
-(Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, email) on one scale of six statuses:
+(Shopify, Meta Ads, Google Ads, AdSense, WhatsApp) on one scale of six statuses:
 connected, pending, reauthorization_required, syncing, error, disconnected. The scale, each
 provider's states mapped onto it, and the ad cards' own states (`connectionState`, `platformState`,
 which `apps/web/src/lib/adConnections.ts` re-exports) are pure functions in
 `@app/shared/integrations`; core's `integrations/status.ts` composes what each module already says
 about itself (the store's status and `syncProblem`, the ad rows and waiting sign-ins,
-`waConnectionView`, the Automations hub's SMS and email cards) and decides nothing again. A new
+`waConnectionView`) and decides nothing again. A new
 provider adds its mapping in shared and its module in core, and no page needs logic of its own.
 Zapier isn't one of its modules: its Settings card reads `GET …/zapier`
-([zapier.md](zapier.md#settings--integrations)). Every caller is told the same statuses; a
-channel's accounts and reasons stay with whoever may open its own page (the SMS sender with View
-campaigns, and neither SMS's nor email's with an API key). The answer's shape, the mappings and who
-is offered which action: [api/api-overview.md](api/api-overview.md#integration-status).
+([zapier.md](zapier.md#settings--integrations)). Every caller is told the same statuses. The
+answer's shape, the mappings and who is offered which action: [api/api-overview.md](api/api-overview.md#integration-status).
 
 Meta has a second answer of its own, `GET /workspaces/:ws/stores/:storeId/meta/discovery` (core's
 `integrations/metaDiscovery.ts`, `@app/shared/metaDiscovery`): Meta found through the store's
@@ -139,8 +137,8 @@ access with an app, so Meta seen only in Shopify is never "connected":
   (`parseShopify`, `parseShopifyList` for a page), `core/whatsapp/webhook.ts` (Evolution API's
   deliveries) and `core/whatsapp/cloud.ts` (Meta's, for Cloud API numbers).
   What doesn't fit is logged (field paths, never values) and skipped, not thrown: a retry would only
-  meet the same payload again. The WhatsApp and email automations read an order or checkout only
-  once they are about to act on it, so a store that doesn't use them logs nothing about it. The
+  meet the same payload again. WhatsApp Automation reads an order or checkout only
+  once it is about to act on it, so a store that doesn't use it logs nothing about it. The
   exception is the GDPR topics: a `customers/redact` or `customers/data_request` that can't be read
   fails at once (`UnrecoverableError`: recorded as failed and alerted), never marked as done.
 - Each cron sweep runs on its own: one that throws is logged and the rest of the tick still runs.
@@ -251,10 +249,9 @@ menu entry still opens its own page.
 
 **The Settings pages (Stitch screens 30–35).** The settings menu and its pages are unchanged; what is
 on each follows the design: Integrations is screen 30's Connections, a card per connection two to a
-row (Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, Email, Zapier), each with its own state
+row (Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, Zapier), each with its own state
 and the same on the one scale of six (`data-status`, [Integration status](#integration-status)).
-SMS and Email are told by `GET …/integrations` alone (`components/integrations/ChannelCards.tsx`);
-the others keep their own answers and wording (`IntegrationRow.tsx`, `AdRow.tsx`, `ZapierCard.tsx`).
+Each keeps its own answers and wording (`IntegrationRow.tsx`, `AdRow.tsx`, `ZapierCard.tsx`).
 Workspace and Costs are screen 31's Business details (the time zone and currency locked, as Shopify
 gives them), Team & Access is screen 32, Notifications 33, Profile and Security 34, Privacy requests
 and Audit log 35; Shopify, Advertising, Billing and API keys take the same look. Each page's title is
@@ -275,20 +272,17 @@ approve", Record payment per person). The other pages take the same look from th
 screen 29: the organization and who is signed in at the top, one big Clock in, and the sections as
 a bar of icons along the bottom of a phone; it sets the same Inter type (`app-look`) as the app.
 
-**The Marketing pages (Stitch screens 14–20).** Automations, Customer Messaging, WhatsApp and the
-email pages keep their routes and section menus; what is on each page follows the design, through
-`components/automations/MarketingKit.tsx` on top of PageKit: tables with a tinted head row
+**The Marketing pages (Stitch screens 14–20).** WhatsApp Automation's pages keep their routes and
+section menu; what is on each page follows the design, through
+`components/whatsapp/MarketingKit.tsx` on top of PageKit: tables with a tinted head row
 (`TableCard`, `TableHead`, `Th`, `TD`, `ROW`), a channel's chip (`Chip`), the line of a page's few
-facts (`FactsLine`), numbered form parts (`StepCard`, `StepTitle`: the number stays in the
-heading's words for screen readers and the specs), a channel's card with one status word and its
-facts (`ChannelPanel`, `FactList`), a filter bar (`FilterBar`) and the design's switch (`Switch`, a
-real checkbox with role "switch"). /automations is screen 14 (the automations as rows, each
-channel's card under them), the setup and the builders are 19 (numbered steps ending in "Check and
-turn on"), the message histories and Delivery Analytics are 17, campaigns (SMS and WhatsApp) are 15,
-consent, segments and WhatsApp customers are 16, and the SMS setup and sender, WhatsApp setup and
-settings and the email accounts and domains are 18. Every figure is the page's own API answer; what
-the design shows and no API returns (a total reach per channel, a "Pause all" across channels, SMS
-spend beside the sender) is left out.
+facts (`FactsLine`), numbered form parts (`StepCard`), and a channel's card with one status word
+and its facts (`ChannelPanel`, `FactList`). The setup and the builders are screen 19 (numbered
+steps), the message history is 17, campaigns are 15, WhatsApp customers are 16, and WhatsApp setup
+and settings are 18. Every figure is the page's own API answer; what the design shows and no API
+returns (a total reach per channel, a "Pause all" across channels) is left out. The design's other
+Marketing screens were for the Automations hub (screen 14), Customer Messaging (SMS) and Email
+integrations, which were removed from the app on 2026-11-13.
 
 **Fonts and prefetch.** Signed-in pages are in Inter (above). Only the landing page, the split-card
 auth pages (`AuthSplitShell`) and the legal pages (`LegalPage`: /support, /privacy, /terms,
@@ -384,7 +378,7 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
   use default exports.
 - **Errors**: `XxxError extends Error` (or `AppError`, for a rule the person broke) and sets
   `this.name`, so logs say which.
-- **API**: route files by area (`routes/smsAutomations.ts`), registration functions `<area>Routes`.
+- **API**: route files by area (`routes/staffPayroll.ts`), registration functions `<area>Routes`.
 - **Relative imports inside packages** use the `.js` extension (`./dates.js`), except in the
   `packages/shared` modules the UI imports by subpath (`ads.ts`, `sales.ts`): Next's bundler does
   not map `./dates.js` to `dates.ts` in a workspace package, so those stay extensionless.

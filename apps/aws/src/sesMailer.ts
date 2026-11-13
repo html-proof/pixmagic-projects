@@ -6,7 +6,6 @@ import type { AwsCredentials } from "./awsClient.js";
  * App email (invitations, alerts, staff notices) through Amazon SES v2. Each sender
  * (core/mail/senders.ts) must be an SES-verified address, or on a verified domain, in this region; while the account is in the SES sandbox,
  * recipients must be verified too (SES answers 400 otherwise, and the caller logs it).
- * Merchants' own connected accounts (Gmail, Microsoft 365, SMTP) don't come through here.
  */
 export interface SesOptions {
   region: string;

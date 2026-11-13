@@ -64,7 +64,7 @@ describe.skipIf(!adminUrl)("self-hosted runtime on PostgreSQL", () => {
 
     it("brings a retried job back after its delay with the next delivery count; a lapsed hold can't settle it", async () => {
       const t1 = randomUUID();
-      await pgQueues(pool, { now: () => T0 }).email.send({ kind: "email_send", messageId: "m" });
+      await pgQueues(pool, { now: () => T0 }).email.send({ kind: "team_invitation", deliveryId: "m" });
       const [job] = await claimJobs(pool, "email", 1, t1, T0, 60);
       await retryJob(pool, job!.id, t1, 10, T0);
       expect(await claimJobs(pool, "email", 1, randomUUID(), T0 + 9_000)).toEqual([]);
@@ -98,7 +98,7 @@ describe.skipIf(!adminUrl)("self-hosted runtime on PostgreSQL", () => {
       const runner = startQueueRunner({
         pool,
         pollMs: 20,
-        concurrency: { sync: 0, webhooks: 0, aggregate: 2, email: 0, smsEvents: 0, whatsapp: 0 },
+        concurrency: { sync: 0, webhooks: 0, aggregate: 2, email: 0, whatsapp: 0 },
         run: async (_q, msg: QueueMessage) => {
           const body = msg.body as { storeId: string };
           seen.push(msg.attempts);
@@ -125,7 +125,7 @@ describe.skipIf(!adminUrl)("self-hosted runtime on PostgreSQL", () => {
       const second = startQueueRunner({
         pool,
         pollMs: 20,
-        concurrency: { sync: 0, webhooks: 0, aggregate: 1, email: 0, smsEvents: 0, whatsapp: 0 },
+        concurrency: { sync: 0, webhooks: 0, aggregate: 1, email: 0, whatsapp: 0 },
         run: async () => {
           throw new Error("must not run");
         },
@@ -142,7 +142,7 @@ describe.skipIf(!adminUrl)("self-hosted runtime on PostgreSQL", () => {
 
       const stats = await queueStats(pool, Date.now());
       expect(stats.find((s) => s.queue === "aggregate")).toMatchObject({ ready: 0, dead: 1 });
-      expect(stats.map((s) => s.queue)).toEqual(expect.arrayContaining(["sync", "webhooks", "aggregate", "email", "smsEvents", "whatsapp"]));
+      expect(stats.map((s) => s.queue)).toEqual(expect.arrayContaining(["sync", "webhooks", "aggregate", "email", "whatsapp"]));
 
       expect(await redriveDead(pool, { queue: "aggregate" })).toBe(1);
       const [back] = (await pool.query("SELECT receives, body->>'storeId' AS store FROM job_queue")).rows;
@@ -159,7 +159,7 @@ describe.skipIf(!adminUrl)("self-hosted runtime on PostgreSQL", () => {
         pool,
         pollMs: 20,
         jobTimeoutMs: 200,
-        concurrency: { sync: 0, webhooks: 0, aggregate: 0, email: 0, smsEvents: 0, whatsapp: 2 },
+        concurrency: { sync: 0, webhooks: 0, aggregate: 0, email: 0, whatsapp: 2 },
         run: async (_q, msg) => {
           if ((msg.body as { messageId: string }).messageId === "throws") throw new Error("boom");
           await new Promise(() => {}); // never settles
@@ -183,7 +183,7 @@ describe.skipIf(!adminUrl)("self-hosted runtime on PostgreSQL", () => {
         pool,
         pollMs: 20,
         jobTimeoutMs: 300,
-        concurrency: { sync: 0, webhooks: 0, aggregate: 0, email: 0, smsEvents: 0, whatsapp: 1 },
+        concurrency: { sync: 0, webhooks: 0, aggregate: 0, email: 0, whatsapp: 1 },
         run: async () => {
           started++;
           await new Promise(() => {});

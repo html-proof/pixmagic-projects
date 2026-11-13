@@ -160,27 +160,6 @@ export const APP_SETTINGS = {
   // token"): bizinsights' own team, to record App Review with the app's test number before Meta
   // approves bizinsights as a Tech Provider. Since 2026-10-29: the PixMagic workspace. Empty: no one.
   "WHATSAPP_TOKEN_CONNECT_WORKSPACES": "cmvarpfwa000002jngkgh5ji2",
-  // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "live" since 2026-10-25:
-  // automations, campaigns and Send SMS hand texts to AWS, each after every check (sender verified
-  // and tagged for the store, sending on, consent, opt-outs, quiet hours, the monthly limit). AWS
-  // itself still decides who can receive: while the account is in its SMS sandbox (ACCOUNT_TIER
-  // SANDBOX, US$1 a month, checked 2026-10-25) only verified numbers get texts, and the dashboard
-  // says so ("Your SMS account is still being verified"). "sandbox" records automations' texts as
-  // dry runs instead; "off" stops everything (docs/sms.md, "Rollback"). Marketing texts need this
-  // switch and each store's own. The configuration set comes from the App stack.
-  "SMS_MODE": "live",
-  "SMS_MARKETING_ENABLED": "1",
-  "SMS_ACCOUNT_MONTHLY_LIMIT_USD": "20",
-  // A merchant asking for a sender name in Set up SMS emails this address: the platform owner
-  // requests it from AWS, registers it where the country requires that, and tags it for the
-  // workspace (docs/sms.md, "Sender names from Set up SMS").
-  "SMS_SENDER_REQUESTS_TO": "bizinsightsaus@yahoo.com",
-  // Email integrations (docs/email.md): "Connect Gmail / Google Workspace" and "Connect Outlook /
-  // Microsoft 365". Empty until the OAuth clients exist (the buttons say so; SMTP works regardless).
-  // Their secrets are in Secrets Manager. "common" accepts work, school and personal Microsoft accounts.
-  "EMAIL_GOOGLE_CLIENT_ID": "",
-  "EMAIL_MICROSOFT_CLIENT_ID": "",
-  "EMAIL_MICROSOFT_AUTHORITY": "common",
   // Zapier (docs/zapier.md, "Owner setup"): bizinsights is the OAuth provider of its app on Zapier's
   // Developer Platform. ZAPIER_CLIENT_ID: the client id the owner chose and entered in the Zapier app's
   // environment (CLIENT_ID); its secret is in Secrets Manager (put-secrets.mjs --set ZAPIER_CLIENT_SECRET).

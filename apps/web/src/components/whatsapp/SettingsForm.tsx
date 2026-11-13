@@ -1,7 +1,7 @@
 "use client";
 import { useId, useMemo, useState } from "react";
 import { WA_ORDER_UPDATE_BASES, WA_ORDER_UPDATE_INFO, WA_PER_CUSTOMER_DAILY, type WaOrderUpdateBasis } from "@app/shared/whatsapp";
-import { fmtHour } from "@/components/messaging/MessagingUi";
+import { fmtHour } from "./ListUi";
 import { api } from "@/lib/api";
 import type { WaOverview } from "./types";
 import { useWaAction } from "./WaUi";

@@ -6,7 +6,7 @@ import { crossTenant, forTenant, systemDb } from "@app/db";
  *
  * Jobs carry ids, not workspaces (core queues.ts), so the workspace is read from the row the job is
  * about: its store, ad connection, message, delivery or event. A job whose row names none (a Shopify
- * webhook for a shop with no store, WhatsApp's raw events, AWS's SMS events) finds its own store,
+ * webhook for a shop with no store, WhatsApp's raw events) finds its own store,
  * so it runs across workspaces: the `job` reason (@app/db crossTenant.ts).
  *
  * A failed lookup never fails the job: the database being down is consume()'s to notice (it
@@ -26,7 +26,6 @@ export async function jobWorkspace(queue: QueueName, body: unknown): Promise<str
 
   if (queue === "sync") {
     if (job.kind === "ads") return lookup(id("connectionId"), (where) => systemDb.adConnection.findUnique({ where, select }).then(of));
-    if (job.kind === "sms") return lookup(id("jobId"), (where) => systemDb.smsMessageJob.findUnique({ where, select }).then(of));
     if (job.kind === "zapier") return lookup(id("deliveryId"), (where) => systemDb.zapierDelivery.findUnique({ where, select }).then(of));
     // Store syncs, the check against Shopify, Shopify's report figures: each names its store.
     return lookup(id("storeId"), (where) => systemDb.store.findUnique({ where, select }).then(of));
@@ -35,9 +34,7 @@ export async function jobWorkspace(queue: QueueName, body: unknown): Promise<str
   if (queue === "webhooks") return lookup(id("eventId"), (where) => systemDb.webhookEvent.findUnique({ where, select }).then(of));
   if (queue === "email") {
     const kind = job.kind as EmailJob["kind"] | undefined;
-    if (kind === "email_send") return lookup(id("messageId"), (where) => systemDb.emailMessage.findUnique({ where, select }).then(of));
     if (kind === "team_invitation") return lookup(id("deliveryId"), (where) => systemDb.emailDelivery.findUnique({ where, select }).then(of));
-    if (kind === "email_event") return lookup(id("eventId"), (where) => systemDb.emailBusinessEvent.findUnique({ where, select }).then(of));
     return null;
   }
   if (queue === "whatsapp") {

@@ -30,13 +30,13 @@ const credential = (provider: string, idSetting: string, secretSetting: string, 
 const REPORT = {
   ads: { configured: { meta: false, google: false, adsense: false }, restricted: { meta: false, google: false, adsense: false } },
   whatsapp: { evolution: true, evolutionNeeds: [], embeddedSignup: false, embeddedSignupNeeds: ["WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET"], webhookVerifyToken: false },
-  email: { google: false, microsoft: false, resend: true },
+  email: { resend: true },
   auth: { cognito: true, google: false, emailOtp: false, loginCode: true },
   credentials: [
     credential("Shopify", "SHOPIFY_API_KEY", "SHOPIFY_API_SECRET", true, true, "stores can't install the Shopify app or refresh their access"),
     credential("Meta Ads", "META_APP_ID", "META_APP_SECRET", true, false, 'Meta Ads says "Coming soon" and its connections stop syncing'),
     credential("WhatsApp (Embedded Signup)", "WHATSAPP_CONFIG_ID", "WHATSAPP_APP_SECRET", false, false, "connecting WhatsApp through Meta's Cloud API (Embedded Signup) can't be offered"),
-    credential("Outlook (email sending)", "EMAIL_MICROSOFT_CLIENT_ID", "EMAIL_MICROSOFT_CLIENT_SECRET", false, true, "Connect Outlook says it isn't set up"),
+    credential("Zapier", "ZAPIER_CLIENT_ID", "ZAPIER_CLIENT_SECRET", false, true, "Zapier can't connect to bizinsights"),
   ],
   halfConfigured: ["Meta Ads"],
 };

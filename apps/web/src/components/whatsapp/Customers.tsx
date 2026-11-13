@@ -5,11 +5,11 @@ import { Info } from "lucide-react";
 import { WA_ORDER_UPDATE_INFO } from "@app/shared/whatsapp";
 import { ConfirmDialog, Dialog, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
-import { ROW, TableCard, TableHead, TD, Th } from "@/components/automations/MarketingKit";
+import { ROW, TableCard, TableHead, TD, Th } from "./MarketingKit";
 import { Badge, Empty, type Tone } from "@/components/dashboard/Primitives";
 import { Card } from "@/components/PageKit";
 import { api, useApi } from "@/lib/api";
-import { COUNTRY_CHOICES, countryName, plural, usePagedList } from "@/components/messaging/MessagingUi";
+import { COUNTRY_CHOICES, countryName, plural, usePagedList } from "./ListUi";
 import type { WaContact, WaOverview, WaSuppression } from "./types";
 import { fmtAgo, useWaAction, waHref } from "./WaUi";
 

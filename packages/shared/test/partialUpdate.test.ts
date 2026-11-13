@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { partialUpdate } from "../src/partialUpdate";
-import { ruleUpdateSchema, templateUpdateSchema } from "../src/email";
 
 describe("partialUpdate", () => {
   const rule = z
@@ -23,10 +22,5 @@ describe("partialUpdate", () => {
     expect(partialUpdate(rule).parse({ enabled: true, mapping: {} })).toEqual({ enabled: true, mapping: { body: [] } });
     expect(partialUpdate(rule).safeParse({ name: "" }).success).toBe(false);
     expect(partialUpdate(rule).safeParse({ name: "x", unknown: 1 }).success).toBe(false);
-  });
-
-  it("the email update schemas change only what they're sent", () => {
-    expect(ruleUpdateSchema.parse({ name: "Welcome" })).toEqual({ name: "Welcome" });
-    expect(templateUpdateSchema.parse({ status: "archived" })).toEqual({ status: "archived" });
   });
 });

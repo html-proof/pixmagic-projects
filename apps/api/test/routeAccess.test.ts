@@ -56,7 +56,6 @@ const PUBLIC = new Set([
   "POST /auth/logout",
   // OAuth returns, checked against the state they started with (bizinsights' own ad sign-in: core's adConnections/signIn.ts).
   "GET /ads/:provider/callback",
-  "GET /email/oauth/:provider/callback",
   "GET /shopify/callback",
   "GET /shopify/launch",
   "GET /shopify/claim",
@@ -69,19 +68,10 @@ const PUBLIC = new Set([
   "POST /webhooks/whatsapp",
   // Evolution API's webhook: a JWT made from that connection's own key (core whatsapp/webhook.ts).
   "POST /webhooks/whatsapp/evolution/:instance",
-  // Twilio's SMS status reports and replies: X-Twilio-Signature with the account's Auth Token (routes/smsTwilio.ts).
-  "POST /webhooks/sms/twilio/status",
-  "POST /webhooks/sms/twilio/inbound",
   "POST /pixel/:key",
   "OPTIONS /pixel/:key",
-  "POST /v1/events",
-  "POST /v1/events/ingest",
   // Links customers and invitees follow, each carrying its own signed or random token.
   "GET /meta/data-deletion/:code",
-  "GET /email/unsubscribe/:token",
-  "POST /email/unsubscribe/:token",
-  "GET /sms/u/:code",
-  "POST /sms/u/:code",
   "GET /staff/invitations/lookup",
   "POST /staff/invitations/accept",
   "POST /invitations/preview",
@@ -148,14 +138,7 @@ const EVERY_MEMBER = new Set([
 
 /** Requests that change nothing although they aren't GETs: estimates, previews and dry runs of what a page would send. */
 const READ_ONLY_POSTS = new Set([
-  "POST /workspaces/:ws/stores/:storeId/sms/templates/preview",
-  "POST /workspaces/:ws/stores/:storeId/sms/rules/:id/dry-run",
-  "POST /workspaces/:ws/stores/:storeId/sms/segments/estimate",
-  "POST /workspaces/:ws/stores/:storeId/sms/campaigns/estimate",
-  "POST /workspaces/:ws/stores/:storeId/sms/automations/audience",
-  "POST /workspaces/:ws/stores/:storeId/sms/sends/preview",
   "POST /workspaces/:ws/stores/:storeId/whatsapp/campaigns/estimate",
-  "POST /workspaces/:ws/email/templates/:id/preview",
   // Asks for a one-time download link (a download, as GET /export is; a shared link keeps its export permissions).
   "POST /workspaces/:ws/staff/exports",
 ]);

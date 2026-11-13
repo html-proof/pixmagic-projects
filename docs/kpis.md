@@ -114,7 +114,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   a year later. One day more is refused (`400 invalid_range`, "pick up to 12 months at a time"), for
   the dates picked and for comparison dates alike; the dates menu offers nothing longer, and the end
   date's calendar stops there. Older periods are not limited: 1 Jan – 31 Dec 2023 is a question like
-  any other, and its comparison with the previous year is 2022. The downloads and Customer Messaging
+  any other, and its comparison with the previous year is 2022. The downloads
   read the same rule; the ad platforms' own report endpoints keep their 366-day limit.
 - **Custom ranges** run from 2000-01-01 at the earliest, or from the store's first day once Shopify's
   creation date is known (`storeRangeLimits`: `Shop.createdAt`, `stores.shop_created_at`, read by the
@@ -345,8 +345,9 @@ measure net sales only.
 ## The simple Home (2026-11-05)
 
 What /dashboard shows first (`SIMPLE_HOME` in apps/web/src/lib/features.ts), drawn as the owner's
-approved Stitch design draws it (prototype v2, project 4270728427536011606: screen 01, 03 for a store
-without automations, 04 on a phone): `apps/web/src/components/dashboard/SimpleHome.tsx` and
+approved Stitch design draws it (prototype v2, project 4270728427536011606: screens 01 and 03, 04 on
+a phone; screen 01's "Working for you" panel went with the Automations hub on 2026-11-13):
+`apps/web/src/components/dashboard/SimpleHome.tsx` and
 `homeNeeds.ts`. Plain white panels with a small radius and a faint shadow, soft tinted rows and
 buttons (globals.css `home-card`, `home-btn`, `--home-*`). The header is the greeting, "Updated 3 min
 ago · Matches Shopify" (the full dashboard's status pills in words, `StatusWords`) and one date card
@@ -380,11 +381,8 @@ out by the same code:
   i over day i (`sales_overview.previousSeries`: each day's net and total sales, null when those
   dates weren't imported). No axis: hovering, the arrow keys and a table for screen readers give
   each day's figures.
-- **What changed**: the first three checks of the business health check, each opening its details.
-- **Working for you**: the Automations hub's own answer (GET …/automations), as "Order confirmation
-  (SMS), On, 381 sent in 30 days" (handed to the provider: sent, delivered or undelivered), busiest
-  first, and one that's off with "Turn on" (the Automations page, which asks to confirm). Only where
-  the menu shows Automations; elsewhere (App Store stores) What changed sits beside the chart.
+- **What changed**: the first three checks of the business health check, each opening its details,
+  beside the chart.
 - **More insights you can unlock** (owners and admins, when Shopify access is missing): one quiet
   list under the panels, the same rows and buttons as the full dashboard's cards.
 

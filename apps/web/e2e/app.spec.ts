@@ -631,20 +631,20 @@ test("a workspace installed from the App Store shows only what the listing descr
   await showEveryPage(page);
   await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Sales & Orders" })).toBeVisible();
-  for (const name of ["WhatsApp", "Staff", "Advertising", "Customer Messaging", "Automations"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
+  for (const name of ["WhatsApp", "Staff", "Advertising"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
   await expect(page.getByTestId("about-data")).toBeVisible();
   await expect(page.getByTestId("ads-onboarding")).toHaveCount(0);
 
-  // Settings: Shopify, without the advertising, email and WhatsApp connections.
+  // Settings: Shopify, without the advertising and WhatsApp connections.
   await page.goto("/settings/integrations");
   await expect(page.getByTestId("int-shopify")).toBeVisible();
   for (const id of ["int-whatsapp", "int-google", "int-meta", "int-adsense", "int-zapier"]) await expect(page.getByTestId(id)).toHaveCount(0);
   const settings = page.getByRole("navigation", { name: "Settings" });
   await expect(settings.getByRole("link", { name: "Shopify" })).toBeVisible();
-  for (const name of ["Advertising", "Email integrations"]) await expect(settings.getByRole("link", { name })).toHaveCount(0);
+  await expect(settings.getByRole("link", { name: "Advertising" })).toHaveCount(0);
 
   // Their pages are closed as well, typed in or bookmarked.
-  for (const path of ["/whatsapp", "/messaging", "/automations", "/staff", "/settings/ads", "/settings/email", "/advertising"]) {
+  for (const path of ["/whatsapp", "/staff", "/settings/ads", "/advertising"]) {
     await page.goto(path);
     await expect(page.getByTestId("access-notice")).toContainText("You don't have access to that page.");
     await expect(page).toHaveURL(/\/dashboard/);

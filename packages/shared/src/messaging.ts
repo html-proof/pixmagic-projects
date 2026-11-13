@@ -1,5 +1,5 @@
 /**
- * What WhatsApp and Customer Messaging (SMS) share: phone numbers as customers type them, and
+ * What WhatsApp Automation works with: phone numbers as customers type them, and
  * sending hours in a store's time zone. Pure functions, safe in the browser
  * (`@app/shared/messaging`).
  */
@@ -74,11 +74,6 @@ const COUNTRIES: Record<string, { code: string; trunk?: string; len?: [number, n
   VN: { code: "84", trunk: "0", len: [9, 10] },
   ZA: { code: "27", trunk: "0", len: [9, 9] },
 };
-
-/** Countries whose numbers can be typed without "+" (a country picker's choices). */
-export const PHONE_COUNTRIES: readonly string[] = Object.keys(COUNTRIES);
-/** A country's calling code ("61" for AU), or null when we don't know its rules. */
-export const callingCode = (country: string): string | null => COUNTRIES[country.toUpperCase()]?.code ?? null;
 
 /** Where countries share a calling code, the one a number is said to be from. */
 const SHARED_CODE_COUNTRY: Record<string, string> = { "1": "US" };

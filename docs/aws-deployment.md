@@ -96,7 +96,6 @@ secret among them:
 | `GOOGLE_ADS_CLIENT_ID` | `GOOGLE_ADS_CLIENT_SECRET` (the "Insights web" client's) | Google Ads and AdSense say "Coming soon"; their connections stop syncing |
 | `WHATSAPP_CONFIG_ID` (set 2026-10-25), on the app `WHATSAPP_APP_ID` (empty, so `META_APP_ID`: WhatsApp's Cloud API option runs on the Meta Ads app "Insights") | `META_APP_SECRET` while WhatsApp is on the Meta Ads app, as now (the check names it so); `WHATSAPP_APP_SECRET` only on an app of its own; `WHATSAPP_WEBHOOK_VERIFY_TOKEN` too | WhatsApp's Cloud API option (Embedded Signup) can't be offered; linking a phone with a QR code still works (docs/whatsapp.md) |
 | `SHOPIFY_API_KEY`, each app in `SHOPIFY_EXTRA_APPS` | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | That Shopify app's stores can't install or refresh their access |
-| `EMAIL_GOOGLE_CLIENT_ID`, `EMAIL_MICROSOFT_CLIENT_ID` (empty today) | `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | Connect Gmail / Outlook says it isn't set up |
 
 WhatsApp's Cloud API option is off while `WHATSAPP_CONFIG_ID` is empty, and then nothing warns
 about WhatsApp's Meta secret: the check's line on the Deploy run names what it still needs instead
@@ -119,7 +118,7 @@ and setting names only, never a value):
 aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --payload '{\"action\":\"config\"}' config.json
 ```
 
-`config.json` then says which ad platforms, email integrations and sign-in options are on, what
+`config.json` then says which ad platforms and sign-in options are on, what
 the WhatsApp service and its Cloud API option still need (`whatsapp.evolutionNeeds`,
 `whatsapp.embeddedSignupNeeds`), and lists under
 `halfConfigured` each provider whose secret is missing. After adding one with `--set`, run
@@ -1252,9 +1251,7 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   `https://bizinsights.io/api/ads/meta/callback` in Facebook Login for Business of Meta app 971575545351940
   (bizinsights' own sign-in: [ads-setup.md](ads-setup.md#how-connecting-works); steps in
   [ads-review-packs.md](ads-review-packs.md)). Nango's old `…/api/ads/nango/oauth-callback` was removed from both on
-  2026-11-02 ([ads-setup.md](ads-setup.md#leaving-nango), step (d));
-  and, once their clients
-  exist, `https://bizinsights.io/api/email/oauth/google/callback` and `.../microsoft/callback`. Both
+  2026-11-02 ([ads-setup.md](ads-setup.md#leaving-nango), step (d)). Both
   Shopify apps are already there (main `insights-14`, PixMagic `pixmagic-7`). To go back to an
   earlier Shopify version, use the Dev Dashboard (the app → **Versions** → that version →
   **Release**): `shopify app release --version <tag>` answers "could not be found" for every version
@@ -1275,7 +1272,7 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | Two NAT instances: t4g.nano $0.0053/hour + public IPv4 $0.005/hour + 8 GB gp3, each ~8.3 | 16.58 |
 | GuardDuty after its trial (ends ~2026-11-14): RDS protection 2.26 + **Advanced RDS (`RDS_DATA_RISK`) 6.78** + CloudTrail events ~1.5 + S3/Lambda/DNS/flow logs ~0.2 | ~10.7 |
 | WAF: web ACL $5 + 5 rules × $1 + requests | ~10.2 |
-| CloudWatch: 34 alarms since 2026-11-12 (`db-login-failures`, +0.10, and its log filter's metric, the 11th custom one, +0.30: the figure here is from before them) (26 of the App stack's 27, its `whatsapp-service-unreachable` being in the WhatsApp row; 6 for the NAT instances; Cognito's email), 10 free, US$0.10 each (three added 2026-10-29: `sync-jobs-failed-for-good`, `ad-connections-need-merchants`, `ad-figures-differ`, +0.30; recounted the same day, the 25 before were 30); logs, dashboard and the 10 custom metrics the log filters count (10 free; an 11th would be US$0.30) in the free tier | ~2.3 |
+| CloudWatch: 34 alarms since 2026-11-12 (`db-login-failures`, +0.10, and its log filter's metric, the 11th custom one, +0.30: the figure here is from before them) (26 of the App stack's 27, its `whatsapp-service-unreachable` being in the WhatsApp row; 6 for the NAT instances; Cognito's email), 10 free, US$0.10 each (three added 2026-10-29: `sync-jobs-failed-for-good`, `ad-connections-need-merchants`, `ad-figures-differ`, +0.30; recounted the same day, the 25 before were 30; three fewer from the release that removes Customer Messaging (SMS), 2026-11-13: the two `sms-hold-*` alarms and the SMS events queue's age alarm, and their two custom metrics); logs, dashboard and the 10 custom metrics the log filters count (10 free; an 11th would be US$0.30) in the free tier | ~2.3 |
 | Secrets Manager (3 × $0.40 + calls), KMS (Cognito email key + ~60-90k requests, 20k free) | ~2.5 |
 | Admin host's disk (stopped), EBS snapshots, SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES (X-Ray tracing is off since 2026-11-06: nothing read the traces) | ~2.4 |
 | Audit stack (since 2026-10-18): the trail's first copy of management events is free, and so are the 18 external-access analyzers; its bucket's log and digest files (S3 PUTs from 18 Regions every ~5 minutes, ~200-270 bytes per event compressed, ~1-3 GB a year kept for 395 days) | ~0.35 (≤1) |
@@ -1439,7 +1436,7 @@ stopped the app. Now nothing the app needs is in one AZ only:
   cost one failover instead of a reboot.
 - **Way out to the internet**: a NAT instance per AZ (`nat-instances.ts`, `natGateways: 2`); each
   AZ's app subnet routes through its own, so an outage of one AZ leaves the other's functions able
-  to reach Cognito, Shopify, Google, Meta and SMTP. Each instance is recovered onto new hardware if
+  to reach Cognito, Shopify, Google and Meta. Each instance is recovered onto new hardware if
   AWS's host fails (alarm `insights-production-nat-<a|b>-system-check`) and rebooted if it stops
   answering (`...-instance-check`); its id and addresses survive both, so the routes stay valid.
   While one is down (a few minutes), only the functions running in its AZ lose the internet, and
@@ -1526,7 +1523,7 @@ What production does have, at no extra cost:
   and CPU, the WhatsApp service (`whatsapp-service-down`, `-memory`, `-unreachable`), plus RDS's own events (availability, failure, failover, low storage, maintenance,
   recovery, restoration). **Nobody receives them until the alert email's subscription is confirmed** (Owner-only steps, Alerts).
 - Alarms on what the logs say (log metric filters in `infra/cdk/lib/app-stack.ts`): bursts of error
-  lines per function, texts on hold, automated messages refused, WhatsApp's service not answering;
+  lines per function, WhatsApp messages refused (`messaging-send-failures`), WhatsApp's service not answering;
   and, each counted over an hour (what to do: [RUNBOOK.md](RUNBOOK.md)):
   - `sync-jobs-failed-for-good`: 10 or more sync-queue jobs ran out of attempts in an hour (the
     jobs function's `"sync job failed"` line with `"final":true` and `"attempts"` 6 or more, core's

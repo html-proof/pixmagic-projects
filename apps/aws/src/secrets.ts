@@ -31,8 +31,7 @@ export function secretParameterName(secretId: string): string {
  *    app's own: SESSION_SECRET, TOKEN_ENCRYPTION_KEYS, OTP_PEPPER, APP_RLS_PASSWORD. The providers'
  *    (each set with infra/cdk/scripts/put-secrets.mjs; one missing turns that provider off):
  *    META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, GOOGLE_SIGNIN_CLIENT_SECRET, WHATSAPP_APP_SECRET,
- *    WHATSAPP_WEBHOOK_VERIFY_TOKEN, EMAIL_GOOGLE_CLIENT_SECRET, EMAIL_MICROSOFT_CLIENT_SECRET,
- *    EMAIL_CREDENTIAL_KEYS, RESEND_API_KEY, RESEND_WEBHOOK_SECRET, SHOPIFY_API_SECRET and
+ *    WHATSAPP_WEBHOOK_VERIFY_TOKEN, RESEND_API_KEY, RESEND_WEBHOOK_SECRET, SHOPIFY_API_SECRET and
  *    SHOPIFY_APP_SECRET_<KEY> (one per Shopify app)
  *  - COGNITO_WORKER_SECRET_ARN: COGNITO_CLIENT_SECRET, COGNITO_ADMIN_* (infra/aws/cognito.yaml)
  *  - EVOLUTION_SECRET_ARN (insights/<env>/evolution-api): EVOLUTION_API_KEY, the global key of the

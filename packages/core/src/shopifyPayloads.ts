@@ -2,7 +2,7 @@
  * What Shopify sends us, as Zod schemas: REST webhook payloads (orders, refunds, products and their
  * variants for analytics; orders, checkouts, refunds and parcels as the automations read them; the
  * app and GDPR topics) and Admin GraphQL nodes (orders, products, variants, parcels). normalize.ts
- * works on these types, and so do the WhatsApp and email automations and the webhook consumer.
+ * works on these types, and so do the WhatsApp automations and the webhook consumer.
  *
  * This is the boundary. A payload is checked once, where it enters (`parseShopify` in the webhook
  * consumer, the sync pages and the bulk import), before anything is normalized or stored. One that
@@ -171,11 +171,10 @@ export type RestProduct = z.output<typeof restProductSchema>;
 // ---------------------------------------------------------------- REST webhooks, as the automations read them
 
 /*
- * WhatsApp Automation and the email automations (whatsapp/events.ts, email/events.ts) read more of an order
- * or checkout than analytics does: who the customer is and how to reach them. They have schemas of
- * their own, so a field only they read can't cost analytics an order, nor the other way round.
- * Each module parses a payload only once it is about to act on it, so a store that doesn't use it
- * logs nothing.
+ * WhatsApp Automation (whatsapp/events.ts) reads more of an order or checkout than analytics does:
+ * who the customer is and how to reach them. It has schemas of its own, so a field only it reads
+ * can't cost analytics an order, nor the other way round. It parses a payload only once it is about
+ * to act on it, so a store that doesn't use it logs nothing.
  */
 
 const address = obj({
@@ -281,8 +280,8 @@ export const automationCheckoutSchema = obj({
 });
 
 /**
- * customers/create, customers/update and customers_marketing_consent/update, as Customer
- * Messaging reads them: the customer's number and SMS marketing consent (read_customers).
+ * customers/create, customers/update and customers_marketing_consent/update, as WhatsApp
+ * Automation reads them: the customer's number and Shopify's SMS marketing consent (read_customers).
  */
 export const customerConsentSchema = obj({
   id: restId,

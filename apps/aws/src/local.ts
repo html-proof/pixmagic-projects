@@ -4,13 +4,11 @@ import { resolve } from "node:path";
 import { buildApp, CLIENT_IP_HEADER, type App } from "@app/api";
 import { consume, runScheduled, type WorkerDeps } from "@app/worker";
 import { logger, mailpitMailer, memoryBlobs, memoryCoord, reportUnscopedSystemQueries, withTimeout, type Mailer } from "@app/core";
-import { fakeSmsProvider, type FakeSent } from "@app/core/sms";
 import { disconnectDb } from "@app/db";
 import { apiDeps } from "./app.js";
 import { apiPath } from "./paths.js";
 import { localQueues, type LocalQueues } from "./localQueues.js";
 import { send, toRequest } from "./nodeHttp.js";
-import { nodeSmtpConnect } from "./nodeSmtp.js";
 import { APP_SETTINGS } from "./settings.js";
 import { staticSite } from "./staticSite.js";
 
@@ -47,40 +45,9 @@ export function loadSettings(envFile: string | null) {
   if (process.env.NODE_ENV === "production") throw new Error("The local server is for development: NODE_ENV must not be production");
 }
 
-/** The local server's stand-in sender (core's fake AWS): a shared sender ID any store may verify. */
-export const LOCAL_SMS_SENDER = "LOCALTEST";
-
-/** What AWS would report a moment after a send: delivered, at no charge (nothing left the machine). */
-function localDelivery(sent: FakeSent) {
-  return {
-    eventType: "TEXT_DELIVERED",
-    eventVersion: "1.0",
-    eventTimestamp: Date.now(),
-    isFinal: true,
-    messageId: sent.messageId,
-    messageRequestTimestamp: Date.now() - 1000,
-    messageType: sent.messageType,
-    messageStatus: "DELIVERED",
-    messageStatusDescription: "Local server: nothing was sent",
-    context: sent.context,
-    totalMessageParts: 1,
-    totalMessagePrice: 0,
-    totalCarrierFee: 0,
-  };
-}
-
 export function localDeps(): { jobs: WorkerDeps; queues: LocalQueues } {
   const mailpit = process.env.MAILPIT_URL;
   const queues = localQueues((queue, msg) => consume(queue, msg, jobs));
-  // Texts never leave the machine: the fake records them and "delivers" each a moment later.
-  process.env.SMS_SHARED_SENDER ??= LOCAL_SMS_SENDER;
-  const sms = fakeSmsProvider({
-    identities: [{ kind: "sender_id", arn: `arn:aws:sms-voice:local:000000000000:sender-id/${LOCAL_SMS_SENDER}/AU`, id: LOCAL_SMS_SENDER, label: LOCAL_SMS_SENDER, country: "AU", status: "REGISTERED", twoWay: false, optOutList: "Default", registrationStatus: "COMPLETE", tags: { "bizinsights:shared": "true" } }],
-    onSend: (sent) => {
-      logger.info({ messageId: sent.messageId, parts: Math.ceil(sent.body.length / 153) }, "local server: text not sent (fake AWS)");
-      setTimeout(() => void queues.smsEvents.send(localDelivery(sent)), 1500);
-    },
-  });
   const jobs: WorkerDeps = {
     coord: memoryCoord(),
     queues,
@@ -88,8 +55,6 @@ export function localDeps(): { jobs: WorkerDeps; queues: LocalQueues } {
     mailer: mailpit ? mailpitMailer(mailpit) : logMailer,
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
     fetchImpl: withTimeout((input, init) => fetch(input, init)),
-    smtpConnect: nodeSmtpConnect,
-    sms,
   };
   return { jobs, queues };
 }

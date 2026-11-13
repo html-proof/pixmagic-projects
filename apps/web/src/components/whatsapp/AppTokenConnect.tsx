@@ -48,7 +48,7 @@ export function AppTokenConnect({ base, onConnected }: { base: string; onConnect
     <details className="rounded bg-home-soft p-3" data-testid="wa-token-connect">
       <summary className="cursor-pointer text-sm font-semibold">bizinsights team: connect with the app&apos;s own token</summary>
       {/* A password field makes browsers take this for a sign-in form and fill in the bizinsights login:
-          new-password (as the email settings' SMTP password) and off keep them out. */}
+          new-password and off keep them out. */}
       <form className="mt-3 space-y-3" autoComplete="off" onSubmit={(e) => void submit(e)}>
         <p className="max-w-2xl text-xs text-muted">
           For recording Meta&apos;s App Review before Meta approves bizinsights as a Tech Provider. In the Insights app&apos;s dashboard (WhatsApp → API Setup) copy the WhatsApp Business account ID and the phone number ID, and make a token with

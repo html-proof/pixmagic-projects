@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Building2, Clock, Gauge, Info, Phone, PlugZap, UserRound } from "lucide-react";
 import { PROVIDER_INFO, WA_CAMPAIGN_MAX } from "@app/shared/whatsapp";
 import { ConfirmDialog } from "@/components/AppUi";
-import { ChannelPanel, Fact, FactList } from "@/components/automations/MarketingKit";
+import { ChannelPanel, Fact, FactList } from "./MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
 import { Card } from "@/components/PageKit";
 import { Alert } from "@/components/ui";

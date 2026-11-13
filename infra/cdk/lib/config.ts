@@ -58,7 +58,7 @@ export interface EnvConfig {
    */
   whatsapp: { cpu: 256 | 512 | 1024 | 2048; memoryMiB: number; tasks: 0 | 1; spot: boolean };
   /**
-   * The EventBridge schedules (token refresh, reconcile, ad syncs, email and WhatsApp sweeps). On in
+   * The EventBridge schedules (token refresh, reconcile, ad syncs, WhatsApp sweeps). On in
    * production since 2026-10-16 (docs/aws-deployment.md, Cutover, step 3). Off in staging: on a copy
    * of production's data it would sync merchants' stores a second time and email their customers
    * twice. `-c schedules=off` (or `on`) overrides it for one deploy (the deploy workflow: GitHub

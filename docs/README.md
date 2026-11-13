@@ -41,7 +41,5 @@ the code, the code wins and the page is the bug.
 | Dashboard numbers | [kpis.md](kpis.md), [customer-analytics.md](customer-analytics.md) (repeat customers, monthly cohorts) |
 | Meta Ads, Google Ads, AdSense | [ads-setup.md](ads-setup.md), [ads-review-packs.md](ads-review-packs.md) |
 | WhatsApp | [whatsapp.md](whatsapp.md) |
-| Automations: one four-step setup and one message history over SMS and email | [automations.md](automations.md) |
 | Zapier: bizinsights' app on Zapier (OAuth provider, triggers, searches) | [zapier.md](zapier.md), [integrations/zapier](../integrations/zapier/README.md) |
-| Customer Messaging (SMS through AWS End User Messaging) | [sms.md](sms.md) |
 | Inventory (stock per location, alerts, stock changes) | [inventory.md](inventory.md) |

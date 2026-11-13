@@ -1,8 +1,7 @@
 /**
  * Who an order or checkout is from, as Shopify's webhook payloads say it: the customer's phone
- * number, first name, items and tags. Read the same way by WhatsApp Automation and Customer
- * Messaging (SMS), which act on these payloads (shopifyPayloads.ts automationOrderSchema,
- * automationCheckoutSchema).
+ * number, first name, items and tags, as WhatsApp Automation reads them (shopifyPayloads.ts
+ * automationOrderSchema, automationCheckoutSchema).
  */
 import { normalizePhone } from "@app/shared";
 import type { AutomationCheckout, AutomationOrder } from "./shopifyPayloads.js";

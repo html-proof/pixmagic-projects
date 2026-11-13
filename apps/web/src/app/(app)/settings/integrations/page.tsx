@@ -9,7 +9,6 @@ import { Alert } from "@/components/ui";
 import { AdRow, rowState } from "@/components/integrations/AdRow";
 import { NoteAlert, StateAnnouncer } from "@/components/integrations/AdUi";
 import { AD_PLATFORMS } from "@/components/integrations/adPlatforms";
-import { ChannelCards, STATUS_LABEL, useIntegrations } from "@/components/integrations/ChannelCards";
 import { GoogleAdsDemoDialog } from "@/components/integrations/GoogleAdsDemoDialog";
 import { ConnectButton, IntegrationRow, ManageLink, OneClickSetup, RowPill } from "@/components/integrations/IntegrationRow";
 import { useAdConnections } from "@/components/integrations/useAdConnections";
@@ -23,14 +22,14 @@ import { friendlyError, useApi } from "@/lib/api";
 // ---------------------------------------------------------------------------
 // Settings → Integrations, as the owner's approved Stitch design draws its Connections screen
 // (prototype v2, screen 30): the "One Click Setup" line, then one card per connection, two to a row,
-// in the design's order (Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, Email, Zapier). Each
+// in the design's order (Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, Zapier). Each
 // says where it stands (its own state, and the same on the one scale of six every page shares,
 // @app/shared/integrations), what it does and brings, and has one button that opens the platform's
 // own sign-in (Manage once connected): components/integrations/IntegrationRow.tsx, AdRow.tsx,
-// ChannelCards.tsx, ZapierCard.tsx. Nothing here asks for an app id, a key or a token: bizinsights'
+// ZapierCard.tsx. Nothing here asks for an app id, a key or a token: bizinsights'
 // own Shopify, Google and Meta apps do that part. Accounts are managed in depth on Settings → Shopify,
-// Settings → Advertising, WhatsApp Automation (/dashboard/whatsapp-automation), Customer Messaging
-// (/messaging) and Settings → Email integrations; signing in with Google is on Settings → Security.
+// Settings → Advertising and WhatsApp Automation (/dashboard/whatsapp-automation); signing in with
+// Google is on Settings → Security.
 // ---------------------------------------------------------------------------
 
 /** Shopify's and WhatsApp's states. The ad cards' are in lib/adConnections.ts (AD_STATE). */
@@ -84,15 +83,11 @@ export default function IntegrationsPage() {
   const manageStores = canManage(workspace.role);
   const manage = allowed("integrations.manage");
   const storeBase = store ? `/workspaces/${workspace.id}/stores/${store.id}` : null;
-  // An App Store workspace leaves WhatsApp, advertising, SMS and email out (lib/features.ts): no card, no request.
+  // An App Store workspace leaves WhatsApp and advertising out (lib/features.ts): no card, no request.
   const showWa = offers("whatsapp");
   const showAds = offers("ads");
-  const showSms = offers("sms");
-  const showEmail = offers("email");
   const wa = useApi<WaOverview>(storeBase && showWa ? `${storeBase}/whatsapp` : null);
   const ads = useAdConnections(storeBase && showAds ? storeBase : null);
-  // SMS and email are told by the API's integration status (ChannelCards.tsx).
-  const channels = useIntegrations(storeBase && (showSms || showEmail) ? storeBase : null);
   const [note, setNote] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   // Another store chosen at the top: a WhatsApp note was about the last one (the ad notes reset in useAdConnections).
   const [noteFor, setNoteFor] = useState(storeBase);
@@ -116,10 +111,6 @@ export default function IntegrationsPage() {
   const waConn = wa.data?.connection && wa.data.connection.status !== "disconnected" ? wa.data.connection : null;
   const shopState = shopifyState(store);
   const shownWa: State = store ? waState : "not_connected";
-  const channelLabel = (id: "sms" | "email") => {
-    const m = channels.data?.modules.find((x) => x.id === id);
-    return m ? STATUS_LABEL[m.status] : channels.error ? "Status unavailable" : "Checking…";
-  };
   const announced: Array<[string, string]> = [
     ["Shopify", STATE[shopState].label],
     ...(showAds
@@ -129,8 +120,6 @@ export default function IntegrationsPage() {
         })
       : []),
     ...(showWa && store ? [["WhatsApp", STATE[waState].label] as [string, string]] : []),
-    ...(showSms && store ? [["SMS", channelLabel("sms")] as [string, string]] : []),
-    ...(showEmail && store ? [["Email", channelLabel("email")] as [string, string]] : []),
   ];
 
   return (
@@ -246,8 +235,6 @@ export default function IntegrationsPage() {
             )}
           </IntegrationRow>
         )}
-
-        <ChannelCards store={store} sms={showSms} email={showEmail} answer={channels.data} error={channels.error} />
 
         {ZAPIER_CARD && offers("zapier") && allowed("integrations.status") && <ZapierCard workspaceId={workspace.id} store={store} manage={manage} full={manageStores} />}
       </div>

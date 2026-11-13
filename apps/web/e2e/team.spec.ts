@@ -154,7 +154,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   await expect(sidebar(guest).getByRole("link", { name: "Products" })).toHaveCount(0);
   // And their APIs refuse the shared session outright, whatever the page would have done.
   const adminApis = await guest.evaluate(
-    async (w) => Promise.all(["team", "members", "api-keys", "audit-logs", "billing", "privacy-requests", "staff/employees", "email/accounts"].map(async (p) => [p, (await fetch(`/api/workspaces/${w}/${p}`)).status] as const)),
+    async (w) => Promise.all(["team", "members", "api-keys", "audit-logs", "billing", "privacy-requests", "staff/employees"].map(async (p) => [p, (await fetch(`/api/workspaces/${w}/${p}`)).status] as const)),
     ws,
   );
   expect(adminApis.filter(([, status]) => status !== 403)).toEqual([]);

@@ -30,11 +30,10 @@ Principles:
 | Per-key rate limits, one-time OAuth state, locks, signed-out sessions, export grants (the coordinator) | **DynamoDB** table (on-demand, TTL) | `apps/aws/src/dynamoCoord.ts`; the local server keeps it in memory. |
 | Webhook bodies too big for a queue message (over 100 KB) | **S3** bucket `payloads` (7-day lifecycle) | Only the rare large body; the message carries its key. |
 | Background jobs (sync, webhooks, aggregate, email, whatsapp), retries with backoff | **SQS** standard queues + a DLQ; **Lambda** consumers (event source mappings) | At-least-once delivery; the handlers are idempotent (below). |
-| `*/15 * * * *`: token refresh, stale jobs, ads sync, WhatsApp, open shifts, email sweeps; `15 3 * * *`: nightly reconcile | **EventBridge Scheduler** → the `scheduled` Lambda | Managed cron, UTC. |
+| `*/15 * * * *`: token refresh, stale jobs, ads sync, WhatsApp, open shifts; `15 3 * * *`: nightly reconcile | **EventBridge Scheduler** → the `scheduled` Lambda | Managed cron, UTC. |
 | Connection pooling to Postgres (two logins: the system role and the tenant role, both bound by RLS) | Small pools per function instance and the queues' capped concurrency first; **RDS Proxy** when traffic needs it | Pools Lambda's many short connections; see section 4 for the pinning check it needs first. |
 | All data | **RDS for PostgreSQL 17** (encrypted, automated backups, point-in-time restore) | No single machine to keep running (the old deployment's database on the owner's PC went down when Docker Desktop stopped). |
 | Invitations, alerts, staff emails | **Amazon SES** (domain identity with DKIM/SPF/DMARC) | Also Cognito's sender (raises the 50/day limit) and enables passwordless codes. |
-| Merchants' own SMTP accounts (email integrations) | Node `net`/`tls` from Lambda through the NAT gateway | Plain outbound TCP; ports 465/587/2525. |
 | WhatsApp Automation's gateway (Evolution API, a container) | **ECS Fargate** (one task, private subnets, no public address, no load balancer), found by the functions through **Cloud Map**; its own database on the same RDS instance | WhatsApp sessions are long-lived connections a Lambda can't hold ([whatsapp.md](whatsapp.md)). |
 | Logs | **CloudWatch Logs**, metric filters, alarms (X-Ray tracing was on until 2026-11-06; nothing read the traces) | One place for logs, metrics and alarms. |
 | Sign-in | **Cognito** (Phase 1) | Replaced Firebase Authentication, of which nothing is left in the app ([cognito-setup.md](cognito-setup.md), section 4). |
@@ -43,7 +42,7 @@ Principles:
 | Backups | RDS automated backups (7 days since 2026-11-12) + **AWS Backup** monthly copy | Point-in-time restore to any second. |
 | Live dashboards (push updates; on an unmerged branch) | **AppSync Events** (managed WebSocket pub/sub), or keep polling | Decide when that branch lands; polling works meanwhile. |
 
-Third parties (Shopify, Meta Graph/WhatsApp Cloud API, Google Ads/AdSense, Gmail/Microsoft Graph,
+Third parties (Shopify, Meta Graph/WhatsApp Cloud API, Google Ads/AdSense,
 Slack) and the WhatsApp service (Evolution API's webhooks) call back on the app's address (section 7).
 
 ## 2. Target architecture
@@ -65,8 +64,8 @@ Slack) and the WhatsApp service (Evolution API's webhooks) call back on the app'
    │  Lambda migrate ───┘                                                                 │
    │  ECS Fargate "evolution" (WhatsApp, Cloud Map) ◄─ Lambdas :8080; ─► RDS :5432        │
    │        │  gateway endpoints: S3, DynamoDB (free)                                     │
-   │        └─► NAT gateway (public subnet) ─► Cognito, Shopify, Meta, Google, Microsoft, │
-   │                                            SMTP servers, Slack, Secrets Manager, SQS │
+   │        └─► NAT gateway (public subnet) ─► Cognito, Shopify, Meta, Google,            │
+   │                                            Slack, Secrets Manager, SQS               │
    └──────────────────────────────────────────────────────────────────────────────────────┘
         │                 ▲                        │
         ▼                 │                        ▼
@@ -122,7 +121,7 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 
 - **VPC** across two Availability Zones: public subnets (NAT gateway), private subnets (Lambdas,
   RDS Proxy), isolated subnets (RDS, no route out). Gateway endpoints for S3 and DynamoDB (free).
-- **NAT**: the functions call the internet (Cognito, Shopify, Meta, Google, SMTP). Built as a NAT
+- **NAT**: the functions call the internet (Cognito, Shopify, Meta, Google). Built as a NAT
   instance per AZ (t4g.nano, `infra/cdk/lib/nat-instances.ts`) since 2026-10-17: high availability
   for a third of one NAT gateway's price (docs/aws-deployment.md, Fault tolerance).
 - **Security groups**: Lambda → RDS (or RDS Proxy) 5432 only; RDS Proxy → RDS 5432 only; Lambda →
@@ -176,11 +175,9 @@ EventBridge Scheduler invokes the `scheduled` function at `cron(0/15 * * * ? *)`
 
 - **SES** in ap-southeast-2: verify the domain (DKIM, SPF, DMARC records in Route 53), request
   production access (leaves the sandbox), one configuration set with bounce and complaint
-  notifications → SNS → the app's suppression list (the email module already keeps one).
+  notifications → SNS → the app's suppression list.
 - Cognito sends through SES (DEVELOPER mode), lifting the 50-a-day default and enabling
   passwordless sign-in codes (`COGNITO_EMAIL_OTP=1`).
-- Merchants' connected accounts (Gmail, Microsoft 365, SMTP) keep sending through their own
-  providers, exactly as now.
 
 ## 6. Observability
 
@@ -206,7 +203,6 @@ The app's address is `https://bizinsights.io` since 2026-10-16 (pages asked for 
 | Meta (Ads login, WhatsApp) | Redirect URI `https://bizinsights.io/api/ads/meta/callback` ([ads-setup.md](ads-setup.md#how-connecting-works); Nango's old `…/api/ads/nango/oauth-callback` was removed on 2026-11-02: [Leaving Nango](ads-setup.md#leaving-nango)'s step (d)); WhatsApp webhook callback `https://bizinsights.io/api/webhooks/whatsapp` and its verify token | Meta app dashboards |
 | Google (Ads, AdSense) | Redirect URIs `https://bizinsights.io/api/ads/google/callback` and `…/api/ads/adsense/callback` (Nango's old callback likewise); domain verification for the consent screen (fixes "unverified app"): a Search Console **Domain** property for bizinsights.io, whose TXT record goes in Cloudflare DNS | Google Cloud console, Search Console |
 | Google sign-in (Cognito) | Redirect URI `<the user pool's domain>/oauth2/idpresponse` | Google Cloud OAuth client ([cognito-setup.md](cognito-setup.md)) |
-| Microsoft and Gmail (email integrations) | Redirect URIs `https://bizinsights.io/api/email/oauth/microsoft/callback` and `.../google/callback` | Microsoft Entra app registration, Google Cloud OAuth client |
 | Cognito app client | Callback `https://bizinsights.io/auth/callback`, logout `…/login?signedOut=1` | `infra/aws/cognito.yaml` (`AppUrl`) |
 | Evolution API (WhatsApp, bizinsights' own service) | Webhook `https://bizinsights.io/api/webhooks/whatsapp/evolution/<instance>`, set by bizinsights on each instance it makes ([whatsapp.md](whatsapp.md)) | nothing to register |
 | Slack alerts | none | — |
@@ -232,7 +228,7 @@ The app's address is `https://bizinsights.io` since 2026-10-16 (pages asked for 
   `consumer` (SQS → `consume()`), `scheduled` (EventBridge → `runScheduled()`), `migrate`; adapters
   `sqsQueues` (Producer → SendMessage, payloads over 1 MiB to S3 via the existing BlobStore),
   `originVerify` (the 403 check above),
-  `s3Blobs`, `sesMailer` (SES v2), `nodeSmtpConnect` (net/tls), client IP from the viewer-request
+  `s3Blobs`, `sesMailer` (SES v2), client IP from the viewer-request
   function's header.
 - **Pipeline** (GitHub Actions, OIDC): checks as today → build → `cdk deploy` staging → `migrate` →
   Playwright smoke against staging → manual approval (GitHub environment) → production: `migrate`,

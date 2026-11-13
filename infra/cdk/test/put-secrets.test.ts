@@ -18,7 +18,6 @@ const script = (await import(new URL("../scripts/put-secrets.mjs", import.meta.u
 const { secretProblem, publicSettings, metaAppOf, KEEPS_PREVIOUS, UNSETTABLE, PARAMETER_LIMIT, sizeProblem } = script;
 
 const META_SECRET = "0123456789abcdef0123456789abcdef";
-const ENTRA_SECRET = "Xyz8Q~abcdefghijklmnopqrstuvwxyz0123456_";
 
 describe("the shapes put-secrets.mjs accepts", () => {
   it("takes a Meta app secret, for Meta Ads and for WhatsApp, and nothing else", () => {
@@ -28,17 +27,6 @@ describe("the shapes put-secrets.mjs accepts", () => {
         expect(secretProblem(name, wrong), wrong).toMatch(/Meta app secret/);
       }
     }
-  });
-
-  it("takes a Google client secret for Gmail sending, not its client id", () => {
-    expect(secretProblem("EMAIL_GOOGLE_CLIENT_SECRET", "GOCSPX-abcdefghijklmnopqrstuvwxyz12")).toBeNull();
-    expect(secretProblem("EMAIL_GOOGLE_CLIENT_SECRET", "123-abc.apps.googleusercontent.com")).toMatch(/GOCSPX-/);
-  });
-
-  it("takes an Entra secret's Value for Outlook sending, not its Secret ID or the application id", () => {
-    expect(secretProblem("EMAIL_MICROSOFT_CLIENT_SECRET", ENTRA_SECRET)).toBeNull();
-    expect(secretProblem("EMAIL_MICROSOFT_CLIENT_SECRET", "0f0f0f0f-1111-2222-3333-444444444444")).toMatch(/not its Secret ID/);
-    expect(secretProblem("EMAIL_MICROSOFT_CLIENT_SECRET", "short~value")).toMatch(/Entra/);
   });
 
   it("keeps the shapes it had", () => {

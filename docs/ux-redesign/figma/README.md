@@ -6,6 +6,10 @@ prototype)"), in the drafts of the Figma account the connector is signed in to.
 Built on 2026-11-11 through the Figma connector. Figma's Starter plan allows **20 connector calls a
 month** (a View seat has the same limit on any plan), and the build used them, so the file is unfinished.
 
+**Update, 2026-11-13.** The Automations and Create automation screens (07, 08; also in
+`wire-prototype.js`) show the Automations hub, which was removed from the app with Customer Messaging
+(SMS) and Email integrations. The file was not changed.
+
 ## What is in it
 
 | Page | Contents |

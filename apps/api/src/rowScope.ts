@@ -24,10 +24,10 @@ const PATHS: Array<[RegExp, PathScope]> = [
   [/^\/employee\/workspaces$/, { reason: "invitations" }],
   [/^\/shopify\//, { reason: "shopify_install" }],
   // Providers and the links customers follow: the workspace comes from what they carry.
-  [/^\/(webhooks|pixel|v1\/events)(\/|$)/, { reason: "webhooks" }],
-  [/^\/(meta\/data-deletion|email\/unsubscribe|sms\/u|staff\/exports)\//, { reason: "webhooks" }],
+  [/^\/(webhooks|pixel)(\/|$)/, { reason: "webhooks" }],
+  [/^\/(meta\/data-deletion|staff\/exports)\//, { reason: "webhooks" }],
   // Returns from signing in to a provider, and Zapier's API (by its token).
-  [/^\/(ads\/[^/]+\/(callback|oauth-callback)|email\/oauth\/[^/]+\/callback)$/, { reason: "integrations_oauth" }],
+  [/^\/ads\/[^/]+\/(callback|oauth-callback)$/, { reason: "integrations_oauth" }],
   [/^\/(oauth|zapier)\//, { reason: "integrations_oauth" }],
   // A connect link's page (routes/adLinks.ts): the store comes from the link.
   [/^\/ads\/links\//, { reason: "integrations_oauth" }],

@@ -8,16 +8,16 @@ Where things are today: [AWS_INVENTORY.md](AWS_INVENTORY.md). What they become:
 
 | Stage | What | Touches production? | Approval |
 | --- | --- | --- | --- |
-| A | Code: the self-hosted entry point and adapters (queue, schedules, coordinator, blobs, metrics), Dockerfile, Compose file, backup/restore/deploy scripts. Merged to `main`; AWS keeps running the same code. **Built and tested 2026-11-06, live on AWS 2026-11-07 (#348, release 167)**; the SMS events bridge followed on 2026-11-07 ([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md)) | No | — |
+| A | Code: the self-hosted entry point and adapters (queue, schedules, coordinator, blobs, metrics), Dockerfile, Compose file, backup/restore/deploy scripts. Merged to `main`; AWS keeps running the same code. **Built and tested 2026-11-06, live on AWS 2026-11-07 (#348, release 167)**; the SMS events bridge followed on 2026-11-07 and went with Customer Messaging (SMS) on 2026-11-13 ([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md)) | No | — |
 | B | Server: `~/bizinsights-staging` on iKorex, a copy of production data, schedules off, no webhooks, mail to a sink, behind Cloudflare Access | No (reads a dump) | Server administrator's OK |
 | C | Backups to R2, restore test, monitoring and alerts, external uptime check | No | — |
 | D | Cutover in a maintenance window (below): a Sunday, 20:00-21:00 Melbourne time | **Yes** | **Owner, for the date** |
 | E | Rollback period, 14 days: AWS kept with schedules off | No | — |
 | F | AWS decommissioned, one resource at a time, then the account closed (decision 4b) | **Yes** | **Owner, separately** |
 
-Alongside, on AWS before the cutover (each live through Deploy to AWS like any change): the app's own
-sign-in, moving users over (`AUTH_MODE=migrating`), and texts through Twilio (`SMS_PROVIDER=twilio`).
-So the server starts with neither Cognito's sign-in nor AWS's SMS to carry.
+Alongside, on AWS before the cutover (live through Deploy to AWS like any change): the app's own
+sign-in, moving users over (`AUTH_MODE=migrating`), so the server doesn't start with Cognito's
+sign-in to carry. (Customer Messaging (SMS) was removed on 2026-11-13: there are no texts to move.)
 
 ## Service by service
 
@@ -27,7 +27,7 @@ So the server starts with neither Cognito's sign-in nor AWS's SMS to carry.
 | SQS + Lambda `jobs` | `worker` + PostgreSQL queue | **Done**: `pgQueues.ts` (implements `Queues`; SQS's contract: delays, receive counts, holds, dead-letter after 10), runner in `selfhost.ts`, `admin queues/dlq/redrive` | Queues drained to empty before the window; nothing carried over | Integration tests against PostgreSQL (retry, backoff, dead-letter, worker dying mid-job, two claimers, time limit) | A handler that assumed SQS batch semantics: none do (they get one message at a time on both) |
 | EventBridge Scheduler + `cron` | Schedules in `worker` (`schedule_ticks`); admin command | **Done**: `schedules.ts` (cron with time zones, one run per tick across workers, catch-up, retries), `admin.ts` | — | Ticks recorded; two workers run a tick once; failed tick retried | A missed tick during the window: the 15-minute jobs catch up by design |
 | SNS alarms | Alertmanager | Rules + email config | — | One test alert | — |
-| SNS sms-events → SQS | Twilio's status and inbound webhooks (`/api/webhooks/sms/twilio/*`), through the tunnel like every request | **Done**: `apps/api/src/routes/smsTwilio.ts` (#354), signatures checked, into the same `smsEvents` queue. Only if the cutover comes before the Twilio switch: `sqsBridge.ts` (`SMS_EVENTS_QUEUE_URL`, only with `SCHEDULES=on`) reads AWS's queue meanwhile | — | A text's delivery report and a STOP reply arrive on the server | Twilio's webhooks follow DNS, so they reach whichever copy `bizinsights.io` points at. Before the switch: two readers of the SQS queue, so the `jobs` function's `smsEvents` trigger goes off in the window, before `SCHEDULES=on` |
+| SNS sms-events → SQS | Nothing: Customer Messaging (SMS) was removed from the app on 2026-11-13 | Twilio's webhooks (#354) and the bridge that read AWS's queue (`sqsBridge.ts`) were built and went with it; the topic, the queue and its trigger are gone from the App stack | — | — | — |
 | DynamoDB `coord` | PostgreSQL table `coord_entries` | **Done**: `pgCoord.ts` (implements `Coord`), `admin import-coord` | The 12 items (signed-out sessions among them) copied with `admin import-coord` | `Coord` contract tests against PostgreSQL | — |
 | S3 `payloads` | Volume + nightly prune | **Done**: `fsBlobs.ts` (implements `BlobStore`) | — (transient, drained) | Unit tests incl. keys that would leave the folder | Disk fills: alert at 80 % |
 | S3 `site` | Served by `app` | Production static handler (`staticSite.ts` exists) with cache headers | — | Pages, hashed files cached by Cloudflare | — |
@@ -36,12 +36,12 @@ So the server starts with neither Cognito's sign-in nor AWS's SMS to carry.
 | Cognito | **The app's own sign-in** (decision 2 revised): `AUTH_MODE=migrating` on AWS first, `local` at stage F | **Done**: `localAuth.ts`, `migratingAuth.ts`, `authStore.ts` (#353); Cognito's password check and admin delete with an IAM user key until stage F | The accounts that moved over are rows of `auth_accounts`, copied with the database | Password, email code, Google, reset, sign-out, two-step verification | Users who never sign in before stage F: a reset email each (ROLLBACK_PLAN.md, "Before stage F starts") |
 | Cognito email Lambda + KMS | The app's own code emails (Resend) | Done with the sign-in above | — | Sign-up and reset codes arrive | — |
 | SES | Nothing (Resend sends) | — | — | — | — |
-| End User Messaging SMS | **Twilio** (decision 3 revised, owner's choice 2026-11-07) | **Done**: `twilioSmsProvider.ts`, `smsProviders.ts` (#354), off until the owner's Twilio account is ready (`docs/sms.md`, "Switching to Twilio"); until then an IAM user key with `sms-voice:SendTextMessage` and the SQS reads above | Nothing: no real text was sent on AWS (sandbox); sender names are registered again at Twilio | One real text to the owner's phone, its delivery report, a STOP reply | Sender name registration at Twilio takes days to weeks in some countries |
+| End User Messaging SMS | Nothing: Customer Messaging (SMS) was removed from the app on 2026-11-13 | The Twilio provider (#354) was built, never switched on, and went with it. The configuration set and the `sms-voice:*` permissions are gone from the App stack | Nothing: no real text was sent on AWS (sandbox) | — | — |
 | Secrets Manager + SSM | `.env` on the server + encrypted copy | `loadSecrets` skipped when the values are present | Exported by a script that prints names only | `config` action shows every provider configured | A secret in a log: the script never prints values |
 | CloudFront + WAF | Cloudflare proxy + Tunnel + Cloudflare rules | — | — | Client IP, geo, rate limit, outage behaviour | Cloudflare Free has less WAF than AWS's managed groups (see the cost audit, change 6) |
 | EC2 NAT + admin host | — | — | — | Outbound calls work from the server | — |
 | Fargate Evolution + Cloud Map + Route 53 | `evolution` container | `EVOLUTION_API_URL` = `http://evolution:8080`; webhook URL to `app` on the internal network | Its `evolution` database (sessions) with the app's | Linked numbers still connected after the window | Sessions tied to the old webhook URL: Evolution's instances re-pointed at start. Two services on one WhatsApp session push each other off it, and AWS's would keep writing its database after the copy's snapshot: AWS's has no task from cutover step 2 (`AWS_WHATSAPP=off`, so no Deploy to AWS starts it again) until stage F, unless the copy back hands the sessions back |
-| CloudWatch | Prometheus, Alertmanager, Grafana + external uptime check (Loki: off, decision 7) | **Done**: `/metrics` on `web` and `worker` (`metrics.ts`), `infra/ikorex/docker-compose.monitoring.yml`, 16 alert rules, a dashboard | — | Each alert fired once (stage C) | Monitoring on the same server: covered by the external check |
+| CloudWatch | Prometheus, Alertmanager, Grafana + external uptime check (Loki: off, decision 7) | **Done**: `/metrics` on `web` and `worker` (`metrics.ts`), `infra/ikorex/docker-compose.monitoring.yml`, 15 alert rules, a dashboard | — | Each alert fired once (stage C) | Monitoring on the same server: covered by the external check |
 | GuardDuty, CloudTrail, Cost Explorer, Budgets | Deleted at stage F; the server never sends the cost email | **Done**: the server's cost-email schedule removed | — | — | — |
 | CDK + Deploy to AWS | `ship.sh` + `deploy.sh` over SSH; the workflow Deploy to iKorex | **Done**: the scripts, and `.github/workflows/ikorex-deploy.yml` (built 2026-11-07, off until stage B's setup: `IKOREX_STAGING`, then `IKOREX_PRODUCTION` at the cutover) | — | A deploy with a failing migration or health check rolls back (stage B) | The deploy key: its own, in GitHub's secret only, limited on the server to `ssh-gate.sh` (receive, deploy) |
 
@@ -62,10 +62,8 @@ only reach users with one.
 ## Cutover (stage D), in the window
 
 1. Announce the window. Stage B's staging has passed every check.
-2. On AWS: schedules off; webhooks answered `503` (Shopify retries them for hours, Twilio once,
-   so a delivery report in the window may be lost and the text stays "Sent"); if SMS is still on AWS,
-   the `jobs` function's `smsEvents` trigger off (SMS events then wait in SQS for the server); the
-   other queues drained to empty; final `counts`. AWS's WhatsApp service stopped: GitHub variables
+2. On AWS: schedules off; webhooks answered `503` (Shopify retries them for hours); the
+   queues drained to empty; final `counts`. AWS's WhatsApp service stopped: GitHub variables
    `AWS_SCHEDULES=off` and `AWS_WHATSAPP=off` (every Deploy to AWS in the rollback period keeps
    both off), and at once `aws ecs update-service --cluster insights-production-whatsapp --service
    insights-production-evolution-a --desired-count 0`, waited on until no task runs.
@@ -76,8 +74,7 @@ only reach users with one.
 5. Cloudflare: `bizinsights.io` and `www` move from CloudFront to the tunnel (proxied, takes effect
    in seconds).
 6. Smoke tests; sign in; a test webhook; WhatsApp numbers connected; schedules on
-   (`SCHEDULES=on`; if SMS is still on AWS, with `SMS_EVENTS_QUEUE_URL` set, which also starts
-   reading the SMS events waiting in SQS).
+   (`SCHEDULES=on`).
 7. Webhooks queued at Shopify arrive at iKorex.
 
 The window is the only write freeze. The rollback for each step is in [ROLLBACK_PLAN.md](ROLLBACK_PLAN.md).

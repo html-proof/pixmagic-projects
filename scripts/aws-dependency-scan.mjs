@@ -25,7 +25,7 @@ export const PATTERNS = [
   ["signing", /X-Amz-/],
   ["resource name", /arn:aws:/],
   // Prefixed names too: E2E_COGNITO_PORT, vars.AWS_WHATSAPP.
-  ["setting", /\b[A-Z0-9_]*(AWS|COGNITO)_[A-Z0-9_]+|\bSES_(REGION|CONFIGURATION_SET)\b|\bSMS_EVENTS_QUEUE_URL\b|\b[A-Z_]+_SECRET_ARN\b/],
+  ["setting", /\b[A-Z0-9_]*(AWS|COGNITO)_[A-Z0-9_]+|\bSES_(REGION|CONFIGURATION_SET)\b|\b[A-Z_]+_SECRET_ARN\b/],
 ];
 
 /** Lines that are only a comment, in the languages here (TypeScript, shell, YAML, env files, HTML). */
@@ -67,7 +67,7 @@ export const GROUPS = [
   },
   {
     title: "AWS code the server loads, used only when a switch says so",
-    goes: "Each when its switch is on the AWS-free side (`AUTH_MODE=local`, `SMS_PROVIDER=twilio`, no `SMS_EVENTS_QUEUE_URL`, no `SES_REGION`); the AWS side deleted at stage F",
+    goes: "Each when its switch is on the AWS-free side (`AUTH_MODE=local`, no `SES_REGION`); the AWS side deleted at stage F",
     paths: [
       "apps/aws/src/selfhost.ts",
       "apps/aws/src/app.ts",
@@ -75,8 +75,6 @@ export const GROUPS = [
       "apps/aws/src/awsClient.ts",
       "apps/aws/src/mailers.ts",
       "apps/aws/src/sesMailer.ts",
-      "apps/aws/src/smsProvider.ts",
-      "apps/aws/src/sqsBridge.ts",
       "infra/ikorex/env/",
       "infra/ikorex/monitoring/alerts.yml",
     ],
@@ -103,24 +101,6 @@ export const GROUPS = [
       ".github/workflows/ci.yml",
       "infra/cognito-local/",
       ".claude/",
-    ],
-  },
-  {
-    title: "SMS records shaped by AWS (sender ARNs, AWS's registration states, the SMS region)",
-    goes: "After `SMS_PROVIDER=twilio`: rows already stored keep their AWS ARNs as history, new senders are Twilio's",
-    paths: [
-      "packages/core/src/sms/common.ts",
-      "apps/web/src/components/messaging/Sender.tsx",
-      "apps/aws/src/local.ts",
-      "apps/api/test/automations.test.ts",
-      "apps/api/test/integrations.test.ts",
-      "apps/api/test/sms.test.ts",
-      "apps/api/test/smsAutomations.test.ts",
-      "apps/api/test/smsReadiness.test.ts",
-      "apps/api/test/smsSetup.test.ts",
-      "apps/worker/test/sms.test.ts",
-      "apps/worker/load/automations.load.ts",
-      "packages/shared/test/sms.test.ts",
     ],
   },
   {

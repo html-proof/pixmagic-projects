@@ -126,7 +126,7 @@ export function configCheck(invoke, envName) {
   const detail = [
     `ads ${on(report.ads.configured)} (restricted ${on(report.ads.restricted)})`,
     `WhatsApp service ${!report.whatsapp.evolution ? `off${needs(report.whatsapp.evolutionNeeds)}` : !report.whatsapp.service ? "on" : report.whatsapp.service.reachable ? `on (Evolution ${report.whatsapp.service.version ?? "?"} answers)` : "on but NOT reachable"}, Cloud API ${report.whatsapp.embeddedSignup ? "on" : `off${needs(report.whatsapp.embeddedSignupNeeds)}`}`,
-    `email ${on({ gmail: report.email.google, outlook: report.email.microsoft, resend: report.email.resend })}`,
+    `email ${on({ resend: report.email.resend })}`,
     `Google sign-in ${report.auth.google ? "on" : "off"}`,
     `emailed sign-in code ${report.auth.loginCode ? "on" : "off"}`,
     half.length ? `missing a secret: ${half.map((c) => c.provider).join(", ")}` : "every provider with an id has its secret",

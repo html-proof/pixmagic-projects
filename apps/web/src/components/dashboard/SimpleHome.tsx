@@ -4,10 +4,8 @@ import { useEffect, useState, type KeyboardEvent, type PointerEvent, type ReactN
 import { ArrowUpRight, ChevronRight, CircleCheck } from "lucide-react";
 import type { AlertView } from "@app/shared/alerts";
 import type { Health } from "@app/shared/health";
-import { CHANNEL_NAME, useHub } from "@/components/automations/HubUi";
 import { HelpTip } from "@/components/PageKit";
-import type { HubAutomation, OverviewResponse } from "@/components/automations/types";
-import { fmtMoney, fmtNum, fmtPct, useApi } from "@/lib/api";
+import { fmtMoney, fmtPct, useApi } from "@/lib/api";
 import { SIMPLE_HOME } from "@/lib/features";
 import { HOME_LAYOUT_KEY, readLocal, writeLocal } from "@/lib/storage";
 import { versusWords } from "./DateRange";
@@ -19,8 +17,8 @@ import type { Overview } from "./types";
 
 // ---------------------------------------------------------------------------
 // The simple Home (lib/features.ts SIMPLE_HOME), drawn as the owner's approved Stitch design draws
-// it (prototype v2, screens 01, 03 and 04): what needs you, four numbers, sales by day, what
-// changed, and the automations working for you, on plain white panels with a small radius and a
+// it (prototype v2, screens 01, 03 and 04): what needs you, four numbers, sales by day and what
+// changed, on plain white panels with a small radius and a
 // faint shadow (globals.css `home-card`). Every figure is one the full dashboard shows too, worked
 // out by the same code; the full dashboard stays one click away ("Show the full dashboard", kept
 // per device).
@@ -393,8 +391,7 @@ const HEALTH_WORD: Record<Health, string> = { attention: "Needs attention", watc
 
 /**
  * The business health check's first three (worst first, `businessHealth`), each opening its
- * details. `stacked`: beside the chart (a store without automations, the design's screen 03),
- * "See why" goes under each line.
+ * details. `stacked`: beside the chart (the design's screen 03), "See why" goes under each line.
  */
 export function WhatChanged({ ov, currency, onOpen, stacked = false }: { ov: Overview; currency: string; onOpen: (t: Topic) => void; stacked?: boolean }) {
   const checks = businessHealth(ov, currency).slice(0, 3);
@@ -423,86 +420,6 @@ export function WhatChanged({ ov, currency, onOpen, stacked = false }: { ov: Ove
               </button>
             </li>
           ))}
-        </ul>
-      )}
-    </Panel>
-  );
-}
-
-// ---- Working for you ----------------------------------------------------------------------------
-
-/** Messages an automation handed to the provider in its last 30 days (test-only ones aren't sent). */
-const sentOf = (a: HubAutomation) => a.last30Days.sent + a.last30Days.delivered + a.last30Days.undelivered;
-
-const OFF_WORD: Partial<Record<HubAutomation["status"], string>> = { paused: "Paused", draft: "Off", pending_approval: "Waiting for approval", disabled: "Off" };
-
-/**
- * The automations hub's own answer (GET .../automations, as /automations shows it), in the design's
- * words: "Order confirmation (SMS), On, 381 sent in 30 days", busiest first, and one that's off with
- * "Turn on". Turning one on asks to confirm, so that button opens the Automations page.
- */
-export function WorkingForYou() {
-  const { path } = useHub();
-  const { data, error } = useApi<OverviewResponse>(path(""));
-  const all = data?.automations ?? [];
-  const on = all.filter((a) => a.status === "active").sort((a, b) => sentOf(b) - sentOf(a));
-  const off = all.filter((a) => a.status !== "active");
-  const shown = on.slice(0, 4);
-  const offShown = shown.length < 4 ? off.slice(0, 1) : [];
-  const canCreate = !!data && (data.permissions.manage.sms || data.permissions.manage.email);
-  const row = "flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0";
-  return (
-    <Panel id="working" title="Working for you">
-      {!data ? (
-        error ? (
-          <p className="text-sm text-muted">
-            We couldn&apos;t load your automations.{" "}
-            <Link href="/automations" className="font-medium text-accent hover:underline">Open Automations</Link>
-          </p>
-        ) : (
-          <div className="space-y-2" aria-hidden>
-            {[0, 1, 2].map((i) => <div key={i} className="skeleton h-10 rounded" />)}
-          </div>
-        )
-      ) : shown.length === 0 && offShown.length === 0 ? (
-        <div className="text-sm text-muted">
-          <p>No automations yet. They can confirm orders, send shipping updates and remind shoppers who left at checkout.</p>
-          <Link href={canCreate ? "/automations/new" : "/automations"} className="btn-primary mt-3 inline-flex h-8 items-center rounded px-3 text-[13px]">
-            {canCreate ? "Set one up" : "Open Automations"}
-          </Link>
-        </div>
-      ) : (
-        <ul className="divide-y divide-home-line">
-          {shown.map((a) => {
-            const n = sentOf(a);
-            return (
-              <li key={`${a.channel}:${a.id}`} className={row} data-testid="working-on">
-                <span className="min-w-0 text-sm">
-                  {a.name} <span className="text-muted">({CHANNEL_NAME[a.channel]})</span>, On
-                  {a.testMode ? " in test mode: messages are recorded, not sent" : `, ${n ? `${fmtNum(n)} sent in 30 days` : "nothing sent yet"}`}
-                </span>
-                <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-accent" />
-              </li>
-            );
-          })}
-          {offShown.map((a) => (
-            <li key={`${a.channel}:${a.id}`} className={row} data-testid="working-off">
-              <span className="min-w-0 text-sm">
-                {a.name} <span className="text-muted">({CHANNEL_NAME[a.channel]})</span>, {OFF_WORD[a.status] ?? "Off"}
-              </span>
-              {a.status === "pending_approval" ? (
-                <Link href="/automations" className="home-btn h-8">Review</Link>
-              ) : (
-                <Link href="/automations" className="btn-primary inline-flex h-8 shrink-0 items-center rounded px-3 text-[13px]">Turn on</Link>
-              )}
-            </li>
-          ))}
-          {on.length > shown.length && (
-            <li className="pt-3 text-xs text-muted">
-              and {fmtNum(on.length - shown.length)} more on ·{" "}
-              <Link href="/automations" className="font-medium text-accent hover:underline">See all</Link>
-            </li>
-          )}
         </ul>
       )}
     </Panel>

@@ -145,7 +145,7 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
   { key: "orders.cancellations", module: "orders", kind: "view", requires: ["orders.list"], label: "View cancellations", reveals: "Which orders were cancelled." },
   // ---- Marketing
   { key: "marketing.ads", module: "marketing", kind: "view", label: "View advertising analytics", reveals: "Meta and Google Ads spend, clicks, conversions and return on ad spend, and AdSense earnings." },
-  { key: "marketing.campaigns", module: "marketing", kind: "view", label: "View campaigns and their performance", reveals: "Results per ad campaign, and Customer Messaging: WhatsApp and text message (SMS) campaigns, automations, templates and settings, their results and what texts cost. Customers' numbers and messages need \"View contact information\" too." },
+  { key: "marketing.campaigns", module: "marketing", kind: "view", label: "View campaigns and their performance", reveals: "Results per ad campaign, and WhatsApp campaigns, automations, templates and settings, and their results. Customers' numbers and messages need \"View contact information\" too." },
   { key: "marketing.attribution", module: "marketing", kind: "view", requires: ["analytics.traffic"], label: "View conversion attribution", reveals: "Orders and sales that came from paid traffic and from each UTM campaign." },
   // ---- Discounts
   { key: "discounts.codes", module: "discounts", kind: "view", label: "View discount codes and usage", reveals: "Which discount codes were used, and on how many orders." },
@@ -164,7 +164,7 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
     reveals: "Add, change, pause and remove the store's own costs on Profit & Loss and in Settings → Costs: one-off and recurring costs, their payments, the store's own cost categories, and from which day the list is complete. Every change is in the audit log.",
   },
   // ---- Integrations
-  { key: "integrations.status", module: "integrations", kind: "view", label: "View integration connection status", reveals: "Which store, ad, WhatsApp and email accounts are connected and whether they work, and the email setup: sending accounts, domains, templates, automations and sending totals. Never passwords, tokens or keys." },
+  { key: "integrations.status", module: "integrations", kind: "view", label: "View integration connection status", reveals: "Which store, ad and WhatsApp accounts are connected and whether they work. Never passwords, tokens or keys." },
   {
     key: "integrations.manage",
     module: "integrations",
@@ -173,7 +173,7 @@ export const ACCESS_PERMISSIONS: readonly AccessPermissionDef[] = [
     requires: ["integrations.status"],
     label: "Manage integrations",
     reveals:
-      "Connect, refresh and disconnect ad accounts, the WhatsApp number and email sending accounts, and connect the store to Zapier (its Zaps then get what this person may see). The Shopify store itself stays with owners and admins.",
+      "Connect, refresh and disconnect ad accounts and the WhatsApp number, and connect the store to Zapier (its Zaps then get what this person may see). The Shopify store itself stays with owners and admins.",
   },
   // ---- Staff
   { key: "staff.team", module: "staff", kind: "view", label: "View team information", reveals: "Employees' names, positions, departments and status." },
@@ -475,8 +475,8 @@ export function grantedKeys(access: MemberAccess): Set<AccessKey> {
 
 /**
  * The workspace-wide permissions (roles.ts) for a restricted member, read from their grants. Only
- * looking is ever implied: stores, members, API keys, billing, the audit log and email templates
- * stay with owners and admins. Routes that need finer rules ask for permissions directly.
+ * looking is ever implied: stores, members, API keys, billing and the audit log stay with
+ * owners and admins. Routes that need finer rules ask for permissions directly.
  */
 const COARSE: Record<Permission, (g: ReadonlySet<AccessKey>) => boolean> = {
   // Their own notification settings, the store picker, the bell: what every member needs.
@@ -488,10 +488,6 @@ const COARSE: Record<Permission, (g: ReadonlySet<AccessKey>) => boolean> = {
   "billing:manage": () => false,
   "audit:read": () => false,
   "workspace:delete": () => false,
-  "email:read": (g) => g.has("integrations.status"),
-  "email:activity": (g) => g.has("integrations.status") && g.has("customers.contact"),
-  "email:automate": () => false,
-  "email:manage": (g) => g.has("integrations.manage"),
 };
 
 /** What an API route or a page asks for: a workspace permission, one of the catalog's, or any of several of the catalog's. */

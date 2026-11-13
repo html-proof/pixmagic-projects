@@ -15,15 +15,7 @@ export type Permission =
   | "apikeys:manage"
   | "billing:manage"
   | "audit:read"
-  | "workspace:delete"
-  /** Email integrations: the overview, connected accounts (never their credentials), domains, templates and rules. */
-  | "email:read"
-  /** Email activity: who was sent what, and what each automation did with each event. */
-  | "email:activity"
-  /** Write email templates and automation rules; dry runs and test sends to oneself. */
-  | "email:automate"
-  /** Connect, reconnect and disconnect sending accounts; domains, sender addresses, suppressions, event API keys. */
-  | "email:manage";
+  | "workspace:delete";
 
 const MATRIX: Record<Role, Permission[]> = {
   owner: [
@@ -35,12 +27,8 @@ const MATRIX: Record<Role, Permission[]> = {
     "billing:manage",
     "audit:read",
     "workspace:delete",
-    "email:read",
-    "email:activity",
-    "email:automate",
-    "email:manage",
   ],
-  admin: ["dashboard:read", "customers:contact", "stores:manage", "members:manage", "apikeys:manage", "audit:read", "email:read", "email:activity", "email:automate", "email:manage"],
+  admin: ["dashboard:read", "customers:contact", "stores:manage", "members:manage", "apikeys:manage", "audit:read"],
   // Their access is the permissions granted to them (access.ts), never a fixed list: nothing here,
   // so a check that forgets to ask `allows` fails closed for them.
   manager: [],
