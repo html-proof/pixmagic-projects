@@ -2,7 +2,7 @@
  * A rule the person using the app broke, or a step they have to take first. The API answers it
  * with `status` and `{ "error": code, "message": message }` (plus `detail` when there is one), so
  * the message is written for them. Anything else thrown is a bug or an outage and becomes a
- * generic 500. Each module throws its own subclass (StaffError, EmailError, WhatsappError), so
+ * generic 500. Each module throws its own subclass (StaffError, WhatsappError), so
  * logs say which.
  */
 export class AppError extends Error {

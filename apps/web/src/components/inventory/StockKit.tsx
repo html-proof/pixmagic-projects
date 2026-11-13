@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import { Download, Settings } from "lucide-react";
 import { useToast } from "@/components/AppUi";
 import { fmtDay } from "@/components/dashboard/format";
-import { actionError, api, fmtNum, fmtPct } from "@/lib/api";
+import { actionError, api, fmtNum } from "@/lib/api";
 import type { AdjustmentRow, InventorySettingsView, ProductDetail, StockRow } from "@/lib/inventory";
 import { AdjustDialog, confirmedMessage, type AdjustTarget } from "./AdjustDialog";
 import { useCanAdjust, useInventory, variantLabel } from "./InventoryUi";
@@ -131,8 +131,24 @@ const TAG = "inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-med
 /** Why a row has no days left: too few days of orders, or nothing sold (`daysOfStock` is null either way). */
 const noForecast = (r: Pick<StockRow, "dailyRate">) => (r.dailyRate === null ? "Not enough sales history" : "No sales in 30 days");
 
-/** Days left as the design's tag: "Out now" in red, "5 days" on a soft tag, or why it can't be said. */
+/** What the "Keeps selling" tag means: Shopify's own setting, often a made-to-order item. */
+const KEEPS_SELLING = "Shopify keeps selling this item when it's out of stock (Continue selling when out of stock), as made-to-order items often are.";
+
+/** An out-of-stock item Shopify goes on selling: shown as "Keeps selling" rather than "Out now" (the owner's call, 2026-11-06). */
+const keepsSelling = (r: Pick<StockRow, "status" | "continueSelling">) => r.status === "out" && r.continueSelling;
+
+/**
+ * Days left as the design's tag: "Out now" in red ("Keeps selling" on a soft tag when Shopify goes on
+ * selling it), "5 days" on a soft tag, or why it can't be said.
+ */
 export function DaysLeftTag({ r }: { r: StockRow }) {
+  if (keepsSelling(r)) {
+    return (
+      <span className={`${TAG} bg-home-tag text-text`} title={KEEPS_SELLING}>
+        Keeps selling
+      </span>
+    );
+  }
   if (r.status === "out") {
     return (
       <span className={`${TAG} bg-danger/10 text-danger`}>
@@ -156,7 +172,11 @@ export function LeftLine({ r }: { r: StockRow }) {
   return (
     <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
       <span className={`${TAG} ${tone}`}>{a === null ? "—" : a < 0 ? `${fmtNum(-a)} oversold` : `${fmtNum(a)} left`}</span>
-      {r.status === "out" ? (
+      {keepsSelling(r) ? (
+        <span className="text-muted" title={KEEPS_SELLING}>
+          keeps selling
+        </span>
+      ) : r.status === "out" ? (
         <span className="font-medium text-danger">out now</span>
       ) : r.daysOfStock !== null ? (
         <span className={r.status === "low" ? "font-medium text-warn" : "text-muted"}>{r.daysOfStock === 0 ? "runs out within a day" : `runs out in ${fmtNum(r.daysOfStock)} ${r.daysOfStock === 1 ? "day" : "days"}`}</span>
@@ -187,7 +207,7 @@ export function SuggestedOrderNote({ settings, salesDays, canAdjust }: { setting
         <Link href="/inventory/settings" className="underline hover:text-text">
           Stock settings
         </Link>
-        . bizinsights doesn&apos;t order from suppliers: {canAdjust ? "add stock here when it arrives, and Shopify is updated." : "when stock arrives, add it in Shopify."}
+        . Oversold units count while their orders are unfulfilled. bizinsights doesn&apos;t order from suppliers: {canAdjust ? "add stock here when it arrives, and Shopify is updated." : "when stock arrives, add it in Shopify."}
       </p>
       {salesDays !== null && salesDays < 14 && <p>Sales rates need at least 14 days of imported orders; bizinsights has {fmtNum(salesDays)}.</p>}
     </div>
@@ -256,15 +276,3 @@ export function DefinedMark({ definition }: { definition: string }) {
   );
 }
 
-/** A change with no good or bad direction, in ChangeTag's type but grey; words for screen readers. */
-export function NeutralChange({ value, versus }: { value: number | null; versus: string }) {
-  if (value === null) return <span className="text-xs text-muted">Nothing to compare with</span>;
-  return (
-    <span className="text-xs font-medium text-muted tabular-nums">
-      <span className="sr-only">{value > 0 ? "up " : value < 0 ? "down " : "unchanged, "}</span>
-      <span aria-hidden>{value > 0 ? "+" : value < 0 ? "−" : ""}</span>
-      {fmtPct(Math.abs(value))}
-      <span className="sr-only"> {versus}</span>
-    </span>
-  );
-}

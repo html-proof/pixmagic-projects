@@ -24,9 +24,6 @@ export const metadata: Metadata = {
  *     packages/core/src/whatsapp/privacy.ts (redactWhatsappCustomer); a linked phone's WhatsApp
  *     session and a Cloud API number's access token are kept by bizinsights' own WhatsApp service
  *     (Evolution API on AWS, docs/whatsapp.md), the token also encrypted in wapp_connections;
- *   - Customer Messaging (SMS), only once a merchant sets up a sender, stores customers' mobile numbers
- *     and first names encrypted, their SMS consent history and opt-outs, with the retention in
- *     packages/core/src/sms/sweep.ts (SMS_RETENTION) and redaction in packages/core/src/sms/privacy.ts;
  *   - tokens are AES-256-GCM encrypted at rest (packages/core/src/tokens.ts);
  *   - uninstall wipes tokens and the compliance webhooks redact/purge (apps/worker/src/handlers.ts);
  *   - the funnel stores hashed browser ids, cleaned page paths, the products each visit saw, added to cart,
@@ -57,7 +54,7 @@ export const metadata: Metadata = {
  *     workspace (who, when, which shops).
  * Revise UPDATED with any material change; owners are emailed first (see "Changes to this policy").
  */
-const UPDATED = "2026-10-28";
+const UPDATED = "2026-11-13";
 
 const TOC = [
   { id: "who-we-are", title: "Who we are" },
@@ -117,15 +114,9 @@ const PROVIDERS = [
   },
   { name: "Shopify", purpose: "The source of your store data." },
   { name: "Meta (WhatsApp)", purpose: "Delivers WhatsApp messages and reports whether each was delivered and read, only for stores that connect WhatsApp (a linked phone, or Meta's WhatsApp Business Platform)." },
-  { name: "Amazon Web Services (AWS End User Messaging SMS)", purpose: "Delivers text messages, only for stores that set up Customer Messaging, and reports whether each was delivered and what it cost." },
-  { name: "Twilio Inc. (Programmable Messaging)", purpose: "Delivers text messages, only for stores that set up Customer Messaging, and reports whether each was delivered and what it cost." },
   {
     name: "Meta (Marketing API) and Google (Google Ads API, AdSense)",
     purpose: "The source of advertising reports, only for stores that connect an advertising account.",
-  },
-  {
-    name: "Google (Gmail API), Microsoft (Microsoft Graph) or your own SMTP provider",
-    purpose: "Send the emails you set up, from the account you connect, only for workspaces that connect one.",
   },
   {
     name: "Zapier",
@@ -266,22 +257,6 @@ export default function PrivacyPage() {
           records.
         </p>
 
-        <h3>Text messages (Customer Messaging)</h3>
-        <p>
-          To send the order updates, checkout reminders and campaigns you set up, bizinsights keeps each customer&apos;s mobile number
-          and first name, encrypted with AES-256-GCM, together with a one-way keyed hash of the number. The dashboard shows numbers
-          masked. We keep the customer&apos;s text-message marketing consent as Shopify reports it, a history of every change to it with
-          where it came from, and every opt-out, so that nobody who opted out is texted again. Marketing texts go only to customers
-          who agreed to them in Shopify, and each one carries a link that stops them at once. Texts are sent through AWS End User
-          Messaging or Twilio, which report whether each one was delivered and what it cost.
-        </p>
-        <p>
-          The words of each text are kept for 30 days after it is delivered or fails, delivery reports for 180 days, unfinished
-          checkouts for 90 days (their links for 30), and the record of which texts were sent, and what they cost, for 13 months. When
-          Shopify asks us to erase a customer, their numbers, consent history and texts are deleted; we keep only a one-way hash of an
-          opted-out number, so that their opt-out keeps working. When Shopify asks us to erase your store, all of it is deleted.
-        </p>
-
         <h3>Advertising accounts</h3>
         <p>
           With your permission, given on Meta&apos;s or Google&apos;s own consent screen, bizinsights reads your advertising reports: Meta
@@ -336,42 +311,15 @@ export default function PrivacyPage() {
           Staff records are kept for as long as your workspace exists, because payroll records usually have to be kept for a period set
           by law; deleting the workspace deletes them.
         </p>
-
-        <h3>Email sending</h3>
-        <p>To send the emails your automations and tests request, bizinsights connects to the mailbox you choose:</p>
-        <ul>
-          <li>
-            <strong>Gmail or Google Workspace</strong> — permission only to send email as you (<code>gmail.send</code>) and your email
-            address;
-          </li>
-          <li>
-            <strong>Outlook or Microsoft 365</strong> — only <code>Mail.Send</code> and your basic profile;
-          </li>
-          <li>
-            <strong>Any other provider</strong> — the SMTP server, user name and password you enter.
-          </li>
-        </ul>
-        <p>
-          bizinsights never reads, searches or deletes the mail in your mailbox. Tokens and passwords are encrypted with AES-256-GCM,
-          never shown again, and deleted when you disconnect the account (Google&apos;s access is also revoked at that point).
-        </p>
-        <p>
-          For each email we keep the recipient (encrypted, with a one-way keyed hash and a masked form for the activity log), the
-          subject, the sender and the provider&apos;s response — never the body, which is filled in from your template when the email
-          is sent. The details of the order or event an automation refers to are kept encrypted for up to 35 days, so that a delayed
-          email can still be written; the activity log is kept for 180 days. Addresses that unsubscribe or bounce are kept as a keyed
-          hash so they are not emailed again. When Shopify asks us to erase a customer or your store, their email events and messages
-          are deleted.
-        </p>
       </LegalSection>
 
       <LegalSection {...section("google-user-data")}>
         <p>
           bizinsights&apos; use and transfer of information received from Google APIs adheres to the{" "}
           <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
-          including the Limited Use requirements. Google user data is used only to show you your own reports and to send the emails
-          you set up. It is not sold, not used for advertising, and not read by people, except with your permission, for security
-          purposes, or where the law requires it.
+          including the Limited Use requirements. Google user data is used only to show you your own reports. It is not sold, not
+          used for advertising, and not read by people, except with your permission, for security purposes, or where the law requires
+          it.
         </p>
       </LegalSection>
 
@@ -398,8 +346,7 @@ export default function PrivacyPage() {
         </p>
         <p>
           The tokens Meta and Google issue when you connect WhatsApp or an advertising account are protected in the same way and
-          destroyed when you disconnect it. Email account tokens and SMTP passwords are also encrypted, each with its own key, and
-          destroyed when you disconnect the account.
+          destroyed when you disconnect it.
         </p>
       </LegalSection>
 

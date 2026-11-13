@@ -9,9 +9,10 @@ import type { LeftOutAccount } from "@/components/dashboard/profitFigures";
 import { liveDataChanged, useApi, useLiveApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
-// What the Profit & Loss page asks (docs/kpis.md "Profit and loss"): the dashboard's dates and their
-// comparison (the same address-bar state as every dashboard page), the columns (?grain=day|week|
-// month|year), the statement for them (GET …/profit/statement, core's profitStatement, worked out by
+// What the Profit & Loss page asks (docs/kpis.md "Profit and loss"): the dashboard's dates (the
+// same address-bar state as every dashboard page), the columns (?grain=day|week|
+// month|year: the charts' periods, the statement's columns and the day-by-day sheet's), the statement
+// for them (GET …/profit/statement, core's profitStatement, worked out by
 // @app/shared/profit), and the store's costs as they're kept (GET …/expenses) for editing them.
 // ---------------------------------------------------------------------------
 
@@ -40,7 +41,7 @@ export interface StatementAnswer {
   timezone: string;
   today: string;
   range: { from: string; to: string };
-  previous: { from: string; to: string; compare?: "previous" | "year" | "custom" };
+  previous: { from: string; to: string };
   grain: StatementGrain;
   firstDay: string | null;
   historyFrom: string | null;
@@ -90,7 +91,7 @@ export function useStatement() {
   const live = useLiveApi<StatementAnswer>(path, LIVE_EVERY_MS);
   const costs = useApi<CostsAnswer>(base && sees ? `${base}/expenses` : null);
   const data = live.data;
-  const shown: Shown = data && { range: data.range, previous: data.previous, timezone: data.timezone };
+  const shown: Shown = data && { range: data.range, timezone: data.timezone };
   const { reload } = costs;
 
   /** After a change: the statement and the costs list asked for again. */
@@ -110,6 +111,8 @@ export function useStatement() {
     error: live.error,
     loading: live.loading,
     grain: data?.grain ?? grainParam,
+    /** The columns picked by hand (?grain=), null while they follow the dates' length. */
+    picked: grainParam,
     setGrain: (g: StatementGrain) => setGrain(g),
     costs: costs.data,
     costsError: costs.error,

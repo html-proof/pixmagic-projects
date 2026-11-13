@@ -1,206 +1,365 @@
 "use client";
-import type { ReactNode } from "react";
-import { categoryLabel, EXPENSE_SECTION_LABEL } from "@app/shared/expenses";
-import { outcomeOf, PROFIT_OUTCOME_LABEL, type ProfitLoss } from "@app/shared/profit";
-import { BarRow, StackedBar } from "@/components/dashboard/Charts";
+import { Fragment, type ReactNode } from "react";
+import { ArrowRight, CalendarPlus, ChartColumn, CircleDollarSign, Download, Info, Megaphone, PieChart, ReceiptText, ShoppingCart, Sparkles, TrendingDown, TrendingUp, Trophy } from "lucide-react";
+import { PROFIT_LOSS_GAP_WORDS, type ProfitLoss } from "@app/shared/profit";
+import { Donut } from "@/components/dashboard/Charts";
 import { LineChart } from "@/components/dashboard/LineChart";
-import { Badge, type Tone } from "@/components/dashboard/Primitives";
-import { fmtMoneyCompact } from "@/components/dashboard/format";
-import { fmtMoney, fmtPct } from "@/lib/api";
-import { PLATFORM_NAME, toneOf, TONE_TEXT } from "./profitUi";
+import { fmtDay, fmtMoneyCompact, fmtSpan, fmtWeekday, plural } from "@/components/dashboard/format";
+import { HelpTip } from "@/components/PageKit";
+import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
+import { IconTile, MISSING, PlCard } from "./PlKit";
+import { costGroups, profitDays, toneOf, TONE_TEXT } from "./profitUi";
 import { periodLabel } from "./Statement";
 import type { StatementAnswer } from "./useStatement";
 
 // ---------------------------------------------------------------------------
-// The top of the Profit & Loss page: the figures that say whether the store made money in the dates,
-// each beside the dates it's compared with, then where the money went (docs/kpis.md "Profit and
-// loss"). Every figure is the server's; "Missing data" with its reason wherever an input isn't known.
+// The Overview tab of Profit & Loss (the owner's design, 13 Nov 2026): how revenue, expenses and
+// profit moved over the dates, what stands out in plain words, where the money went, the best and
+// worst days, and the statement. Every figure is the server's
+// (docs/kpis.md "Profit and loss"); what can't be worked out says "Missing data" and why.
 // ---------------------------------------------------------------------------
 
-const MISSING = "Missing data";
+const GRAIN_WORD = { day: "day", week: "week", month: "month", year: "year" } as const;
 
-/** The change from the comparison, coloured by whether it is good for profit (`cost`: a rise is bad). */
-function Change({ now, before, cost = false, points = false }: { now: number | null; before: number | null; cost?: boolean; points?: boolean }) {
-  if (now === null || before === null) return null;
-  if (points) {
-    const d = (now - before) * 100;
-    if (Math.abs(d) < 0.05) return <span className="text-xs text-muted">no change</span>;
-    const good = cost ? d < 0 : d > 0;
-    return <span className={`text-xs ${good ? "text-good" : "text-danger"}`}>{`${d > 0 ? "▲" : "▼"} ${Math.abs(d).toFixed(1)} pts`}</span>;
-  }
-  if (before === 0) return null;
-  const change = (now - before) / Math.abs(before);
-  if (Math.abs(change) < 0.0005) return <span className="text-xs text-muted">no change</span>;
-  const good = cost ? change < 0 : change > 0;
-  return <span className={`text-xs ${good ? "text-good" : "text-danger"}`}>{`${change > 0 ? "▲" : "▼"} ${fmtPct(Math.abs(change))}`}</span>;
-}
+/** "Tue 3 Nov". */
+const dayWords = (day: string) => `${fmtWeekday(day)} ${fmtDay(day, { year: false })}`;
 
-function Card({ label, value, note, before, change, tone, testid, badge }: { label: string; value: string | null; note?: ReactNode; before?: string | null; change?: ReactNode; tone?: Tone; testid: string; badge?: number | null }) {
-  const outcome = badge === undefined ? null : outcomeOf(badge);
+/** Why profit can't be given for the dates, in a sentence; null when it can. */
+export const whyNoProfit = (t: ProfitLoss): string | null => (t.gaps.length ? PROFIT_LOSS_GAP_WORDS[t.gaps[0]!] : null);
+
+export function TrendCard({ a, className = "" }: { a: StatementAnswer; className?: string }) {
+  const cols = a.columns;
+  const word = GRAIN_WORD[a.grain];
+  const periods = a.grain === "day" ? undefined : cols.map((c) => ({ tick: periodLabel(c, a.grain), long: periodLabel(c, a.grain) }));
+  const empty = cols.every((c) => c.revenue === null);
+  const noProfit = !empty && cols.every((c) => c.netProfit === null);
   return (
-    <div className="min-w-0 rounded-xl border border-border bg-surface p-3.5" data-testid={testid}>
-      <p className="truncate text-xs text-muted" title={label}>
-        {label}
-      </p>
-      <p className={`mt-1 truncate text-xl font-semibold tabular-nums ${tone ? (TONE_TEXT[tone] ?? "") : ""}`} title={value ?? MISSING} data-testid={`${testid}-value`}>
-        {value ?? <span className="text-sm font-medium text-warn">{MISSING}</span>}
-      </p>
-      <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        {outcome && outcome !== "missing" && <Badge tone={outcome === "profit" ? "good" : outcome === "loss" ? "danger" : "neutral"}>{PROFIT_OUTCOME_LABEL[outcome]}</Badge>}
-        {change}
-        {before !== undefined && <span className="text-xs text-muted">vs {before ?? "—"}</span>}
-      </p>
-      {note && <p className="mt-1 text-xs text-muted">{note}</p>}
-    </div>
+    <PlCard id="pl-chart-trend" icon={<CircleDollarSign className="h-5 w-5" />} tone="var(--violet)" title="Revenue, Expenses & Profit Trend" sub={`How your business performed, ${word} by ${word}.`} className={className}>
+      {empty ? (
+        <p className="rounded-lg border border-dashed border-border px-3 py-10 text-center text-sm text-muted">Missing data: nothing to draw until these dates&apos; sales are known.</p>
+      ) : (
+        <LineChart
+          days={cols.map((c) => c.from)}
+          periods={periods}
+          series={[
+            { key: "revenue", label: "Revenue (before tax)", color: "var(--viz-cat-1)", values: cols.map((c) => c.revenue) },
+            { key: "expenses", label: "Expenses", color: "var(--viz-cat-2)", values: cols.map((c) => c.totalExpenses) },
+            { key: "profit", label: "Profit", color: "var(--good)", negativeColor: "var(--danger)", values: cols.map((c) => c.netProfit), line: true },
+          ]}
+          format={(n) => fmtMoney(n, a.currency)}
+          fmtAxis={(v) => fmtMoneyCompact(v, a.currency)}
+          label="Revenue, expenses and profit"
+          today={a.today}
+          bars
+          height={340}
+        />
+      )}
+      {noProfit && <p className="mt-2 text-xs text-muted">The profit line appears once profit can be worked out: {whyNoProfit(a.total)}</p>}
+    </PlCard>
   );
 }
 
-export function OverviewCards({ a }: { a: StatementAnswer }) {
-  const t = a.total;
-  const c = a.compare;
-  const money = (n: number | null) => (n === null ? null : fmtMoney(n, a.currency));
-  const pct = (n: number | null) => (n === null ? null : fmtPct(n));
-  const times = (n: number | null) => (n === null ? null : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n)}×`);
-  const profitNote = t.netProfit === null && t.afterKnownCosts !== null ? `Left after the costs known: ${fmtMoney(t.afterKnownCosts, a.currency)}` : undefined;
-  return (
-    <section className="space-y-3" aria-label="Profit overview" data-testid="pl-overview">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-        <Card label="Revenue (tax included)" value={money(t.totalSales)} before={money(c.totalSales)} change={<Change now={t.totalSales} before={c.totalSales} />} testid="pl-card-total-sales" />
-        <Card label="Revenue before tax" value={money(t.revenue)} before={money(c.revenue)} change={<Change now={t.revenue} before={c.revenue} />} note={t.taxes !== null ? `Tax collected: ${fmtMoney(t.taxes, a.currency)}` : undefined} testid="pl-card-revenue" />
-        <Card label="Total expenses" value={money(t.totalExpenses)} before={money(c.totalExpenses)} change={<Change now={t.totalExpenses} before={c.totalExpenses} cost />} testid="pl-card-expenses" />
-        <Card label="Profit or loss" value={money(t.netProfit)} tone={toneOf(t.netProfit)} badge={t.netProfit} before={money(c.netProfit)} change={<Change now={t.netProfit} before={c.netProfit} />} note={profitNote} testid="pl-card-profit" />
-        <Card label="Profit margin" value={pct(t.netMargin)} tone={toneOf(t.netMargin)} before={pct(c.netMargin)} change={<Change now={t.netMargin} before={c.netMargin} points />} note="Profit ÷ revenue before tax" testid="pl-card-margin" />
-      </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-        <Card label="Advertising" value={money(t.advertising)} before={money(c.advertising)} change={<Change now={t.advertising} before={c.advertising} cost />} testid="pl-card-advertising" />
-        <Card label="Variable costs" value={money(t.variableExAds)} before={money(c.variableExAds)} change={<Change now={t.variableExAds} before={c.variableExAds} cost />} testid="pl-card-variable" />
-        <Card label="Fixed costs" value={money(t.fixedCosts)} before={money(c.fixedCosts)} change={<Change now={t.fixedCosts} before={c.fixedCosts} cost />} testid="pl-card-fixed" />
-      </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Card label="MER" value={pct(t.mer)} before={pct(c.mer)} note="Advertising ÷ revenue (tax incl.)" testid="pl-card-mer" />
-        <Card label="Sitewide ROAS" value={times(t.roas)} before={times(c.roas)} note="Revenue (tax incl.) ÷ advertising" testid="pl-card-roas" />
-        <Card label="VCR" value={pct(t.vcr)} before={pct(c.vcr)} note="Variable costs ÷ revenue" testid="pl-card-vcr" />
-        <Card label="FCR" value={pct(t.fcr)} before={pct(c.fcr)} note="Fixed costs ÷ revenue" testid="pl-card-fcr" />
-      </div>
-    </section>
-  );
+interface Insight {
+  key: string;
+  tone: string;
+  icon: ReactNode;
+  title: ReactNode;
+  sub?: ReactNode;
 }
 
-function Chart({ title, help, empty, testid, children }: { title: string; help: string; empty: boolean; testid: string; children: ReactNode }) {
-  return (
-    <figure className="min-w-0" data-testid={testid}>
-      <figcaption>
-        <span className="text-sm font-medium">{title}</span>
-        <span className="block text-xs text-muted">{help}</span>
-      </figcaption>
-      <div className="mt-2">{empty ? <p className="rounded-lg border border-dashed border-border px-3 py-8 text-center text-sm text-muted">Missing data: nothing to draw until these figures can be worked out.</p> : children}</div>
-    </figure>
-  );
-}
-
-/** Each cost of the dates, biggest first: the synced ones (products, each ad platform) and the owner's by category. */
-function costsRanked(a: StatementAnswer, t: ProfitLoss) {
-  return [
-    ...(t.productCosts !== null && !t.grossGaps.length && t.productCosts !== 0 ? [{ key: "products", label: "Product costs (Shopify)", sub: "Variable costs", amount: t.productCosts }] : []),
-    ...Object.entries(t.adSpendBy)
-      .filter(([, v]) => v !== null && v !== 0)
-      .map(([p, v]) => ({ key: `ads-${p}`, label: `${PLATFORM_NAME[p] ?? p} ad spend`, sub: "Advertising (synced)", amount: v! })),
-    ...t.yours.byCategory.map((c) => ({ key: c.category, label: categoryLabel(c.category, a.categories), sub: EXPENSE_SECTION_LABEL[c.section], amount: c.amount })),
-  ].sort((x, y) => y.amount - x.amount);
-}
-
-export function OverviewCharts({ a }: { a: StatementAnswer }) {
+/** What stands out in the dates, each in a sentence a figure on the page backs: nothing is guessed. */
+function insightsOf(a: StatementAnswer, events: number | null, addEvent: ReactNode): Insight[] {
   const t = a.total;
   const money = (n: number) => fmtMoney(n, a.currency);
-  const axis = (v: number) => fmtMoneyCompact(v, a.currency);
-  const cols = a.columns;
-  const periods = a.grain === "day" ? undefined : cols.map((c) => ({ tick: periodLabel(c, a.grain), long: periodLabel(c, a.grain) }));
-  const none = (values: Array<number | null>) => values.every((v) => v === null);
-  const ranked = costsRanked(a, t);
-  const top = Math.max(...ranked.map((r) => Math.abs(r.amount)), 0);
-  const adRows = [
-    ...Object.entries(t.adSpendBy).map(([p, v]) => ({ key: p, label: `${PLATFORM_NAME[p] ?? p} (synced)`, amount: v })),
-    ...t.yours.byCategory.filter((c) => c.section === "advertising").map((c) => ({ key: c.category, label: categoryLabel(c.category, a.categories), amount: c.amount as number | null })),
-  ];
-  const adTop = Math.max(...adRows.map((r) => Math.abs(r.amount ?? 0)), 0);
+  const out: Insight[] = [];
+
+  if (t.netProfit === null) {
+    out.push({ key: "profit", tone: "var(--warn)", icon: <Info className="h-4 w-4" />, title: "Profit can't be shown for these dates yet", sub: whyNoProfit(t) });
+  } else {
+    const loss = t.netProfit < 0;
+    const amount = money(Math.abs(t.netProfit));
+    out.push({
+      key: "profit",
+      tone: loss ? "var(--danger)" : "var(--good)",
+      icon: loss ? <TrendingDown className="h-4 w-4" /> : <TrendingUp className="h-4 w-4" />,
+      title: loss ? `You made a loss of ${amount}` : t.netProfit === 0 ? "You broke even" : `You made a profit of ${amount}`,
+    });
+  }
+
+  const biggest = costGroups(t)
+    .filter((g): g is typeof g & { amount: number } => g.amount !== null && g.amount > 0)
+    .sort((x, y) => y.amount - x.amount)[0];
+  if (biggest) {
+    const share = t.totalExpenses && t.totalExpenses > 0 ? ` (≈ ${fmtPct(biggest.amount / t.totalExpenses)} of total expenses)` : "";
+    out.push({ key: "largest", tone: "var(--rose)", icon: <ShoppingCart className="h-4 w-4" />, title: `${biggest.label} ${biggest.key === "advertising" ? "is" : "are"} your largest expense`, sub: `${money(biggest.amount)}${share}.` });
+  } else {
+    out.push({ key: "largest", tone: "var(--rose)", icon: <ShoppingCart className="h-4 w-4" />, title: "No expenses in these dates yet", sub: "Add your costs under Expenses so profit is complete." });
+  }
+
+  if (t.advertising === null) out.push({ key: "ads", tone: "var(--info)", icon: <Megaphone className="h-4 w-4" />, title: "Advertising spend isn't known for these dates", sub: "The Expenses tab says why." });
+  else if (t.advertising === 0) out.push({ key: "ads", tone: "var(--info)", icon: <Megaphone className="h-4 w-4" />, title: "No advertising spend in this period." });
+  else out.push({ key: "ads", tone: "var(--info)", icon: <Megaphone className="h-4 w-4" />, title: `You spent ${money(t.advertising)} on advertising`, sub: t.mer === null ? undefined : `${fmtPct(t.mer)} of your revenue (tax included).` });
+
+  const days = profitDays(a.daily, t.netProfit);
+  if (days.best && a.daily.length > 1 && days.best.netProfit > 0) out.push({ key: "best", tone: "var(--violet)", icon: <Trophy className="h-4 w-4" />, title: `Your best day was ${dayWords(days.best.day)}`, sub: `${money(days.best.netProfit)} of profit.` });
+
+  if (events === 0) out.push({ key: "events", tone: "var(--info)", icon: <CalendarPlus className="h-4 w-4" />, title: "Add a few business events (e.g. sale, campaign)", sub: <>to see how they impact profit. {addEvent}</> });
+  else if (events) out.push({ key: "events", tone: "var(--info)", icon: <CalendarPlus className="h-4 w-4" />, title: `${plural(events, "business event")} in these dates`, sub: "The Detailed Table sets their days against the others." });
+  return out;
+}
+
+export function KeyInsights({ a, events, onAddEvent }: { a: StatementAnswer; /** Business events in the dates; null while not known. */ events: number | null; onAddEvent: (() => void) | null }) {
+  const add = onAddEvent && (
+    <button type="button" className="font-medium text-accent underline-offset-2 hover:underline" onClick={onAddEvent} data-print-hide>
+      Add one
+    </button>
+  );
+  const list = insightsOf(a, events, add);
   return (
-    <section className="card min-w-0 animate-rise" aria-labelledby="pl-charts-h" data-testid="pl-charts">
-      <h2 id="pl-charts-h" className="font-semibold">
-        Where the money went
-      </h2>
-      <div className="mt-4 grid gap-6 lg:grid-cols-2">
-        <Chart title="Revenue, expenses and profit" help={`Revenue before tax against every cost, ${a.grain === "day" ? "day" : a.grain} by ${a.grain === "day" ? "day" : a.grain}.`} empty={none(cols.map((c) => c.revenue))} testid="pl-chart-trend">
-          <LineChart
-            days={cols.map((c) => c.from)}
-            periods={periods}
-            series={[
-              { key: "revenue", label: "Revenue", color: "var(--viz-cat-1)", values: cols.map((c) => c.revenue) },
-              { key: "expenses", label: "Expenses", color: "var(--viz-cat-2)", values: cols.map((c) => c.totalExpenses) },
-              { key: "profit", label: "Profit", color: "var(--good)", negativeColor: "var(--danger)", values: cols.map((c) => c.netProfit) },
-            ]}
-            format={money}
-            fmtAxis={axis}
-            label="Revenue, expenses and profit"
-            today={a.today}
-            bars
-            height={220}
-          />
-        </Chart>
-        <Chart title="Daily profit or loss" help="Each day's profit: its revenue less its costs and its share of the fixed costs." empty={none(a.daily.map((d) => d.netProfit))} testid="pl-chart-daily">
-          <LineChart
-            days={a.daily.map((d) => d.day)}
-            series={[{ key: "profit", label: "Profit", color: "var(--good)", negativeColor: "var(--danger)", values: a.daily.map((d) => d.netProfit) }]}
-            format={money}
-            fmtAxis={axis}
-            label="Profit day by day"
-            today={a.today}
-            bars
-            height={220}
-          />
-        </Chart>
-        <div className="min-w-0">
-          <p className="text-sm font-medium">Expense breakdown</p>
-          <p className="text-xs text-muted">Every cost of the dates, biggest first.</p>
-          {ranked.length ? (
-            <ul className="mt-3 space-y-3" data-testid="pl-cost-ranking">
-              {ranked.slice(0, 10).map((r) => (
-                <BarRow key={r.key} label={r.label} sub={r.sub} value={money(r.amount)} fraction={top > 0 ? Math.max(0, r.amount) / top : 0} />
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-3 text-sm text-muted">No costs in these dates yet.</p>
+    <PlCard id="pl-insights" icon={<Sparkles className="h-5 w-5" />} tone="var(--violet)" title="Key Insights">
+      <ul className="space-y-2.5">
+        {list.map((i) => (
+          <li key={i.key} className="flex items-start gap-3 rounded-lg border border-home-line p-3" data-testid={`pl-insight-${i.key}`}>
+            <IconTile tone={i.tone} size="sm">
+              {i.icon}
+            </IconTile>
+            <div className="min-w-0 text-sm">
+              <p className="font-semibold">{i.title}</p>
+              {i.sub && <p className="mt-0.5 text-xs text-muted">{i.sub}</p>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </PlCard>
+  );
+}
+
+/** Where the money went: the five groups that add up to total expenses, as a ring and a list. */
+export function ExpenseDonut({ a }: { a: StatementAnswer }) {
+  const t = a.total;
+  const money = (n: number) => fmtMoney(n, a.currency);
+  const groups = costGroups(t);
+  const known = groups.reduce((n, g) => n + Math.round((g.amount ?? 0) * 100), 0) / 100;
+  const total = t.totalExpenses;
+  const whole = total ?? known;
+  const share = (n: number | null) => (n === null ? MISSING : whole > 0 ? fmtPct(n / whole) : "—");
+  return (
+    <PlCard
+      id="pl-expense-breakdown"
+      icon={<PieChart className="h-5 w-5" />}
+      tone="var(--violet)"
+      title="Expense Breakdown"
+      sub={total === null ? `Where your money went: ${money(known)} of costs known so far.` : `Where your money went (${money(total)} total).`}
+    >
+      <div className="@container">
+        <div className="flex flex-col items-center gap-6 @[28rem]:flex-row">
+          <Donut slices={groups.map((g) => ({ key: g.key, label: g.label, value: g.amount ?? 0, color: g.color }))} label={`Expenses: ${groups.map((g) => `${g.label} ${g.amount === null ? MISSING : money(g.amount)}`).join(", ")}`} size={176} thickness={24}>
+            <span className="text-lg font-bold tracking-tight tabular-nums">{whole > 0 || total !== null ? money(whole) : "—"}</span>
+            <span className="text-[11px] leading-tight text-muted">{total === null ? "Costs known" : "Total Expenses"}</span>
+          </Donut>
+          <ul className="w-full min-w-0 flex-1 divide-y divide-home-line text-sm" data-testid="pl-cost-groups">
+            {groups.map((g) => (
+              <li key={g.key} className="flex items-center gap-2 py-2">
+                <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: g.color }} />
+                <span className="flex min-w-0 flex-1 items-center gap-1">
+                  <span className="truncate">{g.label}</span>
+                  <HelpTip label={g.label}>{g.help}</HelpTip>
+                </span>
+                <span className="shrink-0 font-semibold tabular-nums">{g.amount === null ? <span className="text-xs font-medium text-warn">{MISSING}</span> : money(g.amount)}</span>
+                <span className="w-14 shrink-0 text-right text-xs text-muted tabular-nums">{g.amount === null ? "" : share(g.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </PlCard>
+  );
+}
+
+/** The dates' profit a day: its average, its best and worst day, and the whole. */
+export function ProfitAnalysisCard({ a }: { a: StatementAnswer }) {
+  const t = a.total;
+  const money = (n: number) => fmtMoney(n, a.currency);
+  const d = profitDays(a.daily, t.netProfit);
+  const why = whyNoProfit(t);
+  const row = (label: string, value: number | null, opts: { note?: string; strong?: boolean; plain?: boolean; testid: string }) => {
+    const tone = opts.plain ? undefined : toneOf(value);
+    return (
+      <div className="flex items-baseline justify-between gap-3 border-b border-home-line py-3 last:border-b-0" data-testid={opts.testid}>
+        <dt className="min-w-0 text-sm">
+          {label}
+          {opts.note && <span className="ml-2 text-xs text-muted">{opts.note}</span>}
+        </dt>
+        <dd className={`shrink-0 tabular-nums ${opts.strong ? "text-base font-bold" : "font-semibold"} ${tone ? (TONE_TEXT[tone] ?? "") : ""}`}>{value === null ? <span className="text-xs font-medium text-warn">{MISSING}</span> : money(value)}</dd>
+      </div>
+    );
+  };
+  return (
+    <PlCard id="pl-profit-analysis" icon={<ChartColumn className="h-5 w-5" />} tone="var(--violet)" title="Profit Analysis" sub={`Each day's profit after its own costs and its share of the fixed costs, over ${plural(a.daily.length, "day")}.`}>
+      <dl className="rounded-lg border border-home-line px-4">
+        {row("Daily average profit", d.average, { plain: true, testid: "pl-analysis-average" })}
+        {row("Highest profit day", d.best?.netProfit ?? null, { note: d.best ? dayWords(d.best.day) : undefined, testid: "pl-analysis-best" })}
+        {row("Lowest profit day", d.worst?.netProfit ?? null, { note: d.worst ? dayWords(d.worst.day) : undefined, testid: "pl-analysis-worst" })}
+        {row("Total profit (period)", t.netProfit, { strong: true, plain: true, testid: "pl-analysis-total" })}
+      </dl>
+      {why && <p className="mt-3 text-xs text-muted">{why}</p>}
+    </PlCard>
+  );
+}
+
+type Format = "money" | "count" | "percent";
+interface Row {
+  id: string;
+  label: string;
+  format: Format;
+  value: (p: ProfitLoss) => number | null;
+  /** The line the statement leads to. */
+  highlight?: boolean;
+  strong?: boolean;
+}
+
+const SECTIONS: Array<{ id: string; label: string; rows: Row[] }> = [
+  {
+    id: "revenue",
+    label: "Revenue",
+    rows: [
+      { id: "total_sales", label: "Revenue (Tax Included)", format: "money", value: (p) => p.totalSales },
+      { id: "revenue", label: "Revenue Before Tax", format: "money", value: (p) => p.revenue },
+      { id: "taxes", label: "Tax Collected", format: "money", value: (p) => p.taxes },
+    ],
+  },
+  {
+    id: "sales",
+    label: "Sales Stats",
+    rows: [
+      { id: "orders", label: "Orders", format: "count", value: (p) => p.orders },
+      { id: "units", label: "Items Sold", format: "count", value: (p) => p.units },
+    ],
+  },
+  {
+    id: "expenses",
+    label: "Expenses",
+    rows: [
+      { id: "advertising", label: "Advertising", format: "money", value: (p) => p.advertising },
+      { id: "variable", label: "Variable Costs", format: "money", value: (p) => p.variableExAds },
+      { id: "fixed", label: "Fixed Costs", format: "money", value: (p) => p.fixedCosts },
+      { id: "below", label: "Interest, Tax and Other", format: "money", value: (p) => p.belowOperating },
+    ],
+  },
+  {
+    id: "profit",
+    label: "Profit",
+    rows: [
+      { id: "total_expenses", label: "Total Expenses", format: "money", value: (p) => p.totalExpenses },
+      { id: "profit", label: "Profit (After Tax)", format: "money", value: (p) => p.netProfit, highlight: true, strong: true },
+      { id: "margin", label: "Profit Margin", format: "percent", value: (p) => p.netMargin, strong: true },
+    ],
+  },
+];
+
+const DASH = <span className="text-muted/60">—</span>;
+
+/** The statement for the dates as a whole, a row per figure. The Detailed Table has it period by period. */
+export function SummaryStatement({ a, onDownload, onDetails }: { a: StatementAnswer; onDownload: (() => void) | null; onDetails: () => void }) {
+  const show = (n: number | null, f: Format) => (n === null || !Number.isFinite(n) ? DASH : f === "money" ? fmtMoney(n, a.currency) : f === "percent" ? fmtPct(n) : fmtNum(n));
+  const cell = "px-4 py-2.5 text-right whitespace-nowrap tabular-nums";
+  return (
+    <PlCard
+      id="pl-summary"
+      flush
+      icon={<ReceiptText className="h-5 w-5" />}
+      tone="var(--violet)"
+      title="Profit & Loss Statement"
+      sub={fmtSpan(a.range.from, a.range.to, { year: true })}
+      actions={
+        <>
+          {onDownload && (
+            <button type="button" className="home-btn border border-home-line bg-surface" onClick={onDownload} data-testid="pl-summary-csv">
+              <Download aria-hidden className="h-4 w-4" />
+              Download CSV
+            </button>
           )}
-        </div>
-        <div className="min-w-0">
-          <div data-testid="pl-ads-breakdown">
-            <p className="text-sm font-medium">Advertising</p>
-            <p className="text-xs text-muted">
-              {a.setup.ads === "none" ? "No ad account connected: ads paid elsewhere are your own costs." : a.setup.ads === "hidden" ? "The ad spend isn't shown to you." : a.setup.ads === "unusable" ? "The connected accounts' spend isn't in the store's currency, so it isn't counted." : "The connected accounts' spend, then ads paid elsewhere."}
-            </p>
-            {adRows.length > 0 && (
-              <ul className="mt-3 space-y-3">
-                {adRows.map((r) => (
-                  <BarRow key={r.key} label={r.label} value={r.amount === null ? MISSING : money(r.amount)} fraction={adTop > 0 && r.amount !== null ? Math.max(0, r.amount) / adTop : 0} />
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
+          <button type="button" className="btn-primary h-9 gap-1.5 px-3 text-[13px]" onClick={onDetails} data-testid="pl-view-details">
+            View Details
+            <ArrowRight aria-hidden className="h-4 w-4" />
+          </button>
+        </>
+      }
+    >
+      <div className="overflow-x-auto border-t border-home-line" tabIndex={0} role="region" aria-label="Profit and loss statement">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-home-soft text-xs">
+              <th scope="col" className="px-4 py-2.5 text-left font-semibold">
+                Metric
+              </th>
+              <th scope="col" className="px-4 py-2.5 text-right font-semibold">
+                This Period
+                <span className="block font-normal text-muted">{fmtSpan(a.range.from, a.range.to)}</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {SECTIONS.map((sec) => (
+              <Fragment key={sec.id}>
+                <tr>
+                  <th scope="rowgroup" colSpan={2} className="border-t border-home-line bg-home-soft/60 px-4 py-2 text-left text-sm font-semibold">
+                    {sec.label}
+                  </th>
+                </tr>
+                {sec.rows
+                  // A line of 0 (no interest or tax recorded) says nothing.
+                  .filter((r) => r.id !== "below" || r.value(a.total))
+                  .map((r) => {
+                    const now = r.value(a.total);
+                    const profitTone = r.id === "profit" ? toneOf(now) : undefined;
+                    return (
+                      <tr key={r.id} className={`border-t border-home-line ${r.highlight ? "bg-good/10" : ""}`} data-testid={`pl-sum-${r.id}`}>
+                        <th scope="row" className={`px-4 py-2.5 pl-6 text-left ${r.strong ? "font-semibold" : "font-normal"}`}>
+                          {r.label}
+                        </th>
+                        <td className={`${cell} ${r.strong ? "font-semibold" : ""} ${profitTone ? (TONE_TEXT[profitTone] ?? "") : ""}`} data-testid="pl-sum-now">
+                          {show(now, r.format)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
       </div>
-      <div className="mt-6 border-t border-border pt-4" data-testid="pl-fixed-variable">
-        <p className="text-sm font-medium">Fixed vs variable</p>
-        <p className="mb-3 text-xs text-muted">Each kind of cost&apos;s share of the dates&apos; expenses.</p>
-        <StackedBar
-          label="Costs by kind"
-          format={money}
-          segments={[
-            { label: "Advertising", value: t.advertising ?? 0, fill: "bg-violet" },
-            { label: "Variable costs", value: t.variableExAds ?? 0, fill: "bg-warn" },
-            { label: "Fixed costs", value: t.fixedCosts, fill: "bg-accent" },
-            ...(t.belowOperating ? [{ label: "Interest, tax", value: t.belowOperating, fill: "bg-rose" }] : []),
-          ]}
-        />
+      <p className="px-5 py-3 text-xs text-muted sm:px-6">
+        In {a.currency}. A dash is a figure that can&apos;t be given (the Detailed Table says why).
+      </p>
+    </PlCard>
+  );
+}
+
+export function OverviewTab({
+  a,
+  events,
+  onAddEvent,
+  onDownload,
+  onDetails,
+}: {
+  a: StatementAnswer;
+  events: number | null;
+  onAddEvent: (() => void) | null;
+  onDownload: (() => void) | null;
+  onDetails: () => void;
+}) {
+  return (
+    <>
+      <div className="grid gap-4 xl:grid-cols-3">
+        <TrendCard a={a} className="xl:col-span-2" />
+        <KeyInsights a={a} events={events} onAddEvent={onAddEvent} />
       </div>
-    </section>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <ExpenseDonut a={a} />
+        <ProfitAnalysisCard a={a} />
+      </div>
+      <SummaryStatement a={a} onDownload={onDownload} onDetails={onDetails} />
+    </>
   );
 }

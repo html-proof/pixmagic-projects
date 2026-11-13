@@ -4,10 +4,10 @@ import { customSalesMonths, dailyBreakdown, NET_SALES_MONTHS, weekdayOf, yearFig
 import { customSales, type ComponentSelection } from "@app/shared/salesCalculation";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtLongDay, fmtMonth, fmtMoneyCompact, fmtMoneyWhole, fmtSpan, fmtWeekday, weekdayName } from "./format";
-import { ChartChoice, Delta } from "./Primitives";
+import { ChartChoice } from "./Primitives";
 import { asSalesDays, dayLinesOf, hasMonthLines, showsRefunds } from "./redacted";
 import { type Column, ColumnsWithTotal } from "./ColumnsWithTotal";
-import type { SalesOverview, YearMonth } from "./types";
+import type { SalesOverview } from "./types";
 
 // The sales cards: day by day for the dates picked, and month by month for this calendar year,
 // each drawn with ColumnsWithTotal. Each measures net sales, or the store's Custom sales while it
@@ -327,7 +327,6 @@ export function MonthlySalesCard({
   const firstImported = months.find((m) => m.coverage !== "none");
   const anyMissing = months.some((m) => m.coverage !== "full");
 
-  const changeText = (c: number) => `${c >= 0 ? "▲" : "▼"} ${fmtPct(Math.abs(c))}`;
   const columns: Column[] = months.map((m, i) => {
     const x = f.months[i]!;
     return {
@@ -340,12 +339,9 @@ export function MonthlySalesCard({
       tick: { top: fmtMonth(m.month, { short: true }), bottom: m.current ? "so far" : m.coverage === "partial" ? "partial" : undefined, strong: m.current, major: true },
       label: whole(x.value),
       keepLabel: m.current || m.month === f.best?.month,
-      note: x.change !== null && !m.current ? { text: changeText(x.change), tone: x.change >= 0 ? "good" : "danger" } : undefined,
     };
   });
 
-  const comparedText = (m: YearMonth) =>
-    !m.comparedWith ? null : m.current ? `vs ${fmtSpan(m.comparedWith.from, m.comparedWith.to)}` : `vs ${fmtMonth(m.comparedWith.from.slice(0, 7))}`;
   const tip = (i: number) => {
     const m = months[i]!;
     const x = f.months[i]!;
@@ -370,7 +366,6 @@ export function MonthlySalesCard({
         <TipRow>{m.orders === 1 ? "1 order" : `${fmtNum(m.orders)} orders`}{m.averageOrderValue !== null ? ` · ${money(m.averageOrderValue)} average` : ""}</TipRow>
         {/* Months without `refunds` (Team & Access: "View refunds") show no refunds. */}
         {m.refunds !== undefined && m.refunds > 0 && <TipRow>Refunds {money(m.refunds)}</TipRow>}
-        {x.change !== null && <TipRow>{changeText(x.change)} {comparedText(m)}</TipRow>}
         {m.coverage === "partial" && <TipRow>Only from {fmtDay(historyFrom, { year: false })}: earlier orders weren&apos;t shared by Shopify.</TipRow>}
         <div className="mt-1 flex items-center gap-1.5 text-muted">
           <span aria-hidden className="inline-block h-0.5 w-3 rounded" style={{ background: "var(--viz-total)" }} />
@@ -384,7 +379,7 @@ export function MonthlySalesCard({
     const x = f.months[i]!;
     if (m.coverage === "none") return `${fmtMonth(m.month, { year: true })}: not imported.`;
     const what = shown ? `${name} (net sales ${money(m.netSales)})` : "net sales";
-    return `${fmtMonth(m.month, { year: true })}${m.current ? " so far" : ""}: ${money(x.value)} ${what} from ${fmtNum(m.orders)} orders${x.change !== null ? `, ${x.change >= 0 ? "up" : "down"} ${fmtPct(Math.abs(x.change))} ${comparedText(m)}` : ""}.`;
+    return `${fmtMonth(m.month, { year: true })}${m.current ? " so far" : ""}: ${money(x.value)} ${what} from ${fmtNum(m.orders)} orders.`;
   };
 
   return (
@@ -410,13 +405,7 @@ export function MonthlySalesCard({
         <Figure label="Average month" value={f.average !== null ? money(f.average) : "—"} note={f.finishedMonths ? `over ${f.finishedMonths} full month${f.finishedMonths === 1 ? "" : "s"}` : "no full month yet"} />
         <Figure label="Best month" value={f.best ? money(f.best.value) : "—"} note={f.best ? fmtMonth(f.best.month) : "no sales yet"} />
         <Figure label="Orders this year" value={fmtNum(year.orders)} note={year.orders ? `${money(Math.round((f.total / year.orders) * 100) / 100)} ${shown ? "Custom sales" : "net"} per order` : undefined} />
-        {current && currentFigure && (
-          <Figure
-            label={`${fmtMonth(current.month)} so far`}
-            value={money(currentFigure.value)}
-            note={currentFigure.change !== null ? <Delta value={currentFigure.change} label={comparedText(current)!} /> : "nothing comparable before it"}
-          />
-        )}
+        {current && currentFigure && <Figure label={`${fmtMonth(current.month)} so far`} value={money(currentFigure.value)} />}
       </dl>
 
       {table ? (
@@ -430,7 +419,6 @@ export function MonthlySalesCard({
                 <th className="py-1 text-right font-normal">Net sales</th>
                 <th className="py-1 text-right font-normal">Orders</th>
                 <th className="py-1 text-right font-normal">Average order</th>
-                <th className="py-1 text-right font-normal">{shown ? "Custom sales change" : "Change"}</th>
                 <th className="py-1 text-right font-normal">{shown ? "Custom sales, year so far" : "Year so far"}</th>
               </tr>
             </thead>
@@ -441,14 +429,13 @@ export function MonthlySalesCard({
                   <tr key={m.month} className="border-t border-border">
                     <td className="py-1">{fmtMonth(m.month)}{m.current ? " (so far)" : m.coverage === "partial" ? " (partly imported)" : ""}</td>
                     {m.coverage === "none" ? (
-                      <td colSpan={shown ? 6 : 5} className="py-1 text-right text-muted">Not imported</td>
+                      <td colSpan={shown ? 5 : 4} className="py-1 text-right text-muted">Not imported</td>
                     ) : (
                       <>
                         {shown && <td className="py-1 text-right tabular-nums">{money(x.value)}</td>}
                         <td className="py-1 text-right tabular-nums">{money(m.netSales)}</td>
                         <td className="py-1 text-right tabular-nums">{fmtNum(m.orders)}</td>
                         <td className="py-1 text-right tabular-nums">{m.averageOrderValue !== null ? money(m.averageOrderValue) : "—"}</td>
-                        <td className="py-1 text-right tabular-nums">{x.change !== null ? `${changeText(x.change)} ${comparedText(m)}` : "—"}</td>
                         <td className="py-1 text-right tabular-nums">{money(x.cumulative ?? 0)}</td>
                       </>
                     )}
@@ -464,7 +451,6 @@ export function MonthlySalesCard({
             <Key kind="box" color="var(--viz-tier-2)">{name}</Key>
             {current && <Key kind="box" color="var(--viz-tier-2)" faded>Month so far{anyMissing ? " / partly imported" : ""}</Key>}
             {months.some((m) => m.coverage === "none") && <Key kind="hatch" color="var(--muted)">Not imported</Key>}
-            <span>▲▼ change on the month before</span>
           </div>
           <ColumnsWithTotal
             columns={columns}

@@ -1,23 +1,21 @@
 "use client";
 import type { ReactNode } from "react";
 import { seesModule } from "@app/shared/access";
-import type { CompareMode } from "@app/shared/dates";
 import { useApp } from "@/components/AppContext";
 import { MoreDetail } from "@/components/MoreDetail";
 import { seesTopic } from "@/lib/access";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { BarRow } from "./Charts";
-import { noEarlierData, versusWords } from "./DateRange";
-import { fmtComparison, fmtRange, hourRange, plural, weekdayNames } from "./format";
+import { hourRange, plural, weekdayNames } from "./format";
 import { ChannelsCard, DiscountCodesCard, FulfillmentCard, InventoryCard, OrderTimingCard, TrafficCard } from "./Modules";
 import { Explained } from "./Explain";
-import { B, Change, InShort } from "./Narrative";
+import { B, InShort } from "./Narrative";
 import { OverviewDetail } from "./Overview";
-import { Delta, Panel, Stat } from "./Primitives";
+import { Panel, Stat } from "./Primitives";
 import { profitCardFigures } from "./profitFigures";
 import { DailySalesCard, MonthlySalesCard } from "./SalesBreakdown";
 import { SectionName } from "./SalesFrame";
-import { ComparedFoot, CustomersTab, OrdersTab, ProductsTab, SalesOverviewTab } from "./SalesViews";
+import { CustomersTab, OrdersTab, ProductsTab, SalesOverviewTab } from "./SalesViews";
 import { ProfitCard, ShopifyCheckCard } from "./ShopifyReports";
 import { openView, type Topic } from "./topics";
 import type { Overview } from "./types";
@@ -34,21 +32,14 @@ export type { Topic } from "./topics";
 // Home starts without it.
 // ---------------------------------------------------------------------------
 
-/** The sales comparison table's title, by what the dates are compared with. */
-const COMPARE_TITLE: Record<CompareMode, string> = {
-  previous: "This period and the one before",
-  year: "This period and the same dates last year",
-  custom: "This period and the dates compared",
-};
-
 // ---------------------------------------------------------------------------
 // Each topic.
 // ---------------------------------------------------------------------------
 
 /**
  * Under the Sales overview: the panels with more detail than its layout has room for (total sales
- * line by line with Custom sales, the check against Shopify, gross profit, the comparison table,
- * returns, and sales day by day and month by month).
+ * line by line with Custom sales, the check against Shopify, gross profit, returns, and sales day
+ * by day and month by month).
  */
 function SalesMore({ ov, currency }: { ov: Overview; currency: string }) {
   const { access, offers } = useApp();
@@ -57,22 +48,8 @@ function SalesMore({ ov, currency }: { ov: Overview; currency: string }) {
   const adsOn = offers("ads") && seesTopic(access, "ads", offers);
   const s = ov.modules.sales_overview!;
   const c = s.current;
-  const p = s.previous;
   const money = (n: number) => fmtMoney(n, currency);
-  const total = c.totalSales ?? null;
   const r = ov.modules.refunds;
-  const prevPeriod = fmtComparison(ov.previous);
-  const versus = versusWords(ov);
-  // Null when the imported orders don't reach back to the dates compared with: nothing is compared.
-  const missing = ov.previous.imported === false ? noEarlierData(ov.data?.historyFrom) : null;
-  const rows: Array<{ label: string; now: string; before: string; delta: number | null }> = [
-    ...(total !== null ? [{ label: "Total sales", now: money(total), before: p?.totalSales !== undefined ? money(p.totalSales) : "—", delta: s.deltas.totalSales ?? null }] : []),
-    { label: "Net sales", now: money(c.netSales), before: p ? money(p.netSales) : "—", delta: s.deltas.netSales },
-    ...(c.grossSales !== undefined ? [{ label: "Gross sales", now: money(c.grossSales), before: p?.grossSales !== undefined ? money(p.grossSales) : "—", delta: s.deltas.grossSales ?? null }] : []),
-    { label: "Orders", now: fmtNum(c.orders), before: p ? fmtNum(p.orders) : "—", delta: s.deltas.orders },
-    { label: "Items sold", now: fmtNum(c.units), before: p ? fmtNum(p.units) : "—", delta: s.deltas.units },
-    { label: "Average order", now: money(c.averageOrderValue ?? 0), before: p && p.averageOrderValue !== null ? money(p.averageOrderValue) : "—", delta: s.deltas.averageOrderValue },
-  ];
   // The store's own calculation (Custom sales), when it shows it on the dashboard: beside Shopify's figures, named.
   const custom = appliedCustom(s);
 
@@ -83,7 +60,6 @@ function SalesMore({ ov, currency }: { ov: Overview; currency: string }) {
     ...(salesLinesOf(c) ? ["Total sales line by line"] : []),
     ...(ov.modules.shopify_check ? ["the check against Shopify"] : []),
     ...(ov.modules.profit ? ["gross profit"] : []),
-    "these dates against the ones before",
     ...(r ? ["returns"] : []),
     ...(daily ? ["sales day by day"] : []),
     ...(monthly ? ["sales month by month"] : []),
@@ -95,38 +71,12 @@ function SalesMore({ ov, currency }: { ov: Overview; currency: string }) {
       {salesLinesOf(c) && <TotalSalesBreakdown ov={ov} currency={currency} />}
 
       {ov.modules.shopify_check && <ShopifyCheckCard m={ov.modules.shopify_check} currency={currency} />}
-      {ov.modules.profit && <ProfitCard m={ov.modules.profit} currency={currency} versus={versus} f={profitCardFigures(ov, currency, { offered: offers("ads"), shown: adsOn }, seesModule(access, "profit"))} />}
-
-      <Panel id="d-sales-compare" title={COMPARE_TITLE[ov.previous.compare ?? "previous"]} help={`${fmtRange(ov.range.from, ov.range.to)} against ${prevPeriod}.`}>
-        <div className="-mx-1 overflow-x-auto">
-          <table className="w-full min-w-[26rem] text-sm">
-            <thead className="text-left text-xs text-muted">
-              <tr>
-                <th className="px-1 pb-2 font-normal" />
-                <th className="px-1 pb-2 text-right font-normal">These dates</th>
-                <th className="px-1 pb-2 text-right font-normal">Before</th>
-                <th className="px-1 pb-2 text-right font-normal">Change</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.label} className="border-t border-border">
-                  <td className="px-1 py-2 font-medium">{row.label}</td>
-                  <td className="px-1 py-2 text-right tabular-nums">{row.now}</td>
-                  <td className="px-1 py-2 text-right tabular-nums text-muted">{row.before}</td>
-                  <td className="px-1 py-2 text-right tabular-nums"><Change value={row.delta} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="mt-2 text-xs text-muted">{missing ?? <>&quot;—&quot; means there were no sales before to compare with.</>}</p>
-      </Panel>
+      {ov.modules.profit && <ProfitCard m={ov.modules.profit} currency={currency} f={profitCardFigures(ov, currency, { offered: offers("ads"), shown: adsOn }, seesModule(access, "profit"))} />}
 
       {r && (
         <Panel id="d-sales-refunds" title="Returns" help="Refunds, cancellations and edits, booked on the day they were made, not the day of the order.">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
-            <Stat label="Returned" value={money(r.current.refunds)} note={<Delta value={r.deltas.refunds} invert label={versus} />} />
+            <Stat label="Returned" value={money(r.current.refunds)} />
             <Stat label="Return rate" value={fmtPct(r.current.refundRate)} note="Share of sales (after discounts) given back." />
             <Stat label="Orders with a return" value={fmtNum(r.current.refundedOrders)} note="Orders refunded, cancelled or edited down in these dates." />
           </div>
@@ -328,7 +278,6 @@ export function TopicContents({
     <>
       {section && <SectionName title={section} onBack={m.sales_overview ? () => openView("sales") : undefined} />}
       {body}
-      {topic !== "overview" && topic !== "stock" && <ComparedFoot ov={ov} />}
       {/* Then, under every topic: what to do about it, and what each number means. Ads and AdSense have their own pages (/advertising). */}
       <Explained topic={topic} ov={ov} currency={currency} />
     </>

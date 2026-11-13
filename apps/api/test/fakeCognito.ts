@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
-import { CognitoError, CognitoUnavailableError, type CognitoAuth, type CognitoTokens, type CognitoUser, type FederatedProvider, type IdentityClaims, type SignInMethod } from "../src/cognito.js";
+import { CognitoError, CognitoUnavailableError, type CognitoAuth, type CognitoTokens, type CognitoUser, type FederatedProvider, type IdentityClaims, type SignInMethod } from "../src/authContract.js";
 
 /**
  * An in-memory Cognito user pool that behaves like the real one where the app depends on it:

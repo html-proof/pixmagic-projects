@@ -18,7 +18,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_rls;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['email_otps', 'pixel_events_seen', 'auth_identities', 'auth_events', 'user_sessions', 'zapier_tokens', '_prisma_migrations',
+  FOREACH t IN ARRAY ARRAY['pixel_events_seen', 'auth_identities', 'auth_events', 'user_sessions', 'zapier_tokens', '_prisma_migrations',
                            -- The self-hosted runtime's queue, schedules and coordinator (migration 20261106120000_selfhost_runtime).
                            'job_queue', 'job_dead', 'schedule_ticks', 'coord_entries',
                            -- The app's own sign-in directory (migration 20261107120000_own_sign_in).
@@ -41,16 +41,6 @@ BEGIN
   END IF;
   IF to_regclass('public.inventory_movements') IS NOT NULL THEN
     REVOKE UPDATE, DELETE, TRUNCATE ON inventory_movements FROM app_rls;
-  END IF;
-  -- SMS consent history, AWS's delivery events and the audit trail (migration 20261022170000_sms_customer_messaging).
-  IF to_regclass('public.sms_consent_records') IS NOT NULL THEN
-    REVOKE UPDATE, DELETE, TRUNCATE ON sms_consent_records FROM app_rls;
-  END IF;
-  IF to_regclass('public.sms_delivery_events') IS NOT NULL THEN
-    REVOKE UPDATE, DELETE, TRUNCATE ON sms_delivery_events FROM app_rls;
-  END IF;
-  IF to_regclass('public.sms_audit_logs') IS NOT NULL THEN
-    REVOKE UPDATE, DELETE, TRUNCATE ON sms_audit_logs FROM app_rls;
   END IF;
 END $$;
 
@@ -90,9 +80,14 @@ BEGIN
   -- Tables that belong to no workspace (people, sign-in, intake): the system paths read them in every
   -- scope, since sign-in needs them before any workspace is known. Named one by one, so a table only
   -- joins this list in review.
-  FOREACH t IN ARRAY ARRAY['users', 'auth_identities', 'auth_events', 'user_sessions', 'email_otps', 'pixel_events_seen', 'auth_accounts', 'auth_refresh_tokens'] LOOP
+  -- to_regclass in the lookup too, never a ::regclass cast: Postgres works the cast out while it
+  -- plans the IF, whatever the first half says, and on a fresh volume (no tables yet) the cast
+  -- failed with 'relation "public.users" does not exist'. That aborted the entrypoint on every first
+  -- start; Docker restarted the container, and CI's `docker compose up --wait` failed whenever it
+  -- looked in between (main's browser tests for #379 and #380, 2026-11-12).
+  FOREACH t IN ARRAY ARRAY['users', 'auth_identities', 'auth_events', 'user_sessions', 'pixel_events_seen', 'auth_accounts', 'auth_refresh_tokens'] LOOP
     IF to_regclass(format('public.%I', t)) IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = format('public.%I', t)::regclass AND p.polname = 'system_any') THEN
+       AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = to_regclass(format('public.%I', t)) AND p.polname = 'system_any') THEN
       EXECUTE format('CREATE POLICY system_any ON public.%I TO app_system USING (true) WITH CHECK (true)', t);
     END IF;
   END LOOP;

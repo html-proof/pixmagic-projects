@@ -16,8 +16,8 @@ in `packages/core`, 184 in `apps/api` and 83 in `apps/worker`.
 | Module | `systemDb` | `withTenant` |
 | --- | --- | --- |
 | whatsapp | 291 | 0 |
-| sms | 284 | 0 |
-| email | 181 | 35 |
+| sms (removed 2026-11-13) | 284 | 0 |
+| email (the email module, removed 2026-11-13) | 181 | 35 |
 | adConnections | 110 | 0 |
 | inventory | 69 | 1 |
 
@@ -73,9 +73,8 @@ anyone remembering it, and `apps/api/test/systemRole.test.ts` checks it.
 **Tables that belong to no workspace**: the system role may read and write them in every scope.
 They hold people and intake records, not a workspace's data, and sign-in reads them before any
 workspace is known.
-- `users`, `auth_identities`, `auth_events`, `user_sessions`, `email_otps` and `pixel_events_seen`
+- `users`, `auth_identities`, `auth_events`, `user_sessions` and `pixel_events_seen`
   have row-level security, so each gets a `system_any` policy, named one by one in `init.sql`.
-- `wa_webhook_events` has no row-level security.
 - `workspaces` shows the scope's own row under `forTenant` and every row under `crossTenant`.
 
 ## Where the scope is set
@@ -100,8 +99,8 @@ The scope is set at the entry points, not at the 1,500 call sites:
   or event) in one `crossTenant("job")` query, then runs the job in `forTenant`.
   - Jobs carry only those ids (`packages/core/src/queues.ts`), so this covers messages already in
     the queues as well.
-  - A job whose row names no workspace runs in `crossTenant("job")`: WhatsApp's raw events, AWS's
-    SMS events, a Shopify webhook for a shop with no store.
+  - A job whose row names no workspace runs in `crossTenant("job")`: WhatsApp's raw events, a
+    Shopify webhook for a shop with no store.
   - A failed lookup does the same, so a database outage stays `consume()`'s to notice.
 - **Cron**: `runScheduled` runs the whole tick in `crossTenant("sweep")`. The sweeps are
   cross-tenant by nature: "every send that is due", "every token about to expire". The Lambda's

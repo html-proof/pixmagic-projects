@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { createWorkspace, fullDashboard, signUp, uniqueEmail } from "./helpers";
+import { createWorkspace, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Historical dates in the browser: every calendar year of the store in the dates menu, a year
@@ -14,8 +14,6 @@ const db = new pg.Pool({ connectionString: E2E_ENV.OWNER_DATABASE_URL });
 test.afterAll(() => db.end());
 
 test("any calendar year of the store, 12 months at a time, with where its orders begin", async ({ page }) => {
-  // Its panels are the full dashboard's (lib/features.ts SIMPLE_HOME).
-  await fullDashboard(page);
   const email = uniqueEmail("history");
   await signUp(page, email);
   const ws = await createWorkspace(page, "History Co");
@@ -55,9 +53,9 @@ test("any calendar year of the store, 12 months at a time, with where its orders
   // The chart and the tiles say so too: no figures, never $0.
   await expect(page.getByTestId("trend-sales").getByRole("paragraph").filter({ hasText: "Not imported" })).toBeVisible();
   await expect(page.getByTestId("metric-Orders").getByTestId("figure-not-imported")).toBeVisible();
-  // 2024 against 2023 as a whole year, not the 366 days before it.
-  await expect(page.getByTestId("compare-dates")).toContainText("2023");
-  await expect(page.getByTestId("compare-dates")).not.toContainText("2022");
+  // The year stands alone: no menu to compare it with other dates, and nothing saying it is.
+  await expect(page.locator("div[title]", { has: page.locator("#date-range") })).not.toHaveAttribute("title", /Compared with/);
+  await expect(page.getByLabel("Compare with")).toHaveCount(0);
 
   await page.getByRole("button", { name: "A year earlier" }).click();
   await expect(page.getByLabel("From", { exact: true })).toHaveValue("2023-01-01");

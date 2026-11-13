@@ -12,6 +12,17 @@
 export const APP_SETTINGS = {
   "SHOPIFY_API_KEY": "57e9ef75435db908617fdd46099afe0e",
   "SHOPIFY_SCOPES": "read_orders,read_products",
+  // Required scopes only some apps declare, on top of the line above: "appKey:scope;appKey:scope"
+  // (packages/core/src/scopes.ts appRequiredScopes), each in that app's toml `scopes` too
+  // (appConfig.test.ts), and only once `shopify app deploy` has released that toml.
+  // read_all_orders: a store's whole order history, where Shopify otherwise shares the last 60 days.
+  // Shopify approves it app by app (docs/shopify-setup.md, "Full order history"): PixMagic's app since
+  // 2026-11-13 (pixmagic-11); the App Store app's request is under review. A store that granted it has
+  // its first import read every year back to its first order (packages/core/src/orderHistory.ts);
+  // one connected before keeps its 60 days until someone reconnects it, which its dashboard offers
+  // ("Reconnect to import full history"). Opening the app from Shopify doesn't ask: the app isn't
+  // embedded, and /shopify/launch opens a working store as it is.
+  "SHOPIFY_APP_SCOPES": "pixmagic:read_all_orders",
   // NOTE: under Shopify managed installation (use_legacy_install_flow = false) these two settings do
   // NOT decide what merchants are asked to grant - shopify-app/shopify.app.toml does, and only
   // `shopify app deploy` changes it. Clearing this one does not stop Shopify requesting a scope;
@@ -93,13 +104,6 @@ export const APP_SETTINGS = {
   // Meta's App Review reviewers, who can't read its inbox (docs/ads-review-packs.md). Empty it
   // again once Meta has decided.
   "AUTH_LOGIN_CODE_EXEMPT": "",
-  // Who checks sign-ins (docs/cognito-setup.md, "Leaving Cognito"): "migrating" since 2026-11-08, the
-  // app's own sign-in in front and Cognito behind it, so each person moves over at their next
-  // password sign-in, reset or sign-up (the AWS account closes after the iKorex cutover). Google
-  // stays on Cognito until GOOGLE_SIGNIN_CLIENT_ID is set here, which waits on the owner adding
-  // https://bizinsights.io/auth/callback to that client's redirect URIs (Google answered
-  // redirect_uri_mismatch on 2026-11-08). Going back to "cognito" locks out whoever signed up since.
-  "AUTH_MODE": "migrating",
   // Ad accounts ("Continue with Meta" / "Continue with Google Ads" / "Continue with Google AdSense"
   // on Settings → Ad accounts). Empty until the apps exist: the buttons then say the platform isn't
   // set up. GOOGLE_ADS_CLIENT_ID is the Google Cloud OAuth client "Insights web" (project
@@ -160,27 +164,6 @@ export const APP_SETTINGS = {
   // token"): bizinsights' own team, to record App Review with the app's test number before Meta
   // approves bizinsights as a Tech Provider. Since 2026-10-29: the PixMagic workspace. Empty: no one.
   "WHATSAPP_TOKEN_CONNECT_WORKSPACES": "cmvarpfwa000002jngkgh5ji2",
-  // Customer Messaging: SMS through AWS End User Messaging (docs/sms.md). "live" since 2026-10-25:
-  // automations, campaigns and Send SMS hand texts to AWS, each after every check (sender verified
-  // and tagged for the store, sending on, consent, opt-outs, quiet hours, the monthly limit). AWS
-  // itself still decides who can receive: while the account is in its SMS sandbox (ACCOUNT_TIER
-  // SANDBOX, US$1 a month, checked 2026-10-25) only verified numbers get texts, and the dashboard
-  // says so ("Your SMS account is still being verified"). "sandbox" records automations' texts as
-  // dry runs instead; "off" stops everything (docs/sms.md, "Rollback"). Marketing texts need this
-  // switch and each store's own. The configuration set comes from the App stack.
-  "SMS_MODE": "live",
-  "SMS_MARKETING_ENABLED": "1",
-  "SMS_ACCOUNT_MONTHLY_LIMIT_USD": "20",
-  // A merchant asking for a sender name in Set up SMS emails this address: the platform owner
-  // requests it from AWS, registers it where the country requires that, and tags it for the
-  // workspace (docs/sms.md, "Sender names from Set up SMS").
-  "SMS_SENDER_REQUESTS_TO": "bizinsightsaus@yahoo.com",
-  // Email integrations (docs/email.md): "Connect Gmail / Google Workspace" and "Connect Outlook /
-  // Microsoft 365". Empty until the OAuth clients exist (the buttons say so; SMTP works regardless).
-  // Their secrets are in Secrets Manager. "common" accepts work, school and personal Microsoft accounts.
-  "EMAIL_GOOGLE_CLIENT_ID": "",
-  "EMAIL_MICROSOFT_CLIENT_ID": "",
-  "EMAIL_MICROSOFT_AUTHORITY": "common",
   // Zapier (docs/zapier.md, "Owner setup"): bizinsights is the OAuth provider of its app on Zapier's
   // Developer Platform. ZAPIER_CLIENT_ID: the client id the owner chose and entered in the Zapier app's
   // environment (CLIENT_ID); its secret is in Secrets Manager (put-secrets.mjs --set ZAPIER_CLIENT_SECRET).

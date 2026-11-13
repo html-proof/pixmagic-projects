@@ -39,14 +39,14 @@ Track sales, orders, top products and stock in one place. See which areas need a
 **App details** (500)
 
 ```
-Turn your orders and products into a dashboard your team can follow. Total sales, net sales, orders and value per order are built from Shopify's sales records, compared with the previous period or dates you pick, and explained in plain words. Top products, low stock, discount codes, sales channels and busiest times each open as a report you can save as CSV. History starts with recent orders and grows over time. bizinsights opens in its own tab, with its own login, and installs read-only.
+Turn your orders and products into a dashboard your team can follow. Total sales, net sales, orders and value per order are built from Shopify's sales records and explained in plain words. Top products, low stock, discount codes, sales channels and busiest times each open as a report you can save as CSV. History starts with recent orders and grows over time. bizinsights opens in its own tab, with its own login, and installs read-only.
 ```
 
 **Features** (5, 80 each)
 
 ```
 Break total sales into gross sales, discounts, returns, shipping and taxes
-Compare your dates with the period before or with dates you choose
+Pick any dates and see your sales day by day and month by month
 Get a one-sentence summary and a health check of each area of your store
 Spot top products, low stock, unshipped orders and your busiest days and hours
 Invite your team by email with a role and the permissions each person needs
@@ -107,7 +107,7 @@ API charges the paid-plan code uses (`appSubscriptionCreate`).
 
 | Handle | Billing | Display name | Top features (40 each) |
 | --- | --- | --- | --- |
-| `free` | Free | Free | Sales, orders and stock dashboard · Comparisons with earlier periods · Plain-language summaries · CSV download and printable reports · Team roles and permissions |
+| `free` | Free | Free | Sales, orders and stock dashboard · Daily and monthly sales charts · Plain-language summaries · CSV download and printable reports · Team roles and permissions |
 
 Never list Growth or Scale (`PLANS` in `packages/core/src/billing.ts`) while billing is off.
 
@@ -118,7 +118,7 @@ Never list Growth or Scale (`PLANS` in `packages/core/src/billing.ts`) while bil
 | App card subtitle (62) | `Understand your sales, orders and stock in plain language` |
 | Search terms (5, 20 each) | analytics · sales report · dashboard · store performance · reporting |
 | Title tag (60) | `bizinsights: sales, orders and stock in plain language` |
-| Meta description (160) | `See your store's total and net sales, orders, top products and low stock, compared with earlier periods and explained in plain sentences.` |
+| Meta description (160) | `See your store's total and net sales, orders, top products and low stock, explained in plain sentences.` |
 
 ## Install requirements and contact
 
@@ -142,7 +142,7 @@ Before you start
 1. Install the app and approve read access to orders and products. bizinsights opens on "<your store> is connected" (if the admin shows "Open bizinsights", click it). The import has already started.
 2. Click Sign in, use the test account, then click "Add store and open dashboard".
 3. The import page counts orders, products and inventory. Click "Go to dashboard".
-4. Dashboard: Total sales, Orders, Average order value and Total products sold with a % change and daily charts. If the earlier period has no sales (for example all orders were made today), the change reads "No earlier data"; that is expected. Click the "Last 30 days" chip (Today, Last 7 days, This month, Pick dates) and the "vs Previous period" chip (Previous year, Pick dates).
+4. Dashboard: Total sales, Orders, Average order value and Total products sold, then daily charts. Click the "Last 30 days" chip (Today, Last 7 days, This month, Pick dates): every figure and chart follows the dates picked.
 5. Click an area card (Sales, Best sellers, Stock, Recent orders, Discount codes, Sales channels, Busiest times, Shipping). Each panel opens with "In short" and ends with "What these numbers mean"; "What you could do next" appears when the numbers suggest an action. "Download CSV" saves the section shown and "Print or save as PDF" prints it.
 6. Team & Access > Invite Member: enter an email you can open and pick a role. The invitation shows its delivery status, and its link opens a view-only dashboard.
 7. Create another paid order, then Settings > Shopify > Sync now. It appears in Recent orders (or within about 5 minutes while the dashboard is open).
@@ -172,7 +172,7 @@ it by installing this app from its install link, never with the in-app connect b
 **Screencast URL** (OWNER): 3-8 minutes in English, on YouTube (unlisted) or a direct video file:
 not Google Drive or Vimeo. Show install on a development store, "is connected", sign-in, the import,
 the dashboard and the panels above, Sync now, uninstall and reinstall. Leave out WhatsApp, Staff,
-advertising, email and the "More insights you can unlock" Enable flows.
+advertising and the "More insights you can unlock" Enable flows.
 
 ---
 
@@ -211,10 +211,12 @@ Level 2 (name, email, phone) is needed only for the optional "Customers to follo
 - **Profit, costs, margin, "Ask" or AI answers.** The landing page shows these as illustrations
   only; the app has none of them.
 - **Long history or year-on-year from day one.** Without `read_all_orders` the import covers 60
-  days; earlier comparisons read "No earlier data".
+  days; earlier dates read "Not imported".
+- **Changes on the period before.** The pages show no "% change", ▲▼ or "compared with the
+  previous period" beside a figure.
 - **A full data export.** "Download CSV" saves the section on screen (top 5 products, up to 10
   low-stock items, the 10 latest orders), not the store's data.
 - **Paid plans, email alerts, API access**, and the **WhatsApp, Meta Ads, Google Ads, AdSense,
-  email automation, staff and payroll** modules: billing is off, the API keys page is hidden, and a
+  staff and payroll** modules: billing is off, the API keys page is hidden, and a
   reviewer can't complete the third-party flows.
 - No statistics, guarantees or superlatives, and no "best" or "average" in the listing text.

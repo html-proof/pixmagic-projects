@@ -3,22 +3,19 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { BadgeDollarSign, Eye, Footprints, MousePointerClick, Percent, Receipt, ShoppingCart, Store, Target, Trophy, Wallet, type LucideIcon } from "lucide-react";
 import { claimsAddUp, type AdsenseTotals, type AdSeriesDay, type AdTotals } from "@app/shared/ads";
-import { delta } from "@app/shared/kpi";
+import { trendPeriods } from "@app/shared/sales";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { BEING_READ, ChangeNote, ComparedLine, SoFarNote, UNAVAILABLE, UnavailableNote } from "@/components/dashboard/AdsCommon";
+import { BEING_READ, SoFarNote, UNAVAILABLE, UnavailableNote } from "@/components/dashboard/AdsCommon";
 import { shownFigures } from "@/components/dashboard/adFigures";
 import { DemoChip } from "@/components/dashboard/Advertising";
-import { fmtDay, fmtMoneyWhole, fmtSpan, fmtTimes, plural } from "@/components/dashboard/format";
-import { Sparkline } from "@/components/dashboard/HomeCards";
-import { Delta } from "@/components/dashboard/Primitives";
+import { fmtDay, fmtMoneyWhole, fmtTimes, plural } from "@/components/dashboard/format";
+import { sumDays, TileBars, tileTrend, tileTrendOf, type TileTrend } from "@/components/dashboard/TileBars";
 import type { AdAccount, AdFigures, AdsModule, AdsProviderFigures, Overview } from "@/components/dashboard/types";
 import { PLATFORM } from "./AdvertisingUi";
 
 // ---------------------------------------------------------------------------
-// The Advertising overview's headline figures (the owner's design: a tinted icon, the figure, its
-// change and its shape over the days): every spend platform together, each figure with the one it is
-// compared with and the change, on the days the API compared (an ad module's `compared`: whole days
-// only, never against days an account hasn't stored); with no comparison, why. The platforms' own counts
+// The Advertising overview's headline figures (the owner's design: a tinted icon, the figure and a
+// small bar chart of it over the dates, dashboard/TileBars.tsx): every spend platform together. The platforms' own counts
 // are named as theirs; the store's own sales per unit of spend (MER) and its visits are Shopify's and the
 // pixel's; AdSense's earnings are money in, on a tile of their own, never added to the spend. With more
 // than one platform counted, their purchases are never added up (both can claim one order:
@@ -40,7 +37,7 @@ function Tile({
   value,
   icon: IconCmp,
   tint,
-  spark,
+  trend,
   small = false,
   children,
   testid,
@@ -50,8 +47,8 @@ function Tile({
   value: string;
   icon: LucideIcon;
   tint: keyof typeof TINT;
-  /** The figure day by day over the dates; a day not read is a gap. */
-  spark?: Array<number | null>;
+  /** The figure over the dates as a small bar chart (`tileTrendOf`); a day not read adds nothing. */
+  trend?: TileTrend;
   small?: boolean;
   children?: ReactNode;
   testid: string;
@@ -70,10 +67,9 @@ function Tile({
           </p>
         </div>
       </div>
-      <div className="mt-2 flex min-w-0 flex-1 items-end justify-between gap-2">
-        <div className="min-w-0 space-y-1 text-xs text-muted">{children}</div>
-        {spark && <Sparkline values={spark} className={`hidden h-9 w-20 shrink-0 min-[420px]:block ${t.ink}`} />}
-      </div>
+      {/* The notes take the room there is, so the bars and the source line up along the row's foot. */}
+      <div className="mt-2 min-w-0 flex-1 space-y-1 text-xs text-muted">{children}</div>
+      {trend && <TileBars trend={trend} ink={t.ink} className="mt-2" />}
       <p className="mt-2 truncate text-[11px] uppercase tracking-wide text-muted" title={source}>
         {source}
       </p>
@@ -83,16 +79,13 @@ function Tile({
 
 /**
  * One figure of an ad module: its value for the dates (or the days so far, dated; or Unavailable and
- * why), its change, and what was compared.
+ * why).
  */
 function FigureTile<T>({
   fig,
   accounts,
   ov,
   pick,
-  delta: change,
-  invert = false,
-  neutral = false,
   extra,
   ...tile
 }: Omit<Parameters<typeof Tile>[0], "value" | "children"> & {
@@ -101,11 +94,7 @@ function FigureTile<T>({
   ov: Overview;
   /** The figure, shown; null while some of its days are being read again, or it can't be worked out. */
   pick: (t: T) => string | null;
-  /** Its change, from the module's `deltas` (or the compared windows). */
-  delta: number | null;
-  invert?: boolean;
-  neutral?: boolean;
-  /** A line more under the change, from the same figures. */
+  /** A line more under the figure, from the same figures. */
   extra?: (t: T) => ReactNode;
 }) {
   const { totals, through } = shownFigures(fig);
@@ -116,32 +105,22 @@ function FigureTile<T>({
       </Tile>
     );
   }
-  const shown = pick(totals);
   return (
-    <Tile {...tile} value={shown ?? BEING_READ}>
+    <Tile {...tile} value={pick(totals) ?? BEING_READ}>
       {through && <SoFarNote through={through} accounts={accounts} range={ov.range} />}
-      {shown !== null && (
-        <>
-          <p>
-            <ChangeNote fig={fig} value={change} ov={ov} invert={invert} neutral={neutral} />
-          </p>
-          {fig.compared && (
-            <p data-testid={`${tile.testid}-compared`} className="truncate">
-              <ComparedLine fig={fig} show={(t) => pick(t) ?? BEING_READ} />
-            </p>
-          )}
-        </>
-      )}
       {extra?.(totals)}
     </Tile>
   );
 }
 
-/** A rate's change on the compared windows (the module gives the counts' and money's changes only). */
-const changeOn = (a: AdsModule, pick: (t: AdTotals) => number | null) => (a.compared ? delta(pick(a.compared.current.totals), pick(a.compared.previous.totals)) : null);
-
-/** ROAS on each day the platforms spent and reported purchase value. */
-const dailyRoas = (d: AdSeriesDay) => (d.spend && d.purchaseValue !== null ? d.purchaseValue / d.spend : null);
+/**
+ * ROAS over the days of one bar: the purchase value the platforms reported over what they spent,
+ * never an average of the days' own ratios. Nothing spent, no figure.
+ */
+function roasOf(days: AdSeriesDay[]): number | null {
+  const spend = sumDays(days, (d) => d.spend ?? 0);
+  return spend > 0 ? sumDays(days, (d) => d.purchaseValue ?? 0) / spend : null;
+}
 
 export function OverviewKpis({ ov }: { ov: Overview }) {
   const a = ov.modules.ads;
@@ -150,9 +129,10 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
   const counted = a?.accounts.filter((acc) => acc.counted) ?? [];
   const money = (n: number) => fmtMoney(n, a?.currency ?? ov.store.currency);
   const s = a?.sales ?? null;
-  const vs = s?.previous && a?.compared ? `vs ${fmtSpan(a.compared.previous.from, a.compared.previous.to)}` : null;
   const series = a?.series ?? [];
-  const spark = (pick: (d: AdSeriesDay) => number | null) => series.map(pick);
+  // A figure over the dates as bars: each adds up the days the platforms have it for.
+  const bars = (pick: (d: AdSeriesDay) => number | null, format: (n: number) => string) =>
+    tileTrendOf(series, ov.range, ov.today, (d) => pick(d) !== null, (days) => sumDays(days, (d) => pick(d) ?? 0), format);
   const visits = visitsFromAds(ov);
   // More than one platform counted: their purchases are each one's own claim, never added up.
   const apart = !!a && !claimsAddUp(a.byProvider.map((p) => p.provider));
@@ -165,21 +145,21 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
       )}
       {a && (
         <div className="grid grid-cols-1 gap-3 @md:grid-cols-2 @3xl:grid-cols-3 @7xl:grid-cols-6">
-          <FigureTile<AdTotals> label="Total ad spend" icon={Wallet} tint="blue" source={`All platforms · ${a.currency}`} fig={a} accounts={counted} ov={ov} pick={(t) => money(t.spend)} delta={a.deltas.spend} neutral spark={spark((d) => d.spend)} testid="kpi-spend" />
-          <FigureTile<AdTotals> label="Link clicks" icon={MousePointerClick} tint="violet" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : fmtNum(t.linkClicks))} delta={a.deltas.linkClicks} spark={spark((d) => d.linkClicks)} testid="kpi-clicks" />
-          <FigureTile<AdTotals> label="Impressions" icon={Eye} tint="green" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => fmtNum(t.impressions)} delta={changeOn(a, (t) => t.impressions)} spark={spark((d) => d.impressions)} testid="kpi-impressions" />
+          <FigureTile<AdTotals> label="Total ad spend" icon={Wallet} tint="blue" source={`All platforms · ${a.currency}`} fig={a} accounts={counted} ov={ov} pick={(t) => money(t.spend)} trend={bars((d) => d.spend, money)} testid="kpi-spend" />
+          <FigureTile<AdTotals> label="Link clicks" icon={MousePointerClick} tint="violet" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : fmtNum(t.linkClicks))} trend={bars((d) => d.linkClicks, fmtNum)} testid="kpi-clicks" />
+          <FigureTile<AdTotals> label="Impressions" icon={Eye} tint="green" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => fmtNum(t.impressions)} trend={bars((d) => d.impressions, fmtNum)} testid="kpi-impressions" />
           {apart ? (
             <>
-              <NetSalesTile ov={ov} a={a} vs={vs} />
+              <NetSalesTile ov={ov} a={a} />
               {a.byProvider.map((p) => (
                 <ClaimTile key={p.provider} a={a} p={p} ov={ov} />
               ))}
             </>
           ) : (
             <>
-              <FigureTile<AdTotals> label="Purchases" icon={ShoppingCart} tint="amber" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : fmtNum(t.purchases))} delta={a.deltas.purchases} spark={spark((d) => d.purchases)} testid="kpi-purchases" />
-              <FigureTile<AdTotals> label="Ad revenue (purchase value)" icon={BadgeDollarSign} tint="teal" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchaseValue === null ? null : money(t.purchaseValue))} delta={a.deltas.purchaseValue} spark={spark((d) => d.purchaseValue)} testid="kpi-purchase-value" />
-              <FigureTile<AdTotals> label="ROAS" icon={Trophy} tint="violet" source="Purchase value ÷ spend · platforms' own" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : fmtTimes(t.roas))} delta={a.deltas.roas} spark={spark(dailyRoas)} testid="kpi-roas" />
+              <FigureTile<AdTotals> label="Purchases" icon={ShoppingCart} tint="amber" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : fmtNum(t.purchases))} trend={bars((d) => d.purchases, fmtNum)} testid="kpi-purchases" />
+              <FigureTile<AdTotals> label="Ad revenue (purchase value)" icon={BadgeDollarSign} tint="teal" source="Platforms' own count" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchaseValue === null ? null : money(t.purchaseValue))} trend={bars((d) => d.purchaseValue, money)} testid="kpi-purchase-value" />
+              <FigureTile<AdTotals> label="ROAS" icon={Trophy} tint="violet" source="Purchase value ÷ spend · platforms' own" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : fmtTimes(t.roas))} trend={tileTrendOf(series, ov.range, ov.today, (d) => d.spend !== null && d.purchaseValue !== null, roasOf, (n) => fmtTimes(n))} testid="kpi-roas" />
             </>
           )}
         </div>
@@ -187,25 +167,12 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
       <div className="grid grid-cols-2 gap-3 @3xl:grid-cols-3 @6xl:grid-cols-6">
         {a && (
           <>
-            <FigureTile<AdTotals> small label="Average CPC" icon={Target} tint="blue" source="Spend ÷ link clicks" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : t.cpc === null ? "—" : money(t.cpc))} delta={changeOn(a, (t) => t.cpc)} invert testid="kpi-cpc" />
-            <FigureTile<AdTotals> small label="CTR" icon={Percent} tint="violet" source="Link clicks ÷ impressions" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : t.ctr === null ? "—" : fmtPct(t.ctr))} delta={changeOn(a, (t) => t.ctr)} testid="kpi-ctr" />
+            <FigureTile<AdTotals> small label="Average CPC" icon={Target} tint="blue" source="Spend ÷ link clicks" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : t.cpc === null ? "—" : money(t.cpc))} testid="kpi-cpc" />
+            <FigureTile<AdTotals> small label="CTR" icon={Percent} tint="violet" source="Link clicks ÷ impressions" fig={a} accounts={counted} ov={ov} pick={(t) => (t.linkClicks === null ? null : t.ctr === null ? "—" : fmtPct(t.ctr))} testid="kpi-ctr" />
             {/* Each platform's cost per purchase is on its own tile above when there are several. */}
-            {!apart && <FigureTile<AdTotals> small label="Cost per purchase" icon={Receipt} tint="amber" source="Spend ÷ platforms' purchases" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : t.costPerPurchase === null ? "—" : money(t.costPerPurchase))} delta={changeOn(a, (t) => t.costPerPurchase)} invert testid="kpi-cost-per-purchase" />}
+            {!apart && <FigureTile<AdTotals> small label="Cost per purchase" icon={Receipt} tint="amber" source="Spend ÷ platforms' purchases" fig={a} accounts={counted} ov={ov} pick={(t) => (t.purchases === null ? null : t.costPerPurchase === null ? "—" : money(t.costPerPurchase))} testid="kpi-cost-per-purchase" />}
             <Tile small label={`Sales per ${fmtMoneyWhole(1, a.currency)} of ads (MER)`} icon={Store} tint="green" source="Shopify net sales ÷ ad spend" value={s ? fmtTimes(s.salesPerSpend) : UNAVAILABLE} testid="kpi-mer">
-              {s ? (
-                vs ? (
-                  <>
-                    <p>
-                      <Delta value={s.deltas.salesPerSpend} label={vs} />
-                    </p>
-                    <p>Before: {fmtTimes(s.previous!.salesPerSpend)}</p>
-                  </>
-                ) : (
-                  <p>Changes show once the dates picked are over, with your orders imported for the dates compared.</p>
-                )
-              ) : (
-                <p>{a.demo ? "Not with the demo's simulated spend among the accounts." : "Needs every day of the spend, in your store's currency, and permission to see your sales."}</p>
-              )}
+              {!s && <p>{a.demo ? "Not with the demo's simulated spend among the accounts." : "Needs every day of the spend, in your store's currency, and permission to see your sales."}</p>}
             </Tile>
           </>
         )}
@@ -227,7 +194,6 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
             accounts={sense.accounts.filter((acc) => acc.counted)}
             ov={ov}
             pick={(t) => fmtMoney(t.earnings, sense.currency)}
-            delta={sense.deltas.earnings}
             testid="kpi-adsense"
           />
         )}
@@ -249,13 +215,14 @@ export function OverviewKpis({ ov }: { ov: Overview }) {
 
 /**
  * Across platforms, the store's own sales for the dates (Shopify's net sales, in the store's currency):
- * every order once, whatever brought it, where the platforms' claims can count one twice. Its change
- * only on the whole dates the ads compared, as MER's; never beside the demo's simulated figures.
+ * every order once, whatever brought it, where the platforms' claims can count one twice. Never
+ * beside the demo's simulated figures.
  */
-function NetSalesTile({ ov, a, vs }: { ov: Overview; a: AdsModule; vs: string | null }) {
+function NetSalesTile({ ov, a }: { ov: Overview; a: AdsModule }) {
   const s = a.sales ?? null;
   const net = a.demo ? null : (s?.netSales ?? ov.modules.sales_overview?.current.netSales ?? null);
   const money = (n: number) => fmtMoney(n, ov.store.currency);
+  const days = ov.modules.sales_overview?.series;
   return (
     <Tile
       label="Your store's net sales"
@@ -263,23 +230,13 @@ function NetSalesTile({ ov, a, vs }: { ov: Overview; a: AdsModule; vs: string | 
       tint="amber"
       source="Shopify · every order once"
       value={net === null ? UNAVAILABLE : money(net)}
-      spark={net === null ? undefined : ov.modules.sales_overview?.series.map((d) => d.netSales)}
+      trend={net === null || !days ? undefined : tileTrend(trendPeriods(days, ov.range, ov.today, ov.data?.historyFrom ?? null), (ds) => sumDays(ds, (d) => d.netSales), money)}
       testid="kpi-net-sales"
     >
       {net === null ? (
         <p>{a.demo ? "Not with the demo's simulated spend among the accounts." : "Needs permission to see your sales."}</p>
       ) : (
-        <>
-          {s && vs && (
-            <>
-              <p>
-                <Delta value={s.deltas.netSales} label={vs} />
-              </p>
-              <p>Before: {money(s.previous!.netSales)}</p>
-            </>
-          )}
-          <p>Every order counted once, whatever brought it.</p>
-        </>
+        <p>Every order counted once, whatever brought it.</p>
       )}
     </Tile>
   );
@@ -303,8 +260,7 @@ function ClaimTile({ a, p, ov }: { a: AdsModule; p: AdsProviderFigures; ov: Over
       accounts={a.accounts.filter((acc) => acc.counted && acc.provider === p.provider)}
       ov={ov}
       pick={(t) => (t.purchaseValue === null ? null : money(t.purchaseValue))}
-      delta={p.deltas.purchaseValue}
-      spark={days.map((d) => d.purchaseValue)}
+      trend={tileTrendOf(days, ov.range, ov.today, (d) => d.purchaseValue !== null, (ds) => sumDays(ds, (d) => d.purchaseValue ?? 0), money)}
       extra={(t) =>
         t.purchases !== null && (
           <p className="truncate" data-testid={`kpi-claim-${p.provider}-figures`}>

@@ -63,7 +63,6 @@ function HealthContent({ reveal, emblem }: { reveal: MotionValue<number>; emblem
         <div className="min-w-0 shrink-0">
           <p className="text-[11px] font-medium text-lp-text-2 @md:text-[12.5px]">Business health</p>
           <p className="mt-1 font-lp-mono text-[18px] leading-none text-lp-text @md:text-[24px]">—</p>
-          <p className="mt-2 hidden text-[11.5px] text-lp-muted @lg:block">vs previous period</p>
         </div>
         <motion.ul className="lp-layer min-w-0 flex-1 space-y-2.5 border-l border-lp-line pl-4 @lg:pl-6" style={{ opacity: lines }}>
           {[
@@ -289,7 +288,6 @@ export function HeroDashboardReveal({
             <BrandMark size={16} />
             Overview
           </span>
-          <span className="lp-eyebrow rounded-full border border-lp-line px-2.5 py-1 text-[9.5px] md:text-[10.5px]">vs previous period</span>
         </div>
       </motion.div>
       {ORDER.map((id) => (

@@ -5,8 +5,8 @@
  * connection and a message go through, message templates and their variables, who may receive
  * what (consent), automation triggers and conditions, campaigns, and the four-step setup.
  *
- * Pure: no I/O, no node: imports, safe in the browser. Phone numbers and sending hours, shared
- * with SMS, are in ./messaging.
+ * Pure: no I/O, no node: imports, safe in the browser. Phone numbers and sending hours are in
+ * ./messaging.
  */
 import { z } from "./zod";
 

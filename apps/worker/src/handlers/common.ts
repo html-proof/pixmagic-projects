@@ -1,6 +1,5 @@
 /** What every queue handler shares: its dependencies, the errors that end retries, and asking for days to be re-aggregated. */
-import type { BlobStore, Coord, FetchLike, Mailer, Queues, SmtpConnect } from "@app/core";
-import type { SmsProvider } from "@app/core/sms";
+import type { BlobStore, Coord, FetchLike, Mailer, Queues } from "@app/core";
 
 export interface WorkerDeps {
   coord: Coord;
@@ -8,10 +7,6 @@ export interface WorkerDeps {
   payloads: BlobStore;
   mailer: Mailer;
   fetchImpl: FetchLike;
-  /** Outbound TCP for SMTP email accounts (apps/aws/src/nodeSmtp.ts). Absent: SMTP accounts can't send. */
-  smtpConnect?: SmtpConnect;
-  /** AWS End User Messaging SMS (apps/aws/src/smsProvider.ts). Absent: nothing can be texted. */
-  sms?: SmsProvider;
 }
 
 /** Thrown when retrying cannot help (store disconnected, access revoked). The job fails immediately. */

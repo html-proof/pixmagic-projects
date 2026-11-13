@@ -19,8 +19,7 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
         <nav aria-label="Settings" className="flex gap-1 overflow-x-auto md:flex-col">
           {pages.map(({ slug, label, icon: Glyph, to }) => {
             const here = path.replace(/\/$/, "");
-            // Email integrations has pages of its own under it.
-            const active = here === to || (slug === "email" && here.startsWith("/settings/email/"));
+            const active = here === to;
             return (
               <Link
                 key={slug}

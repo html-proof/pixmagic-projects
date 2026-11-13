@@ -125,11 +125,11 @@ time limit (`withTimeout`: 30 s, 10 s for Cognito), so a hung provider fails lik
 
 | Data | Owner module | Tables |
 | --- | --- | --- |
-| Identity, workspaces, roles | api `routes/auth.ts`, `routes/workspaces.ts` | users, workspaces, memberships, invitations, api_keys, notification_preferences, audit_logs, alerts, subscriptions, email_otps |
+| Identity, workspaces, roles | api `routes/auth.ts`, `routes/workspaces.ts` | users, workspaces, memberships, invitations, api_keys, notification_preferences, audit_logs, alerts, subscriptions |
 | Store connection and sync | api `routes/shopify.ts`, `connectStore.ts`, `sync.ts`; worker | stores, sync_jobs, webhook_events |
-| Commerce data | core `shopifyQueries.ts` (what is asked), `normalize.ts` + `persist.ts` | orders, order_line_items, refunds, products, product_variants |
+| Commerce data | core `shopifyQueries.ts` (what is asked), `normalize.ts` + `persist.ts` | orders, order_line_items, order_sales, products, product_variants |
 | Aggregates | core `persist.ts` (`recomputeDays`) | daily_store_metrics |
-| Storefront funnel | api `routes/pixel.ts` | funnel_visits, funnel_daily, pixel_events_seen |
+| Storefront funnel | api `routes/pixel.ts` | funnel_visits, funnel_product_visits, pixel_events_seen |
 | Advertising | core `ads/` (one client per platform), `adConnections/` (connections, tokens, sync, reports) | ad_connections, ad_campaign_daily, adsense_daily |
 | WhatsApp | core `whatsapp/*` | whatsapp_* (9 tables), order_tracking(_events), abandoned_checkouts, customer_reviews |
 
@@ -140,7 +140,7 @@ Every store-scoped table carries `workspace_id`, and RLS restricts the `app_rls`
 
 | Joint | Why it is risky | Mitigation in place / planned |
 | --- | --- | --- |
-| One RDS database | production stops while the database is down | Multi-AZ standby with automatic failover (`dbMultiAz`, `infra/cdk/lib/config.ts`); `/readyz` (bounded, logs why), `deferForDb`, 503s instead of 500s; 14-day point-in-time restore |
+| One RDS database | production stops while the database is down | Multi-AZ standby with automatic failover (`dbMultiAz`, `infra/cdk/lib/config.ts`); `/readyz` (bounded, logs why), `deferForDb`, 503s instead of 500s; 7-day point-in-time restore |
 | The account's Lambda concurrency (10) | requests past it are throttled (429) | hashed UI files from S3, not the function; small per-queue concurrency for jobs; `api-throttles` alarm; raise the quota |
 | `env()` validation | one bad var stops every request | Zod schema + placeholder-secret guard; the smoke tests after each deploy fail and the functions roll back |
 | `TOKEN_ENCRYPTION_KEYS` / `OTP_PEPPER` / `CUSTOMER_HASH_KEY` | losing or rotating them makes stored tokens or hashes unreadable | versioned keyring + `ops:reencrypt`; customer hashes keyed by `CUSTOMER_HASH_KEY` (defaults to `OTP_PEPPER`), so the pepper can rotate alone (RUNBOOK) |

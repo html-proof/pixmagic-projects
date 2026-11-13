@@ -3,6 +3,11 @@
 A map of every screen of bizinsights as it is on 2026-10-30 (main at `f7f6bb45`), written as a
 brief for a simpler redesign. Nothing in the product was changed to make it.
 
+**Note, 2026-11-13.** The map predates the removal of Customer Messaging (SMS), Email integrations
+and the Automations hub on 2026-11-13 and still shows them (the XML, `index.html` and the
+screenshots under `07-messaging`, `09-email` and `10-automations`). Those screens are no longer
+in the app.
+
 | File | What it is |
 | --- | --- |
 | [bizinsights-design-architecture.xml](bizinsights-design-architecture.xml) | The map. Frames, the signed-in shell (sidebar, top bar, search, bell), every screen area by area (route, source file, purpose, sections in order with their visible wording, buttons, states, a complexity rating), the cross-cutting findings, the competitor research with sources, and the proposed simpler structure. |

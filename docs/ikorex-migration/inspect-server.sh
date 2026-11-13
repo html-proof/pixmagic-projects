@@ -4,7 +4,8 @@
 #   ssh deployer@103.146.112.176 'bash -s' < docs/ikorex-migration/inspect-server.sh > ikorex-inventory.txt
 #   (PowerShell 5.1: SERVER_CAPACITY_REPORT.md has the `cmd /c` form.)
 #
-# It changes nothing: no installs, no restarts, no files written, no containers touched.
+# It changes nothing: no installs, no restarts, no files written, no containers touched. Its only
+# traffic is a few plain GET requests to public addresses, to see that outbound HTTPS is open.
 # It prints no secrets: no environment variables, no file contents beyond nginx `listen` and
 # `server_name` lines, no command lines from crontab (only their schedule and program name).
 # sudo is only tried with -n (never prompts) and only for read-only status commands.
@@ -68,7 +69,7 @@ section "web servers, proxies, tunnels"
 for b in nginx caddy apache2 httpd traefik haproxy cloudflared tailscale wg frpc ngrok pm2 node n8n psql redis-server; do
   command -v "$b" >/dev/null 2>&1 && echo "$b: $(command -v "$b")"
 done
-nginx -v 2>&1 | head -1
+command -v nginx >/dev/null 2>&1 && nginx -v 2>&1 | head -1
 ls /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null
 grep -rhE '^\s*(server_name|listen)\b' /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | sed 's/^\s*//' | sort | uniq -c
 [ -f /etc/caddy/Caddyfile ] && grep -hE '^[^#[:space:]].*\{' /etc/caddy/Caddyfile
@@ -85,8 +86,9 @@ groups
 
 # For SECURITY_AUDIT.md's open items: settings and names only, never a file's contents.
 section "security settings (read-only)"
-echo "-- sshd (password and root logins)"
-grep -hiE '^\s*(PasswordAuthentication|PermitRootLogin|PubkeyAuthentication|KbdInteractiveAuthentication|AllowUsers|AllowGroups)\b' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | sed 's/^\s*//'
+echo "-- sshd (password and root logins; sshd keeps the FIRST value it reads, and reads an Include where it stands)"
+grep -nE '^\s*Include\b' /etc/ssh/sshd_config 2>/dev/null | sed 's/^/sshd_config:/'
+grep -HniE '^\s*(PasswordAuthentication|PermitRootLogin|PubkeyAuthentication|KbdInteractiveAuthentication|AllowUsers|AllowGroups)\b' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null | sed 's#^/etc/ssh/##'
 echo "-- docker group (root on this host for its members): $(getent group docker | cut -d: -f4)"
 docker info --format 'rootless={{.Rootless}} security={{.SecurityOptions}} cgroup={{.CgroupVersion}} logging={{.LoggingDriver}}' 2>&1 | head -1
 [ -r /etc/docker/daemon.json ] && echo "daemon.json keys: $(grep -oE '"[A-Za-z0-9_-]+"[[:space:]]*:' /etc/docker/daemon.json | tr -d '":' | tr -s ' \n' ' ')"
@@ -113,6 +115,20 @@ ip -brief addr 2>/dev/null
 ip route 2>/dev/null | head -5
 ip -6 route 2>/dev/null | head -3
 command -v vnstat >/dev/null 2>&1 && vnstat -m 2>/dev/null | tail -8
+
+# What the containers must reach. Any HTTP status means the way out is open; 000 means it isn't.
+section "outbound (HTTP status, or 000 when unreachable)"
+if command -v curl >/dev/null 2>&1; then
+  for u in https://bizinsights.io/api/readyz https://registry-1.docker.io/v2/ https://api.resend.com https://api.twilio.com https://graph.facebook.com https://oauth2.googleapis.com https://shopify.com; do
+    echo "$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$u") $u"
+  done
+else
+  echo "curl: not installed"
+fi
+# Cloudflare Tunnel connects out on port 7844 (TCP for HTTP/2; QUIC on UDP can't be tested this way).
+for h in region1.v2.argotunnel.com region2.v2.argotunnel.com; do
+  if timeout 5 bash -c ": < /dev/tcp/$h/7844" 2>/dev/null; then echo "open $h:7844"; else echo "closed $h:7844"; fi
+done
 
 section "updates"
 [ -f /var/run/reboot-required ] && echo "reboot required" || echo "no reboot pending"

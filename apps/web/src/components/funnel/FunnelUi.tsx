@@ -110,12 +110,6 @@ export function segmentLabel(dimension: SegmentDimension, key: string): string {
 /** A segment the filter can narrow to (not "Not recorded", "Other countries" or an unknown country). */
 export const filterable = (dimension: SegmentDimension, key: string) => key !== "not_recorded" && !(dimension === "country" && (key === "unknown" || key === "other")) && !(dimension === "source" && key === "unknown");
 
-/** A rate's change in percentage points: "+3.1 pts", "−0.4 pts". */
-export function fmtPts(change: number): string {
-  const pts = Math.round(change * 1000) / 10;
-  return `${pts > 0 ? "+" : pts < 0 ? "−" : "±"}${Math.abs(pts).toLocaleString(undefined, { maximumFractionDigits: 1 })} pts`;
-}
-
 /** A whole number with its noun: "1 visit", "1,204 visits". */
 export function count(n: number, noun: string, plural = `${noun}s`): string {
   return `${n.toLocaleString()} ${n === 1 ? noun : plural}`;

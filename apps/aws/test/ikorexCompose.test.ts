@@ -1,5 +1,5 @@
-import { execFile, execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFile, execFileSync, spawn } from "node:child_process";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -23,6 +23,15 @@ const hasCompose = (() => {
   }
 })();
 const bash = findBash();
+function hasFlock(): boolean {
+  if (!bash) return false;
+  try {
+    execFileSync(bash, ["-c", "command -v flock"], { stdio: "ignore", timeout: 30_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface Service {
   image?: string;
@@ -36,6 +45,7 @@ interface Service {
   security_opt?: string[];
   mem_limit?: number | string;
   cpus?: number | string;
+  command?: string[];
   user?: string;
   volumes?: Array<{ type: string; source?: string; target: string; read_only?: boolean }>;
 }
@@ -94,6 +104,32 @@ describe.skipIf(!hasCompose)("the iKorex server's containers (docker compose con
     }
   });
 
+  it("fits a server short of memory with docker-compose.lean.yml: smaller limits, the same isolation", () => {
+    const dir = stage();
+    const config = (archive: string): Record<string, Service> => {
+      const args = ["compose", "-f", "docker-compose.yml", "-f", "docker-compose.lean.yml", "--profile", "admin", "config", "--format", "json"];
+      return JSON.parse(execFileSync("docker", args, { cwd: dir, encoding: "utf8", timeout: 60_000, env: { ...process.env, ARCHIVE_MODE: archive } })).services;
+    };
+    const lean = config("off");
+    const mb = (s: Service) => Number(s.mem_limit) / 1024 / 1024;
+    expect(Object.keys(lean).sort()).toEqual(["admin", "backup", "cloudflared", "evolution", "postgres", "web", "worker"]);
+    for (const [name, s] of Object.entries(lean)) {
+      expect(mb(s), name).toBeGreaterThan(0);
+      expect(mb(s), name).toBeLessThan(mb(all[name]!));
+      expect(Number(s.cpus), name).toBeGreaterThan(0);
+      expect(s.ports ?? [], name).toEqual([]);
+      expect(s.cap_drop, name).toEqual(["ALL"]);
+      expect(s.security_opt, name).toContain("no-new-privileges:true");
+    }
+    // What stays running (`admin` is a one-off) at its worst: under the 2.5 GB the server had available.
+    const running = Object.entries(lean).filter(([name]) => name !== "admin");
+    expect(running.reduce((sum, [, s]) => sum + mb(s), 0)).toBeLessThanOrEqual(2500);
+    // PostgreSQL still reads its settings file; with no backup bucket the write-ahead log isn't kept for it.
+    expect(lean.postgres!.command).toContain("config_file=/etc/postgresql/postgresql.conf");
+    expect(lean.postgres!.command).toContain("archive_mode=off");
+    expect(config("").postgres!.command).toContain("archive_mode=on");
+  });
+
   it("mounts the Docker socket only in the optional log collector, read-only, and the host's files only read-only", () => {
     for (const [name, s] of Object.entries(all)) {
       for (const v of (s.volumes ?? []).filter((v) => v.type === "bind")) {
@@ -127,6 +163,35 @@ describe.skipIf(!bash)("the server's scripts refuse placeholder passwords", () =
     const r = await run(dir, "scripts/deploy.sh", ["abc123"]);
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/placeholder values \(CHANGE_ME\) still in: .*env\/owner\.env/);
+  });
+
+  // Deploy to iKorex and a ship by hand can reach the server together. flock is Linux's (the
+  // server, CI); Git Bash on a Windows PC has none, and there deploy.sh never runs for real.
+  it.skipIf(!hasFlock())("deploy.sh waits for a deploy already running in the folder, and gives up without touching anything", async () => {
+    const dir = stage();
+    for (const f of readdirSync(join(dir, "env")).filter((f) => f.endsWith(".env"))) {
+      writeFileSync(join(dir, "env", f), readFileSync(join(dir, "env", f), "utf8").replace(/CHANGE_ME/g, "set"));
+    }
+    // The deploy "already running": it holds the folder's lock until the test ends.
+    const holder = spawn(bash!, ["-c", "exec 9>.deploy.lock; flock 9; echo held; exec sleep 60"], { cwd: dir });
+    try {
+      await new Promise<void>((held, failed) => {
+        holder.stdout.once("data", () => held());
+        holder.once("exit", () => failed(new Error("the lock holder exited")));
+      });
+      const r = await new Promise<{ code: number; out: string }>((done) =>
+        execFile(bash!, [join(dir, "scripts/deploy.sh"), "abc123"], { cwd: dir, env: { ...process.env, DEPLOY_LOCK_WAIT: "1" } }, (err, stdout, stderr) =>
+          done({ code: err ? ((err as { code?: number }).code ?? 1) : 0, out: stdout + stderr }),
+        ),
+      );
+      expect(r.code).toBe(1);
+      expect(r.out).toMatch(/another deploy of .* still holds \.deploy\.lock: not started/);
+      // It stopped before the tag, the database and the migrations.
+      expect(readFileSync(join(dir, ".env"), "utf8")).toBe("APP_TAG=test\nSCHEDULES=off\n");
+      expect(r.out).not.toMatch(/migrations|switching/);
+    } finally {
+      holder.kill("SIGKILL");
+    }
   });
 
   it("render-monitoring.sh does too (Grafana's admin password)", async () => {

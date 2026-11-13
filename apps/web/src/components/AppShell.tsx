@@ -10,6 +10,7 @@ import {
   ChartColumn,
   ChevronDown,
   CircleCheck,
+  Compass,
   Funnel,
   Gauge,
   Headset,
@@ -22,15 +23,16 @@ import {
   Menu,
   MessageCircle,
   MessageCircleMore,
-  MessageSquareText,
   OctagonAlert,
   Package,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plug,
   ReceiptText,
   Search,
+  Send,
   Settings,
   Scale,
-  Sheet,
   ShieldCheck,
   UserCog,
   ShoppingBag,
@@ -40,12 +42,11 @@ import {
   UserRound,
   Users,
   UsersRound,
-  Workflow,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { canManage, useApp } from "@/components/AppContext";
-import { BrandLogo } from "@/components/Brand";
+import { BrandLogo, BrandMark } from "@/components/Brand";
 import { GoogleAdsIcon, MetaIcon } from "@/components/BrandIcons";
 import { CommandPalette, type PaletteItem } from "@/components/CommandPalette";
 import { ShopifyIcon } from "@/components/ShopifyIcon";
@@ -56,8 +57,11 @@ import { closeSharedDashboard } from "@/components/team/AccessStates";
 import { leaveTo, signOut } from "@/lib/auth";
 import { CONTACT } from "@/lib/contact";
 import { SETTINGS_PAGES } from "@/lib/settingsNav";
-import { AUTOMATIONS_HUB } from "@/lib/features";
-import { notesSeenKey, readLocal, writeLocal } from "@/lib/storage";
+import { SIMPLE_MENU } from "@/lib/features";
+import { FOLD_FROM, folds, groupFolds, groupOpen, parseOpenGroups, toggleGroup, type MenuGroupId, type MenuLayout } from "@/lib/menu";
+import { MENU_LAYOUT_KEY, MENU_OPEN_KEY, MENU_RAIL_KEY, notesSeenKey, readLocal, removeLocal, TOUR_SEEN_KEY, writeLocal } from "@/lib/storage";
+import { startTour, TOUR_EVENT } from "@/lib/tour";
+import { Tour } from "@/components/Tour";
 import { ALERT_PATH, type AlertSeverity, type AlertView } from "@app/shared/alerts";
 import { hasFullAccess, ROLE_INFO } from "@app/shared/access";
 import { staffAccess } from "@app/shared/staff";
@@ -71,6 +75,12 @@ import { canOpenPage, landingPath, seesTopic, showsDashboardHome, TOPIC_PAGE } f
 // menu button and the account sits in the top bar. Topics open the dashboard's topic pages
 // (?view=…, the Sales tabs of components/dashboard/SalesFrame.tsx), the same ones its cards open;
 // advertising (/advertising) and the shopping funnel (/funnel) have pages of their own.
+//
+// The short menu (2026-11-11, lib/features.ts SIMPLE_MENU, rules in lib/menu.ts): the sidebar lists
+// the everyday pages and folds the rest into groups (More reports, Store, Marketing,
+// Settings) that open with a click and stay open on that device. Every page keeps its name and its
+// address; "Show every page" at the foot brings back the whole list. On a wide screen the sidebar
+// can also be narrowed to its icons.
 // ---------------------------------------------------------------------------
 
 const DASHBOARD = "/dashboard";
@@ -94,12 +104,14 @@ interface NavItem {
   active: boolean;
 }
 
-function SideLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
+/** `rail`: the sidebar narrowed to its icons, each named on hover and to screen readers. */
+function SideLink({ item, onNavigate, rail = false }: { item: NavItem; onNavigate?: () => void; rail?: boolean }) {
   const path = usePathname();
   const Icon = item.icon;
   return (
     <Link
       href={item.href}
+      title={rail ? item.label : undefined}
       aria-current={item.active ? "page" : undefined}
       onClick={(e) => {
         // On the dashboard a topic opens without reloading the page's numbers.
@@ -109,7 +121,7 @@ function SideLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void
         }
         onNavigate?.();
       }}
-      className={`group flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-emerald-300 ${
+      className={`group flex items-center gap-3 rounded-xl py-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-emerald-300 ${rail ? "justify-center px-0" : "px-3"} ${
         item.active ? "bg-nav-active text-white shadow-sm" : "text-white/75 hover:bg-white/[0.07] hover:text-white"
       }`}
     >
@@ -118,20 +130,20 @@ function SideLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void
       ) : (
         <Icon aria-hidden className={`h-[18px] w-[18px] shrink-0 ${item.active ? "text-white" : "text-white/60 group-hover:text-white"}`} strokeWidth={1.8} />
       )}
-      <span className="truncate">{item.label}</span>
+      <span className={rail ? "sr-only" : "truncate"}>{item.label}</span>
     </Link>
   );
 }
 
-function NavGroup({ title, items, onNavigate }: { title?: string; items: NavItem[]; onNavigate?: () => void }) {
+function NavGroup({ title, items, onNavigate, rail = false }: { title?: string; items: NavItem[]; onNavigate?: () => void; rail?: boolean }) {
   if (!items.length) return null;
   return (
-    <div className={title ? "border-t border-white/10 pt-4" : undefined}>
-      {title && <p className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-white/45">{title}</p>}
+    <div className={title ? `border-t border-white/10 ${rail ? "pt-3" : "pt-4"}` : undefined}>
+      {title && <p className={rail ? "sr-only" : "mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-white/45"}>{title}</p>}
       <ul className="space-y-0.5">
         {items.map((i) => (
           <li key={i.href}>
-            <SideLink item={i} onNavigate={onNavigate} />
+            <SideLink item={i} onNavigate={onNavigate} rail={rail} />
           </li>
         ))}
       </ul>
@@ -139,7 +151,109 @@ function NavGroup({ title, items, onNavigate }: { title?: string; items: NavItem
   );
 }
 
-function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
+/** What the sidebar remembers on a device: which menu, which groups are open, and whether it is narrowed to icons. */
+interface MenuPrefs {
+  layout: MenuLayout;
+  setLayout: (l: MenuLayout) => void;
+  open: readonly MenuGroupId[];
+  toggle: (id: MenuGroupId) => void;
+  rail: boolean;
+  setRail: (on: boolean) => void;
+}
+
+function useMenuPrefs(): MenuPrefs {
+  const [full, setFull] = useState(false);
+  const [open, setOpen] = useState<MenuGroupId[]>([]);
+  const [rail, setRailOn] = useState(false);
+  // After mounting, as every per-device preference is read (lib/storage.ts).
+  useEffect(() => {
+    setFull(readLocal(MENU_LAYOUT_KEY) === "full");
+    setOpen(parseOpenGroups(readLocal(MENU_OPEN_KEY)));
+    setRailOn(readLocal(MENU_RAIL_KEY) === "1");
+  }, []);
+  return {
+    layout: !SIMPLE_MENU || full ? "full" : "short",
+    setLayout: (l) => {
+      if (l === "full") writeLocal(MENU_LAYOUT_KEY, "full");
+      else removeLocal(MENU_LAYOUT_KEY);
+      setFull(l === "full");
+    },
+    open,
+    toggle: (id) => {
+      const next = toggleGroup(open, id);
+      writeLocal(MENU_OPEN_KEY, next.join(","));
+      setOpen(next);
+    },
+    rail,
+    setRail: (on) => {
+      if (on) writeLocal(MENU_RAIL_KEY, "1");
+      else removeLocal(MENU_RAIL_KEY);
+      setRailOn(on);
+    },
+  };
+}
+
+/**
+ * A group of the short menu: its name as a button that shows or hides its pages. A group of one
+ * page is that page, with the group's name over it as in the whole list. In the narrowed sidebar
+ * it is one icon, which widens the sidebar with the group open.
+ */
+function FoldGroup({
+  id,
+  title,
+  icon: Icon,
+  items,
+  shown,
+  onToggle,
+  onNavigate,
+  rail = false,
+  onWiden,
+}: {
+  id: MenuGroupId;
+  title: string;
+  icon: LucideIcon;
+  items: NavItem[];
+  shown: boolean;
+  onToggle: () => void;
+  onNavigate?: () => void;
+  rail?: boolean;
+  onWiden?: () => void;
+}) {
+  if (!items.length) return null;
+  if (!groupFolds(items.length)) return <NavGroup title={title} items={items} onNavigate={onNavigate} rail={rail} />;
+  const current = items.some((i) => i.active);
+  const tone = current && (rail || !shown) ? "bg-white/[0.1] text-white" : "text-white/75 hover:bg-white/[0.07] hover:text-white";
+  const face = `group flex w-full items-center gap-3 rounded-xl py-2 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-emerald-300 ${tone}`;
+  if (rail) {
+    return (
+      <div className="border-t border-white/10 pt-3">
+        <button type="button" onClick={onWiden} title={title} aria-label={`${title}: show its pages`} className={`${face} justify-center px-0`} data-testid={`menu-group-${id}`}>
+          <Icon aria-hidden className="h-[18px] w-[18px] shrink-0 text-white/60 group-hover:text-white" strokeWidth={1.8} />
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="border-t border-white/10 pt-2">
+      <button type="button" onClick={onToggle} aria-expanded={shown} aria-controls={`menu-${id}`} className={`${face} px-3`} data-testid={`menu-group-${id}`}>
+        <Icon aria-hidden className="h-[18px] w-[18px] shrink-0 text-white/60 group-hover:text-white" strokeWidth={1.8} />
+        <span className="min-w-0 flex-1 truncate text-left">{title}</span>
+        <ChevronDown aria-hidden className={`h-4 w-4 shrink-0 text-white/45 transition-transform ${shown ? "rotate-180" : ""}`} />
+      </button>
+      {shown && (
+        <ul id={`menu-${id}`} className="mt-0.5 space-y-0.5">
+          {items.map((i) => (
+            <li key={i.href}>
+              <SideLink item={i} onNavigate={onNavigate} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function Sidebar({ onNavigate, prefs, rail = false }: { onNavigate?: () => void; prefs: MenuPrefs; rail?: boolean }) {
   const path = usePathname().replace(/\/$/, "");
   const view = useCurrentView();
   const { me, workspace, access, allowed, offers } = useApp();
@@ -154,41 +268,36 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const adsPlatform = within("/advertising/google") || within("/advertising/meta");
   const ads = seesTopic(access, "ads", offers);
 
-  const main: NavItem[] = [
-    ...(showsDashboardHome(access) ? [{ label: full ? "Dashboard" : "Overview", icon: LayoutDashboard, href: DASHBOARD, active: onDash && view === null }] : []),
-    ...topic("overview", "Business Overview", Gauge),
-    // The Profit sheet: every figure a column per day, week or month, with the business events (/sheet).
-    ...(allowed("analytics.sales") ? [area("/sheet", "Profit sheet", Sheet)] : []),
-    // Profit & Loss: the statement for any dates and the store's own expenses, managed there (/profit).
-    ...(allowed("analytics.sales") && allowed("finance.breakdown") ? [area("/profit", "Profit & Loss", Scale)] : []),
-    ...topic("sales", "Sales & Orders", ShoppingBag),
-    ...topic("products", "Products", Package),
-    // The Inventory section (stock per location, alerts, changes). It takes the place of the
-    // dashboard's Stock panel in the menu for whoever can open it; the panel stays on the dashboard.
-    ...(offers("inventory") && allowed("inventory.view") ? [area("/inventory", "Inventory", Boxes)] : []),
-    ...topic("customers", "Customers", UsersRound),
-    // Every ad platform: an area of its own, shown to whoever the dashboard's ads panel was (Team & Access, and what the workspace offers).
-    ...(ads ? [{ ...area("/advertising", "Advertising", Megaphone), active: within("/advertising") && !adsPlatform }] : []),
-    ...topic("discounts", "Discounts", BadgePercent),
-    // The Shopping Funnel: a page of its own (/funnel), shown to whoever the dashboard's shoppers panel was.
-    ...(seesTopic(access, "shoppers", offers) ? [area("/funnel", "Shopping Funnel", Funnel)] : []),
-  ];
   const inventory = offers("inventory") && allowed("inventory.view");
-  const store: NavItem[] = [
-    ...topic("orders", "Orders", ReceiptText),
-    ...(inventory ? [] : topic("stock", "Stock", Boxes)),
-    ...topic("shipping", "Shipping", Truck),
-    ...topic("channels", "Sales channels", Store),
+  // Every entry once, by name; the two layouts below arrange the same entries.
+  const home: NavItem[] = showsDashboardHome(access) ? [{ label: full ? "Dashboard" : "Overview", icon: LayoutDashboard, href: DASHBOARD, active: onDash && view === null }] : [];
+  const overview = topic("overview", "Business Overview", Gauge);
+  // Profit & Loss (/profit): the statement for any dates, the store's own expenses, managed there, and
+  // the day-by-day sheet with the business events (the Profit sheet's own page until 13 Nov 2026). A
+  // member without the sales breakdown gets the sheet alone there, so the entry follows the sales.
+  const profit = allowed("analytics.sales") ? [area("/profit", "Profit & Loss", Scale)] : [];
+  const sales = topic("sales", "Sales & Orders", ShoppingBag);
+  const products = topic("products", "Products", Package);
+  // The Inventory section (stock per location, alerts, changes). It takes the place of the
+  // dashboard's Stock panel in the menu for whoever can open it; the panel stays on the dashboard.
+  const stock = inventory ? [area("/inventory", "Inventory", Boxes)] : [];
+  const stockPanel = inventory ? [] : topic("stock", "Stock", Boxes);
+  const customers = topic("customers", "Customers", UsersRound);
+  // Every ad platform: an area of its own, shown to whoever the dashboard's ads panel was (Team & Access, and what the workspace offers).
+  const advertising = ads ? [{ ...area("/advertising", "Advertising", Megaphone), active: within("/advertising") && !adsPlatform }] : [];
+  const discounts = topic("discounts", "Discounts", BadgePercent);
+  // The Shopping Funnel: a page of its own (/funnel), shown to whoever the dashboard's shoppers panel was.
+  const funnel = seesTopic(access, "shoppers", offers) ? [area("/funnel", "Shopping Funnel", Funnel)] : [];
+  const orders = topic("orders", "Orders", ReceiptText);
+  const shipping = topic("shipping", "Shipping", Truck);
+  const channels = topic("channels", "Sales channels", Store);
+  const people: NavItem[] = [
     ...(offers("staff") && staffAccess(workspace.role, workspace.staffRole, workspace.permissions).permissions.length > 0 ? [area("/staff", "Staff", Users)] : []),
     ...(me.employments?.length ? [area("/portal", "My work", Briefcase)] : []),
   ];
-  // The ad platforms by name (each its own pages in the Advertising area), then the ways of messaging customers.
-  const automationsHub = AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")));
+  // The ad platforms by name (each its own pages in the Advertising area), then WhatsApp.
   const marketing: NavItem[] = [
     ...(ads ? [{ ...area("/advertising/google", "Google Ads", Megaphone), glyph: <GoogleAdsIcon size={17} /> }, { ...area("/advertising/meta", "Meta Ads", Megaphone), glyph: <MetaIcon size={17} /> }] : []),
-    // Automations: one setup and one message history over SMS and email (WhatsApp keeps its own pages).
-    ...(automationsHub ? [area("/automations", "Automations", Workflow)] : []),
-    ...(offers("sms") && allowed("marketing.campaigns") ? [area("/messaging", "Customer Messaging", MessageSquareText)] : []),
     ...(offers("whatsapp") && allowed("marketing.campaigns") ? [area("/dashboard/whatsapp-automation", "WhatsApp", MessageCircle)] : []),
   ];
   const settings: NavItem[] = [
@@ -202,9 +311,38 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         : { ...area("/settings/profile", "My Account", UserCog), active: path.startsWith("/settings/profile") || path.startsWith("/settings/security") || path.startsWith("/settings/notifications") },
   ];
 
+  // The whole list, as the menu always was.
+  const main: NavItem[] = [...home, ...overview, ...profit, ...sales, ...products, ...stock, ...customers, ...advertising, ...discounts, ...funnel];
+  const store: NavItem[] = [...orders, ...stockPanel, ...shipping, ...channels, ...people];
+  const entries = main.length + store.length + marketing.length + settings.length;
+  const fold = folds(prefs.layout, entries);
+  // The short menu: the pages a store owner opens most days, then the rest by group.
+  const everyday: NavItem[] = [...home, ...sales, ...products, ...customers, ...stock, ...stockPanel, ...advertising, ...profit];
+  const reports: NavItem[] = [...overview, ...discounts, ...funnel];
+  const storeMore: NavItem[] = [...orders, ...shipping, ...channels, ...people];
+
+  // A group holding the current page is open by itself until it is closed by hand, on that page.
+  const here = `${path}?${view ?? ""}`;
+  const [closed, setClosed] = useState<{ at: string; ids: MenuGroupId[] }>({ at: here, ids: [] });
+  const closedHere = closed.at === here ? closed.ids : [];
+  const group = (id: MenuGroupId, title: string, icon: LucideIcon, items: NavItem[]) => {
+    const current = items.some((i) => i.active);
+    const shown = groupOpen(id, prefs.open, current, closedHere);
+    const toggle = () => {
+      if (current) setClosed({ at: here, ids: shown ? [...closedHere, id] : closedHere.filter((g) => g !== id) });
+      // What the device remembers follows what was just asked for.
+      if (prefs.open.includes(id) === shown) prefs.toggle(id);
+    };
+    const widen = () => {
+      prefs.setRail(false);
+      if (!shown) toggle();
+    };
+    return <FoldGroup id={id} title={title} icon={icon} items={items} shown={shown} onToggle={toggle} onNavigate={onNavigate} rail={rail} onWiden={widen} />;
+  };
+
   return (
-    <nav aria-label="App" className="flex flex-1 flex-col gap-4 px-3 pb-4 pt-2">
-      {!full && (
+    <nav aria-label="App" className={`flex flex-1 flex-col pb-4 pt-2 ${rail ? "gap-3 px-2" : "gap-4 px-3"}`} data-menu={fold ? "short" : "full"}>
+      {!full && !rail && (
         // Whose dashboard this is, and as what: someone from outside the business sees it at a glance.
         <div className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2.5" data-testid="member-badge">
           <p className="truncate text-sm font-semibold text-white">{workspace.name}</p>
@@ -216,10 +354,39 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           )}
         </div>
       )}
-      <NavGroup items={main} onNavigate={onNavigate} />
-      <NavGroup title="Store" items={store} onNavigate={onNavigate} />
-      <NavGroup title="Marketing & integrations" items={marketing} onNavigate={onNavigate} />
-      <NavGroup title="Settings" items={settings} onNavigate={onNavigate} />
+      {fold ? (
+        <>
+          <NavGroup items={everyday} onNavigate={onNavigate} rail={rail} />
+          {group("reports", "More reports", ChartColumn, reports)}
+          {group("store", "Store", Store, storeMore)}
+          {group("marketing", "Marketing", Send, marketing)}
+          {group("settings", "Settings", Settings, settings)}
+        </>
+      ) : (
+        <>
+          <NavGroup items={main} onNavigate={onNavigate} rail={rail} />
+          <NavGroup title="Store" items={store} onNavigate={onNavigate} rail={rail} />
+          <NavGroup title="Marketing & integrations" items={marketing} onNavigate={onNavigate} rail={rail} />
+          <NavGroup title="Settings" items={settings} onNavigate={onNavigate} rail={rail} />
+        </>
+      )}
+      {/* The whole list or the short one: kept on this device. Not offered to a menu too short to fold. */}
+      {SIMPLE_MENU && entries >= FOLD_FROM && !rail && (
+        <button
+          type="button"
+          onClick={() => prefs.setLayout(prefs.layout === "short" ? "full" : "short")}
+          className="self-start rounded px-3 text-xs font-medium text-emerald-300 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-emerald-300"
+          data-testid="menu-layout-switch"
+        >
+          {prefs.layout === "short" ? "Show every page" : "Show fewer pages"}
+        </button>
+      )}
+      {rail ? (
+        <Link prefetch={false} href="/support" title="Contact support" className="mt-auto flex items-center justify-center rounded-xl py-2 text-emerald-300 outline-none transition-colors hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-emerald-300">
+          <Headset aria-hidden className="h-[18px] w-[18px]" strokeWidth={1.8} />
+          <span className="sr-only">Contact support</span>
+        </Link>
+      ) : (
       <div className="mt-auto rounded-2xl border border-white/10 bg-white/[0.05] p-4">
         <div className="flex items-start gap-3">
           <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
@@ -240,6 +407,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           Contact support
         </Link>
       </div>
+      )}
     </nav>
   );
 }
@@ -332,7 +500,7 @@ const menuItem = "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left 
  * The account: the avatar in the top bar on a phone ("bar"), or the card at the foot of the
  * sidebar with the name and address ("sidebar"), whose menu opens upwards.
  */
-function AccountMenu({ variant = "bar" }: { variant?: "bar" | "sidebar" }) {
+function AccountMenu({ variant = "bar" }: { variant?: "bar" | "sidebar" | "rail" }) {
   const { me } = useApp();
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -356,6 +524,7 @@ function AccountMenu({ variant = "bar" }: { variant?: "bar" | "sidebar" }) {
   }
 
   const card = variant === "sidebar";
+  const up = card || variant === "rail";
   return (
     <div ref={ref} className="relative">
       <button
@@ -366,7 +535,9 @@ function AccountMenu({ variant = "bar" }: { variant?: "bar" | "sidebar" }) {
         className={
           card
             ? "flex w-full items-center gap-3 rounded-xl p-2 text-left outline-none transition-colors hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-emerald-300"
-            : "flex items-center gap-1 rounded-full p-0.5 pr-1 transition-colors hover:bg-text/[0.05]"
+            : variant === "rail"
+              ? "mx-auto flex items-center rounded-full p-0.5 outline-none transition-colors hover:bg-white/[0.07] focus-visible:ring-2 focus-visible:ring-emerald-300"
+              : "flex items-center gap-1 rounded-full p-0.5 pr-1 transition-colors hover:bg-text/[0.05]"
         }
       >
         <AccountAvatar user={me.user} />
@@ -376,11 +547,11 @@ function AccountMenu({ variant = "bar" }: { variant?: "bar" | "sidebar" }) {
             {me.user.displayName && <span className="block truncate text-xs text-white/55">{me.user.email}</span>}
           </span>
         )}
-        <ChevronDown aria-hidden className={`h-4 w-4 shrink-0 transition-transform ${card ? "text-white/60" : "text-muted"} ${open ? "rotate-180" : ""}`} />
+        {variant !== "rail" && <ChevronDown aria-hidden className={`h-4 w-4 shrink-0 transition-transform ${card ? "text-white/60" : "text-muted"} ${open ? "rotate-180" : ""}`} />}
       </button>
       {open && (
         <div
-          className={`animate-rise absolute z-40 w-64 rounded-xl border border-border bg-surface p-1.5 text-text shadow-[var(--shadow-lift)] ${card ? "bottom-full left-0 mb-2" : "right-0 top-full mt-2"}`}
+          className={`animate-rise absolute z-40 w-64 rounded-xl border border-border bg-surface p-1.5 text-text shadow-[var(--shadow-lift)] ${up ? "bottom-full left-0 mb-2" : "right-0 top-full mt-2"}`}
         >
           <div className="px-3 py-2">
             {me.user.displayName && <p className="truncate text-sm font-semibold">{me.user.displayName}</p>}
@@ -471,6 +642,7 @@ function Notifications() {
         aria-controls="notifications"
         aria-label={label}
         data-testid="notifications-bell"
+        data-tour="bell"
         className="relative flex h-10 w-10 items-center justify-center rounded-full text-muted transition-colors hover:bg-text/[0.05] hover:text-text"
       >
         <Bell aria-hidden className="h-5 w-5" strokeWidth={1.8} />
@@ -552,6 +724,19 @@ function HelpBubble() {
             <LifeBuoy aria-hidden className="h-4 w-4" />
             Help centre &amp; FAQ
           </Link>
+          {/* The look around (components/Tour.tsx), for whoever skipped it or wants it again. */}
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              startTour();
+            }}
+            className="btn-secondary mt-2 w-full"
+            data-testid="tour-start"
+          >
+            <Compass aria-hidden className="h-4 w-4" />
+            Show me around
+          </button>
         </div>
       )}
       <button
@@ -559,6 +744,7 @@ function HelpBubble() {
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-label={open ? "Close help" : "Help and support"}
+        data-tour="help"
         className="flex h-14 w-14 items-center justify-center rounded-full bg-accent text-accent-ink shadow-[var(--shadow-lift)] transition-transform hover:-translate-y-0.5"
       >
         {open ? <X aria-hidden className="h-6 w-6" /> : <MessageCircleMore aria-hidden className="h-6 w-6" />}
@@ -610,7 +796,7 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
       <div className="flex h-16 items-center gap-3 pl-2 pr-3 sm:pl-3 sm:pr-5 lg:px-8">
         {/* On a wide screen the logo heads the sidebar instead. */}
         <div className="flex shrink-0 items-center gap-1 lg:hidden">
-          <button type="button" onClick={onMenu} aria-label="Open navigation" className="flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-text/[0.05] hover:text-text">
+          <button type="button" onClick={onMenu} aria-label="Open navigation" data-tour="menu-button" className="flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-text/[0.05] hover:text-text">
             <Menu aria-hidden className="h-5 w-5" />
           </button>
           <Link href={DASHBOARD} className="hidden items-center sm:flex" aria-label="bizinsights home">
@@ -628,6 +814,7 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
         <button
           type="button"
           onClick={onSearch}
+          data-tour="search"
           className="hidden h-10 min-w-0 max-w-md flex-1 items-center gap-2.5 rounded-lg border border-transparent bg-bg px-3.5 text-sm text-muted transition-colors hover:border-accent/30 md:flex"
         >
           <Search aria-hidden className="h-4 w-4 shrink-0" />
@@ -635,7 +822,7 @@ function TopBar({ onMenu, onSearch }: { onMenu: () => void; onSearch: () => void
           <kbd aria-hidden className="shrink-0 rounded bg-home-soft-hover px-1.5 py-0.5 font-sans text-[11px]">{mac ? "⌘ K" : "Ctrl K"}</kbd>
         </button>
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
-          <button type="button" onClick={onSearch} aria-label="Search" className="flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-text/[0.05] hover:text-text md:hidden">
+          <button type="button" onClick={onSearch} aria-label="Search" data-tour="search-button" className="flex h-10 w-10 items-center justify-center rounded-full text-muted hover:bg-text/[0.05] hover:text-text md:hidden">
             <Search aria-hidden className="h-5 w-5" />
           </button>
           <Notifications />
@@ -689,7 +876,20 @@ export function AppShell({ children }: { children: ReactNode }) {
   const allowedHere = useAccessGuard();
   const [drawer, setDrawer] = useState(false);
   const [palette, setPalette] = useState(false);
+  const [tour, setTour] = useState(false);
+  const prefs = useMenuPrefs();
   useEffect(() => setDrawer(false), [path]);
+
+  // The look around, asked for from the Home's offer or the help button (lib/tour.ts).
+  useEffect(() => {
+    const open = () => {
+      setDrawer(false);
+      setPalette(false);
+      setTour(true);
+    };
+    window.addEventListener(TOUR_EVENT, open);
+    return () => window.removeEventListener(TOUR_EVENT, open);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -716,10 +916,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     return [
       ...(showsDashboardHome(access) ? [{ id: "dashboard", label: "Dashboard", group: "Insights", icon: LayoutDashboard, keywords: "home", go: go(DASHBOARD) }] : []),
       ...(allowed("analytics.sales")
-        ? [{ id: "sheet", label: "Profit sheet", group: "Insights", icon: Sheet, keywords: "spreadsheet daily weekly monthly p&l profit loss business events calendar mer", go: go("/sheet") }]
-        : []),
-      ...(allowed("analytics.sales") && allowed("finance.breakdown")
-        ? [{ id: "profit", label: "Profit & Loss", group: "Insights", icon: Scale, keywords: "p&l profit loss expenses costs recurring categories mer roas vcr fcr statement", go: go("/profit") }]
+        ? [{ id: "profit", label: "Profit & Loss", group: "Insights", icon: Scale, keywords: "p&l profit loss sheet spreadsheet daily weekly monthly expenses costs recurring categories business events calendar mer roas vcr fcr statement", go: go("/profit") }]
         : []),
       ...TOPICS.filter((t) => seesTopic(access, t, offers)).map(
         (t): PaletteItem => ({ id: `topic-${t}`, label: topicInfo(t).title, group: "Insights", icon: TOPIC_ICON[t], keywords: TOPIC_WORDS[t], go: () => goToTopic(t, window.location.pathname, (href) => router.push(href)) }),
@@ -745,12 +942,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             { id: "advertising-reports", label: "Advertising reports", group: "Advertising", icon: Megaphone, keywords: "csv export download ads", go: go("/advertising/reports") },
           ]
         : []),
-      ...(AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")))
-        ? [{ id: "automations", label: "Automations", group: "Marketing", icon: Workflow, keywords: "automation workflow trigger sms email whatsapp message history delivery", go: go("/automations") }]
-        : []),
-      ...(offers("sms") && allowed("marketing.campaigns")
-        ? [{ id: "messaging", label: "Customer Messaging", group: "Marketing", icon: MessageSquareText, keywords: "sms text messages campaigns automations templates opt-out", go: go("/messaging") }]
-        : []),
       ...(offers("whatsapp") && allowed("marketing.campaigns") ? [{ id: "whatsapp", label: "WhatsApp", group: "Apps", icon: MessageCircle, keywords: "messages campaigns", go: go("/dashboard/whatsapp-automation") }] : []),
       ...(staff ? [{ id: "staff", label: "Staff", group: "Apps", icon: Users, keywords: "employees payroll timesheets roster", go: go("/staff") }] : []),
       ...(me.employments?.length ? [{ id: "portal", label: "My work", group: "Apps", icon: Briefcase, go: go("/portal") }] : []),
@@ -762,18 +953,30 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="app-look min-h-dvh lg:flex">
-      <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col bg-nav lg:flex print:hidden">
-        <div className="flex h-16 shrink-0 items-center px-5">
+      <aside className={`sticky top-0 hidden h-dvh shrink-0 flex-col bg-nav lg:flex print:hidden ${prefs.rail ? "w-[4.5rem]" : "w-60"}`} data-tour="menu" data-rail={prefs.rail ? "on" : "off"}>
+        <div className={`flex shrink-0 items-center ${prefs.rail ? "flex-col gap-1 px-2 pb-1 pt-4" : "h-16 justify-between gap-2 pl-5 pr-3"}`}>
           <Link href={DASHBOARD} className="flex items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-emerald-300" aria-label="bizinsights home">
-            <BrandLogo size={26} className="text-lg text-white" />
+            {prefs.rail ? <BrandMark size={28} /> : <BrandLogo size={26} className="text-lg text-white" />}
           </Link>
+          {/* Narrow the sidebar to its icons, or widen it again: kept on this device. */}
+          <button
+            type="button"
+            onClick={() => prefs.setRail(!prefs.rail)}
+            aria-pressed={prefs.rail}
+            aria-label={prefs.rail ? "Widen the menu" : "Narrow the menu to icons"}
+            title={prefs.rail ? "Widen the menu" : "Narrow the menu to icons"}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white/55 outline-none transition-colors hover:bg-white/[0.07] hover:text-white focus-visible:ring-2 focus-visible:ring-emerald-300"
+            data-testid="menu-rail-switch"
+          >
+            {prefs.rail ? <PanelLeftOpen aria-hidden className="h-[18px] w-[18px]" strokeWidth={1.8} /> : <PanelLeftClose aria-hidden className="h-[18px] w-[18px]" strokeWidth={1.8} />}
+          </button>
         </div>
         {/* The menu scrolls on a short screen; the account stays at the foot. */}
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          <Sidebar />
+          <Sidebar prefs={prefs} rail={prefs.rail} />
         </div>
-        <div className="shrink-0 border-t border-white/10 p-3">
-          <AccountMenu variant="sidebar" />
+        <div className={`shrink-0 border-t border-white/10 ${prefs.rail ? "p-2" : "p-3"}`}>
+          <AccountMenu variant={prefs.rail ? "rail" : "sidebar"} />
         </div>
       </aside>
       {drawer && (
@@ -798,7 +1001,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </div>
             )}
             <div className="flex flex-1 flex-col pt-3">
-              <Sidebar onNavigate={() => setDrawer(false)} />
+              <Sidebar onNavigate={() => setDrawer(false)} prefs={prefs} />
             </div>
           </div>
         </div>
@@ -814,6 +1017,14 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
       <HelpBubble />
       {palette && <CommandPalette items={items} onClose={() => setPalette(false)} />}
+      {tour && (
+        <Tour
+          onClose={() => {
+            writeLocal(TOUR_SEEN_KEY, "1");
+            setTour(false);
+          }}
+        />
+      )}
     </div>
   );
 }

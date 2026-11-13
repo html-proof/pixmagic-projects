@@ -15,6 +15,11 @@ service, is [AWS_TO_IKOREX_MIGRATION_MATRIX.md](AWS_TO_IKOREX_MIGRATION_MATRIX.m
 chose to leave AWS completely and close the account after the rollback period. The last column says
 what replaces each of them now; [AWS_COST_COMPARISON.md](AWS_COST_COMPARISON.md) has the figures.
 
+**Note, 2026-11-13.** Customer Messaging (SMS) and the email module were removed from the app. The
+End User Messaging SMS and SNS `sms-events` rows, the SMS events queue, `smsProvider.ts` and the
+Twilio replacement below record what existed when this inventory was taken; none of it is in the
+code or the App stack any more.
+
 ## How the code reaches AWS
 
 There is **no AWS SDK in the application**. Every runtime call is a signed HTTPS request through

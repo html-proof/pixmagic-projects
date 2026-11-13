@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { fillCode, fillSignUp, insertStore, latestCode, logIn, openMoreDetail, PASSWORD, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
+import { fillCode, fillSignUp, insertStore, latestCode, logIn, openMoreDetail, PASSWORD, showEveryPage, signedLaunchUrl, signedWebhook, signOutFromMenu, signUp, stubShopify, uniqueEmail, verifyEmail } from "./helpers";
 
 /** The app's own alerts (Next.js also renders an empty role="alert" route announcer). */
 const alert = (page: import("@playwright/test").Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
@@ -217,7 +217,7 @@ test("forgot password: a code by email, a new password, then signing in with it"
   await expect(page).toHaveURL(/onboarding/);
 });
 
-test.describe("Continue with Google (through the user pool's managed login)", () => {
+test.describe("Continue with Google (the app's own client, against the stand-in for Google)", () => {
   const methodsOf = async (email: string) =>
     (await db.query("SELECT i.method FROM users u JOIN auth_identities i ON i.user_id = u.id WHERE u.email = $1 ORDER BY i.created_at", [email.toLowerCase()])).rows.map((r) => r.method as string);
   const userCount = async (email: string) => Number((await db.query("SELECT count(*) FROM users WHERE email = $1", [email.toLowerCase()])).rows[0].count);
@@ -530,15 +530,9 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
   );
 
   await page.goto("/dashboard");
-  // The simple Home first (lib/features.ts SIMPLE_HOME): one sales chart, and what can be unlocked.
-  await expect(page.getByTestId("home-sales-by-day")).toBeVisible();
-  await expect(page.getByTestId("locked-top_products")).toContainText("access to your products");
-  // The full dashboard is a click away, and back.
-  await page.getByTestId("home-layout-switch").click();
+  // No orders yet, and what can be unlocked.
   await expect(page.getByText("No orders in this period")).toBeVisible();
-  await expect(page.getByTestId("home-layout-switch")).toHaveText("Back to the simple Home");
-  await page.getByTestId("home-layout-switch").click();
-  await expect(page.getByTestId("home-sales-by-day")).toBeVisible();
+  await expect(page.getByTestId("locked-top_products")).toContainText("access to your products");
 
   const now = new Date().toISOString();
   const res = await signedWebhook(
@@ -560,10 +554,6 @@ test("dashboard shows webhook-driven metrics and only granted modules", async ({
     await expect(page.getByTestId("metric-Total sales")).toContainText("$100.00", { timeout: 5000 });
   }).toPass({ timeout: 30_000 });
   await expect(page.getByTestId("metric-Orders")).toContainText("1");
-  // The full dashboard, kept on this device after a reload.
-  await page.getByTestId("home-layout-switch").click();
-  await page.reload();
-  await expect(page.getByTestId("home-layout-switch")).toHaveText("Back to the simple Home");
   // How it went (Orders at a glance): through, none unsuccessful; checkouts left need the storefront pixel.
   await expect(page.getByTestId("glance-completed")).toContainText("1");
   await expect(page.getByTestId("glance-unsuccessful")).toContainText("None cancelled, failed or refunded");
@@ -627,22 +617,24 @@ test("a workspace installed from the App Store shows only what the listing descr
   // No WhatsApp, Staff or advertising in the menu, and no Advertising section on the dashboard.
   await page.goto("/dashboard");
   const nav = page.getByRole("navigation", { name: "App" });
+  // Every page listed, so an entry that is missing is missing, not folded away.
+  await showEveryPage(page);
   await expect(nav.getByRole("link", { name: "Settings" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Sales & Orders" })).toBeVisible();
-  for (const name of ["WhatsApp", "Staff", "Advertising", "Customer Messaging", "Automations"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
+  for (const name of ["WhatsApp", "Staff", "Advertising"]) await expect(nav.getByRole("link", { name, exact: true })).toHaveCount(0);
   await expect(page.getByTestId("about-data")).toBeVisible();
   await expect(page.getByTestId("ads-onboarding")).toHaveCount(0);
 
-  // Settings: Shopify, without the advertising, email and WhatsApp connections.
+  // Settings: Shopify, without the advertising and WhatsApp connections.
   await page.goto("/settings/integrations");
   await expect(page.getByTestId("int-shopify")).toBeVisible();
   for (const id of ["int-whatsapp", "int-google", "int-meta", "int-adsense", "int-zapier"]) await expect(page.getByTestId(id)).toHaveCount(0);
   const settings = page.getByRole("navigation", { name: "Settings" });
   await expect(settings.getByRole("link", { name: "Shopify" })).toBeVisible();
-  for (const name of ["Advertising", "Email integrations"]) await expect(settings.getByRole("link", { name })).toHaveCount(0);
+  await expect(settings.getByRole("link", { name: "Advertising" })).toHaveCount(0);
 
   // Their pages are closed as well, typed in or bookmarked.
-  for (const path of ["/whatsapp", "/messaging", "/automations", "/staff", "/settings/ads", "/settings/email", "/advertising"]) {
+  for (const path of ["/whatsapp", "/staff", "/settings/ads", "/advertising"]) {
     await page.goto(path);
     await expect(page.getByTestId("access-notice")).toContainText("You don't have access to that page.");
     await expect(page).toHaveURL(/\/dashboard/);
@@ -754,10 +746,9 @@ test("shows Shopify's own sessions and gross profit, and checks the sales figure
   await keep("sessions", "2026-09-20|2026-09-20|", { sessions: 100, visitors: 90, cartSessions: 10, checkoutSessions: 5, completedSessions: 2, pageviews: 300 });
 
   await page.goto("/dashboard?preset=custom&from=2026-09-21&to=2026-09-21&view=sales");
-  // The comparison names its dates, as Shopify's comparison chip does, so a Shopify screen set to
-  // other dates can't pass for the same comparison ("vs Previous period" beside "Mar 14, 2026").
-  await expect(page.getByTestId("compare-dates")).toHaveText(/^vs (Sep 20, 2026|20 Sept? 2026)$/);
-  await expect(page.getByTestId("compare-dates")).not.toContainText("Previous period");
+  // The dates stand alone: no menu to compare them with other dates, and nothing saying they are.
+  await expect(page.getByTestId("date-chip")).not.toHaveAttribute("title", /Compared with/);
+  await expect(page.getByLabel("Compare with")).toHaveCount(0);
   // The check against Shopify and its gross profit sit under the page's "More detail".
   await openMoreDetail(page);
   const check = page.getByTestId("module-shopify-check");

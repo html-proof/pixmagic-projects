@@ -1,14 +1,13 @@
 "use client";
 import type { ReactNode } from "react";
 import { claimsAddUp } from "@app/shared/ads";
-import { gradeRefundRate, gradeShipping, gradeStock, gradeTrend, type Health } from "@app/shared/health";
+import { gradeRefundRate, gradeShipping, gradeStock, type Health } from "@app/shared/health";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDay, fmtMonth, fmtRange, fmtRelative, hourRange, plural } from "./format";
-import { PLATFORM_NAME, throughLabel } from "./AdsCommon";
+import { PLATFORM_NAME } from "./AdsCommon";
 import { shownFigures, upToWords } from "./adFigures";
-import { comparisonHelp, noEarlierData } from "./DateRange";
 import { Icon } from "./Icons";
-import { B, Change, changeWords, comparedOn } from "./Narrative";
+import { B } from "./Narrative";
 import { Panel, Stat, type Tone } from "./Primitives";
 import { topicInfo, type Topic } from "./topics";
 import { appliedCustom, breakdownOf } from "./redacted";
@@ -34,34 +33,21 @@ const HEALTH: Record<Health, { label: string; tone: Tone; order: number }> = {
   info: { label: "For your info", tone: "neutral", order: 3 },
 };
 
-// The grading rules (trends, refunds, stock, shipping) live in @app/shared/health and are listed in
-// docs/kpis.md. While the only day picked is today, it isn't over, so trends aren't graded.
-
-/** How this page says a change of exactly 0 on `on` (the ads panels say ", the same as …"). */
-const level = (on: string) => `, level with ${on}`;
-
-/**
- * A change in sales to end a sentence: ", up 12% on the period before", or, when the imported
- * orders don't reach back to the dates compared with, that there is nothing to compare with.
- */
-const salesChange = (ov: Overview, d: number | null) =>
-  d === null && ov.previous.imported === false ? ", with no earlier data to compare" : changeWords(d, level(comparedOn(ov)), comparedOn(ov));
+// The grading rules (refunds, stock, shipping) live in @app/shared/health and are listed in
+// docs/kpis.md. An area with no rule of its own states its figure as information.
 
 export function businessHealth(ov: Overview, currency: string): Check[] {
   const m = ov.modules;
   const money = (n: number) => fmtMoney(n, currency);
-  const running = ov.range.from === ov.range.to && ov.range.to === ov.today;
-  const still = running ? " Today isn't over yet, so it isn't graded." : "";
-  const on = comparedOn(ov);
   const out: Check[] = [];
 
   const s = m.sales_overview;
   if (s) {
     const c = s.current;
-    out.push({ id: "net", topic: "sales", area: "Sales", health: gradeTrend(s.deltas.netSales, running), text: `${money(c.netSales)} in net sales${salesChange(ov, s.deltas.netSales)}.${still}` });
-    out.push({ id: "orders", topic: "sales", area: "Orders", health: gradeTrend(s.deltas.orders, running), text: `${plural(c.orders, "order")}${salesChange(ov, s.deltas.orders)}.${still}` });
+    out.push({ id: "net", topic: "sales", area: "Sales", health: "info", text: `${money(c.netSales)} in net sales.` });
+    out.push({ id: "orders", topic: "sales", area: "Orders", health: "info", text: `${plural(c.orders, "order")}.` });
     if (c.averageOrderValue !== null) {
-      out.push({ id: "aov", topic: "sales", area: "Average order", health: gradeTrend(s.deltas.averageOrderValue, running), text: `${money(c.averageOrderValue)} per order${salesChange(ov, s.deltas.averageOrderValue)}.` });
+      out.push({ id: "aov", topic: "sales", area: "Average order", health: "info", text: `${money(c.averageOrderValue)} per order.` });
     }
   }
   const r = m.refunds?.current;
@@ -71,16 +57,11 @@ export function businessHealth(ov: Overview, currency: string): Check[] {
   }
   const f = m.funnel;
   if (f && f.visits > 0) {
-    // Before the pixel counted visits there is nothing to compare with, as for sales.
-    const change = f.previous.imported === false ? ", with no earlier data to compare" : changeWords(f.deltas.conversionRate, level(on), on);
-    out.push({ id: "conversion", topic: "shoppers", area: "Tracked visits that bought", health: gradeTrend(f.deltas.conversionRate, running), text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase${change}.` });
+    out.push({ id: "conversion", topic: "shoppers", area: "Tracked visits that bought", health: "info", text: `${fmtPct(f.conversionRate)} of ${plural(f.visits, "visit")} ended in a purchase.` });
   }
   const cu = m.customers;
   if (cu && cu.current.returningCustomerRate !== null) {
-    const now = cu.current.returningCustomerRate;
-    const before = cu.previous.returningCustomerRate;
-    const d = before !== null && before > 0 ? (now - before) / before : null;
-    out.push({ id: "returning", topic: "customers", area: "Returning customers", health: gradeTrend(d, running), text: `${fmtPct(now)} of customers had bought before${before !== null ? ` (${fmtPct(before)} before)` : ""}.` });
+    out.push({ id: "returning", topic: "customers", area: "Returning customers", health: "info", text: `${fmtPct(cu.current.returningCustomerRate)} of customers had bought before.` });
   }
   const inv = m.inventory?.current;
   if (inv && inv.trackedVariants > 0) {
@@ -159,13 +140,11 @@ function countsOf(checks: Check[]) {
   return { attention: n("attention"), watch: n("watch"), good: n("good"), graded: checks.filter((c) => c.health !== "info").length };
 }
 
-function Row({ label, now, before, change }: { label: string; now: string; before?: string | null; change?: ReactNode }) {
+function Row({ label, now }: { label: string; now: string }) {
   return (
     <tr className="border-t border-border">
       <td className="px-1 py-2 font-medium">{label}</td>
       <td className="px-1 py-2 text-right tabular-nums">{now}</td>
-      <td className="px-1 py-2 text-right tabular-nums text-muted">{before ?? "—"}</td>
-      <td className="px-1 py-2 text-right tabular-nums">{change ?? <span className="text-muted">—</span>}</td>
     </tr>
   );
 }
@@ -191,18 +170,8 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const y = s?.year;
   const custom = appliedCustom(s);
   const range = fmtRange(ov.range.from, ov.range.to);
-  // Why the figures with a history of their own aren't compared, if they aren't (one sentence for
-  // ads and AdSense when their figures start on the same day).
-  const adsMissing = m.ads?.notCompared === "no_history" ? noEarlierData(m.ads.historyFrom, "ads") : null;
-  const notCompared = [
-    f?.previous.imported === false ? noEarlierData(f.historyFrom, "visits") : null,
-    adsMissing,
-    m.adsense?.notCompared === "no_history" && !(adsMissing && m.adsense.historyFrom === m.ads?.historyFrom) ? noEarlierData(m.adsense.historyFrom, "adsense") : null,
-  ].filter(Boolean);
-  // The ad rows show what their change compares: with today left out of both sides, the dates up to
-  // yesterday. With nothing compared, the dates' figures, or the days so far, dated.
+  // The ad rows show the dates' figures, or the days so far, dated.
   const nowOf = <T,>(fig: AdFigures<T>): { totals: T | null; label: string | null } => {
-    if (fig.compared) return { totals: fig.compared.current.totals, label: fig.compared.trimmed ? throughLabel(fig, ov) : null };
     const { totals, through } = shownFigures(fig);
     return { totals, label: through ? upToWords(through) : null };
   };
@@ -211,17 +180,15 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
   const adsLabel = (what: string) => (adsNowOf?.label ? `${what}, ${adsNowOf.label}` : what);
   // The platforms' ROAS, or with Meta and Google both counted a row each: their claims added up could
   // count an order twice (claimsAddUp).
-  const roasOf = (what: string, at: { totals: { purchases: number | null; roas: number | null } | null; label: string | null }, before: number | null, change: number | null) => ({
+  const roasOf = (what: string, at: { totals: { purchases: number | null; roas: number | null } | null; label: string | null }) => ({
     label: at.label ? `Return on ad spend (${what}), ${at.label}` : `Return on ad spend (${what})`,
     now: !at.totals ? "Unavailable" : at.totals.purchases === null ? "Being re-read" : at.totals.roas !== null ? `${at.totals.roas.toFixed(2)}×` : "—",
-    before: before !== null ? `${before.toFixed(2)}×` : null,
-    change,
   });
   const roasRows = !m.ads
     ? []
     : claimsAddUp(m.ads.byProvider.map((p) => p.provider))
-      ? [roasOf("platforms' own", nowOf(m.ads), m.ads.previous.roas, m.ads.deltas.roas)]
-      : m.ads.byProvider.map((p) => roasOf(`${PLATFORM_NAME[p.provider]}' own`, nowOf(p), p.previous.roas, p.deltas.roas));
+      ? [roasOf("platforms' own", nowOf(m.ads))]
+      : m.ads.byProvider.map((p) => roasOf(`${PLATFORM_NAME[p.provider]}' own`, nowOf(p)));
   const senseNowOf = m.adsense ? nowOf(m.adsense) : null;
   const senseNow = senseNowOf?.totals ?? null;
   // Gross sales, discounts, tax, shipping and total sales, and returns, only for someone who may
@@ -245,8 +212,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
           {s && (
             <p>
               From {range} you had <B>{money(s.current.netSales)}</B> in net sales from <B>{plural(s.current.orders, "order")}</B>
-              {s.current.averageOrderValue !== null ? <>, about {money(s.current.averageOrderValue)} each</> : null}
-              {salesChange(ov, s.deltas.netSales)}.
+              {s.current.averageOrderValue !== null ? <>, about {money(s.current.averageOrderValue)} each</> : null}.
             </p>
           )}
           {f && f.visits > 0 && (
@@ -291,84 +257,53 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
       </Panel>
 
       {s && (
-        <Panel
-          id="d-key-figures"
-          title="Every key figure"
-          help={`${range}, against ${comparisonHelp(ov.previous, ov.range)}.${ov.previous.imported === false ? ` ${noEarlierData(ov.data?.historyFrom)}` : ""}${
-            ov.previous.until && (m.ads || m.adsense) ? " Ad platforms report whole days, so while these dates include today their figures compare whole days only, up to yesterday." : ""
-          }${notCompared.map((x) => ` ${x}`).join("")}`}
-        >
+        <Panel id="d-key-figures" title="Every key figure" help={`${range}.`}>
           <div className="-mx-1 overflow-x-auto">
             <table className="w-full min-w-[26rem] text-sm">
               <thead className="text-left text-xs text-muted">
                 <tr>
                   <th className="px-1 pb-2 font-normal" />
                   <th className="px-1 pb-2 text-right font-normal">These dates</th>
-                  <th className="px-1 pb-2 text-right font-normal">Before</th>
-                  <th className="px-1 pb-2 text-right font-normal">Change</th>
                 </tr>
               </thead>
               <tbody>
                 {/* Shopify's "Total sales breakdown", line for line and in its order. */}
-                {bd && <Row label="Gross sales" now={money(bd.grossSales)} before={s.previous?.grossSales !== undefined ? money(s.previous.grossSales) : null} change={<Change value={s.deltas.grossSales ?? null} />} />}
+                {bd && <Row label="Gross sales" now={money(bd.grossSales)} />}
                 {bd && <Row label="Discounts" now={money(-bd.discounts)} />}
-                {returns !== null && <Row label="Returns" now={money(-returns)} change={m.refunds ? <Change value={m.refunds.deltas.refunds} invert /> : undefined} />}
-                <Row label="Net sales" now={money(s.current.netSales)} before={s.previous ? money(s.previous.netSales) : null} change={<Change value={s.deltas.netSales} />} />
+                {returns !== null && <Row label="Returns" now={money(-returns)} />}
+                <Row label="Net sales" now={money(s.current.netSales)} />
                 {s.current.additionalFees ? <Row label="Additional fees" now={money(s.current.additionalFees)} /> : null}
                 {s.current.duties ? <Row label="Duties" now={money(s.current.duties)} /> : null}
                 {bd?.shipping != null && <Row label="Shipping charges" now={money(bd.shipping)} />}
                 {bd?.tax != null && <Row label="Taxes" now={money(bd.tax)} />}
-                {s.current.totalSales !== undefined && (
-                  <Row
-                    label="Total sales"
-                    now={money(s.current.totalSales)}
-                    before={s.previous?.totalSales !== undefined ? money(s.previous.totalSales) : null}
-                    change={<Change value={s.deltas.totalSales ?? null} />}
-                  />
-                )}
+                {s.current.totalSales !== undefined && <Row label="Total sales" now={money(s.current.totalSales)} />}
                 {/* The store's own calculation, beside Shopify's figure and named, never instead of it. */}
-                {custom && (
-                  <Row
-                    label={`Custom sales · ${custom.name}`}
-                    now={money(custom.current)}
-                    before={custom.previous !== null ? money(custom.previous) : null}
-                    change={<Change value={custom.delta} />}
-                  />
-                )}
-                <Row label="Orders" now={fmtNum(s.current.orders)} before={s.previous ? fmtNum(s.previous.orders) : null} change={<Change value={s.deltas.orders} />} />
-                <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} before={s.previous && s.previous.averageOrderValue !== null ? money(s.previous.averageOrderValue) : null} change={<Change value={s.deltas.averageOrderValue} />} />
+                {custom && <Row label={`Custom sales · ${custom.name}`} now={money(custom.current)} />}
+                <Row label="Orders" now={fmtNum(s.current.orders)} />
+                <Row label="Average order" now={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} />
                 <Row label="Items sold" now={fmtNum(s.current.units)} />
                 {m.shopify_sessions?.current && (
-                  <Row label="Sessions (Shopify)" now={m.shopify_sessions.current.sessions !== null ? fmtNum(m.shopify_sessions.current.sessions) : "—"} before={m.shopify_sessions.previous?.sessions != null ? fmtNum(m.shopify_sessions.previous.sessions) : null} change={<Change value={m.shopify_sessions.deltas.sessions} />} />
+                  <Row label="Sessions (Shopify)" now={m.shopify_sessions.current.sessions !== null ? fmtNum(m.shopify_sessions.current.sessions) : "—"} />
                 )}
                 {m.shopify_sessions?.current && (
-                  <Row label="Conversion rate (Shopify)" now={fmtPct(m.shopify_sessions.current.conversionRate)} before={m.shopify_sessions.previous ? fmtPct(m.shopify_sessions.previous.conversionRate) : null} change={<Change value={m.shopify_sessions.deltas.conversionRate} />} />
+                  <Row label="Conversion rate (Shopify)" now={fmtPct(m.shopify_sessions.current.conversionRate)} />
                 )}
                 {m.profit?.current && m.profit.current.grossProfit !== null && (
-                  <Row label="Gross profit (Shopify)" now={money(m.profit.current.grossProfit)} before={m.profit.previous?.grossProfit != null ? money(m.profit.previous.grossProfit) : null} change={<Change value={m.profit.deltas.grossProfit} />} />
+                  <Row label="Gross profit (Shopify)" now={money(m.profit.current.grossProfit)} />
                 )}
-                {f && <Row label="Tracked visits (pixel)" now={fmtNum(f.visits)} before={f.previous.visits !== null ? fmtNum(f.previous.visits) : null} change={<Change value={f.deltas.visits} />} />}
-                {f && <Row label="Tracked visits that bought" now={fmtPct(f.conversionRate)} before={f.previous.conversionRate !== null ? fmtPct(f.previous.conversionRate) : null} change={<Change value={f.deltas.conversionRate} />} />}
-                {m.ads && (
-                  <Row
-                    label={adsLabel(`Ad spend (${m.ads.currency})`)}
-                    now={adsNow ? fmtMoney(adsNow.spend, m.ads.currency) : "Unavailable"}
-                    before={m.ads.previous.spend !== null ? fmtMoney(m.ads.previous.spend, m.ads.currency) : null}
-                    change={<Change value={m.ads.deltas.spend} invert />}
-                  />
-                )}
+                {f && <Row label="Tracked visits (pixel)" now={fmtNum(f.visits)} />}
+                {f && <Row label="Tracked visits that bought" now={fmtPct(f.conversionRate)} />}
+                {m.ads && <Row label={adsLabel(`Ad spend (${m.ads.currency})`)} now={adsNow ? fmtMoney(adsNow.spend, m.ads.currency) : "Unavailable"} />}
                 {roasRows.map((r) => (
-                  <Row key={r.label} label={r.label} now={r.now} before={r.before} change={<Change value={r.change} />} />
+                  <Row key={r.label} label={r.label} now={r.now} />
                 ))}
                 {m.adsense && (
                   <Row
                     label={senseNowOf?.label ? `Estimated AdSense earnings (${m.adsense.currency}), ${senseNowOf.label}` : `Estimated AdSense earnings (${m.adsense.currency})`}
                     now={senseNow ? fmtMoney(senseNow.earnings, m.adsense.currency) : "Unavailable"}
-                    before={m.adsense.previous.earnings !== null ? fmtMoney(m.adsense.previous.earnings, m.adsense.currency) : null}
-                    change={<Change value={m.adsense.deltas.earnings} />}
                   />
                 )}
-                {m.customers && m.customers.current.returningCustomerRate !== null && <Row label="Returning customers" now={fmtPct(m.customers.current.returningCustomerRate)} before={m.customers.previous.returningCustomerRate !== null ? fmtPct(m.customers.previous.returningCustomerRate) : null} />}
+                {m.customers && m.customers.current.returningCustomerRate !== null && <Row label="Returning customers" now={fmtPct(m.customers.current.returningCustomerRate)} />}
               </tbody>
             </table>
           </div>
@@ -395,13 +330,7 @@ export function OverviewDetail({ ov, currency, onOpen }: { ov: Overview; currenc
               value={finishedMonths.length ? money(finishedMonths.reduce((a, x) => a + x.netSales, 0) / finishedMonths.length) : "—"}
               note={finishedMonths.length ? `over ${plural(finishedMonths.length, "full month")}` : "no full month yet"}
             />
-            {thisMonth && (
-              <Stat
-                label={`${fmtMonth(thisMonth.month)} so far`}
-                value={money(thisMonth.netSales)}
-                note={thisMonth.change !== null && thisMonth.comparedWith ? <><Change value={thisMonth.change} /> vs the same days last month</> : "nothing comparable before it"}
-              />
-            )}
+            {thisMonth && <Stat label={`${fmtMonth(thisMonth.month)} so far`} value={money(thisMonth.netSales)} />}
           </div>
         </Panel>
       )}

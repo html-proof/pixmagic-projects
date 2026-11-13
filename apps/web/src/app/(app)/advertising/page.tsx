@@ -44,7 +44,6 @@ export default function AdvertisingOverviewPage() {
         sub="Your Meta Ads and Google Ads together: what you spent, what the platforms credit to their ads, what reached your Shopify store, and whether it paid. AdSense's earnings are money in, kept apart from the spend."
         r={s.dates}
         shown={s.shown}
-        current={!s.older}
         actions={
           <>
             {s.ov && <SyncedNow ov={s.ov} />}

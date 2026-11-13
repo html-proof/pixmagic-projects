@@ -713,7 +713,6 @@ describe("webhook processing", () => {
     expect(rows[0]).toMatchObject({ workspaceId: store.workspaceId, storeId: store.id, shopifyRequestId: "9999", customerId: "7", ordersRequested: ["1001"] });
     // Only keyed hashes are kept, never the address or the number.
     expect(rows[0]!.customerKey).toBe((await systemDb.order.findFirstOrThrow()).customerKey);
-    expect(rows[0]!.emailHash).toMatch(/^[0-9a-f]{64}$/);
     expect(rows[0]!.phoneHash).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(rows[0])).not.toMatch(/pii@example\.com|61412345678|\+61/i);
     expect(await systemDb.alert.count({ where: { storeId: store.id, code: "privacy_request", resolvedAt: null } })).toBe(1);

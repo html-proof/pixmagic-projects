@@ -155,11 +155,12 @@ describe("the Google Ads analytics page's CSV", () => {
     expect(none.rows[0]!.slice(3, 5)).toEqual(["Not stored", null]);
   });
 
-  it("the overview with nothing stored is Not stored, and without the dates compared stored, Not compared", () => {
+  it("the overview with nothing stored is Not stored, and stored, the figure alone", () => {
     const empty = googleAnalyticsTable("overview", analytics({ from: null, through: null, complete: false }));
-    expect(empty.rows[0]).toEqual(["Spend (USD)", "Not stored", null, null, "Nothing is stored for this account for these dates yet."]);
+    expect(empty.header).toEqual(["Measure", "Value", "Note"]);
+    expect(empty.rows[0]).toEqual(["Spend (USD)", "Not stored", "Nothing is stored for this account for these dates yet."]);
     const stored = googleAnalyticsTable("overview", analytics({ from: "2026-09-28", through: "2026-10-29", complete: true }));
-    expect(stored.rows[0]).toEqual(["Spend (USD)", 50, "Not compared", null, "Not compared: 2026-09-14 to 2026-09-27 aren't all stored for this account."]);
+    expect(stored.rows[0]).toEqual(["Spend (USD)", 50, null]);
   });
 
   it("a split that couldn't be read says why; a real account has no demo store", () => {

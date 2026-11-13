@@ -9,14 +9,13 @@ Node 24 (`.nvmrc`), pnpm 9 (`corepack enable`), Docker.
 ## 1. Start dependencies
 
 ```bash
-docker compose up -d postgres mailpit cognito
+docker compose up -d postgres mailpit
 ```
 
 | Service | Host port | Notes |
 | --- | --- | --- |
 | Postgres 17 | 5434 | owner `app/app`; tenant role `app_rls/app_rls` created by `infra/postgres/init.sql` |
 | Mailpit | 8025 UI | every email (invites, alerts) lands at http://localhost:8025 (the server posts to Mailpit's HTTP API when `MAILPIT_URL` is set) |
-| Cognito emulator | 9229 | the app's user pool, ready to use ([infra/cognito-local](../infra/cognito-local/README.md)); codes it would email are in `docker compose logs cognito`. Without Docker: `node infra/cognito-local/start.mjs` |
 | Evolution API (WhatsApp; optional) | 8081 | only with `docker compose --profile whatsapp up -d evolution`: the release production runs, with a database of its own ([whatsapp.md](whatsapp.md)) |
 
 ## 2. Configure
@@ -31,7 +30,7 @@ Generate an encryption key and paste it into `TOKEN_ENCRYPTION_KEYS=1:<key>`:
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
-`.env.example` already points sign-in at the Cognito emulator and the database at `app_dev`. To use a real user pool instead (Google needs one), drop `COGNITO_ENDPOINT` and fill in that pool's settings ([cognito-setup.md](cognito-setup.md)). The settings every environment shares (Shopify app, ad platforms, WhatsApp's Cloud API) come from `apps/aws/src/settings.ts`; anything in `.env` overrides them, and the shell's environment overrides both. The UI needs no settings of its own. WhatsApp's own service is set in `.env` only: `EVOLUTION_API_URL=http://127.0.0.1:8081`, `EVOLUTION_API_KEY` (the compose file's) and `EVOLUTION_WEBHOOK_URL=http://host.docker.internal:8787/api`, so the container can reach this server; without the URL and key, connecting WhatsApp is off.
+`.env.example` already points the database at `app_dev`. Sign-in needs no setting: it is the app's own (accounts in that database, codes emailed to Mailpit). "Continue with Google" appears only with an OAuth client of your own (`GOOGLE_SIGNIN_CLIENT_ID` and its secret, redirect URI `http://localhost:<port>/auth/callback`). The settings every environment shares (Shopify app, ad platforms, WhatsApp's Cloud API) come from `apps/aws/src/settings.ts`; anything in `.env` overrides them, and the shell's environment overrides both. The UI needs no settings of its own. WhatsApp's own service is set in `.env` only: `EVOLUTION_API_URL=http://127.0.0.1:8081`, `EVOLUTION_API_KEY` (the compose file's) and `EVOLUTION_WEBHOOK_URL=http://host.docker.internal:8787/api`, so the container can reach this server; without the URL and key, connecting WhatsApp is off.
 
 The repo-root `.env` (from `.env.example`) is only for tools on this machine: docker compose, the Prisma CLI (`DATABASE_URL`, migrations) and the maintenance tasks in [RUNBOOK.md](RUNBOOK.md#maintenance-tasks). Which file configures what: [architecture.md](architecture.md#configuration).
 
@@ -79,10 +78,10 @@ Shopify must reach your callback and webhook URLs over HTTPS. Use a tunnel (e.g.
 | --- | --- | --- |
 | `pnpm test` | unit tests (shared, core, the AWS adapters and local server) | no |
 | `pnpm test:integration` | API + worker against real Postgres (`app_test` DB) with in-memory queues and coordination | yes |
-| `pnpm e2e` | Playwright against the local server (port 8789), its own Cognito emulator and managed-login stand-in, Mailpit (`app_e2e` DB) | yes (Postgres, Mailpit) |
+| `pnpm e2e` | Playwright against the local server (port 8789), its own stand-in for Google sign-in, Mailpit (`app_e2e` DB) | yes (Postgres, Mailpit) |
 | `pnpm typecheck` | all packages | no |
 
-Integration tests fake Cognito and Shopify HTTP; they never call the internet.
+Integration tests fake the sign-in provider and Shopify HTTP; they never call the internet.
 
 They also truncate every table between tests, so one run needs the database to itself. The global
 setup takes a Postgres advisory lock for the whole run (`lockTestDatabase`), so a second run waits
@@ -105,9 +104,9 @@ Publish it on both loopbacks as above. The connection strings say `localhost`, w
 over IPv6 first; with only `127.0.0.1` published, every new database connection waits for that
 attempt to fail.
 
-E2E can run beside a local demo the same way. Give it its own server port, Cognito emulator, login
-stand-in and Mailpit, because its global setup deletes every Mailpit message:
+E2E can run beside a local demo the same way. Give it its own server port, Google stand-in
+and Mailpit, because its global setup deletes every Mailpit message:
 
 ```bash
-TEST_PG_PORT=5440 E2E_PORT=8790 E2E_COGNITO_PORT=9250 E2E_LOGIN_PORT=9260 E2E_MAILPIT_URL=http://localhost:8125 pnpm e2e
+TEST_PG_PORT=5440 E2E_PORT=8790 E2E_LOGIN_PORT=9260 E2E_MAILPIT_URL=http://localhost:8125 pnpm e2e
 ```

@@ -8,6 +8,7 @@
 #   3. both healthy within 3 minutes, /api/readyz ok and /api/version naming this commit
 #   4. any failure in 2-3: the previous tag comes back, and the script exits 1
 #   5. images of all but the newest three releases removed, and releases/ trimmed alike
+# Only one runs in a folder at a time (.deploy.lock): a second one waits for the first.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 tag="${1:?usage: deploy.sh <tag>}"
@@ -23,10 +24,26 @@ if placeholders="$(grep -l 'CHANGE_ME' env/*.env 2>/dev/null)"; then
   log "placeholder values (CHANGE_ME) still in: $(echo $placeholders): give each its own value"
   exit 1
 fi
+# One deploy of a project at a time. Deploy to iKorex and a ship by hand can arrive together, and
+# two runs would read the same "previous" tag, migrate and switch across each other, and roll back
+# to the wrong release. The second waits for the first (15 minutes, longer than a deploy takes),
+# then reads .env as the first left it. The lock goes with the process, however it ends.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>.deploy.lock
+  if ! flock -w "${DEPLOY_LOCK_WAIT:-900}" 9; then
+    log "another deploy of $project still holds .deploy.lock: not started"
+    exit 1
+  fi
+fi
 [ -f .env ] || printf 'APP_TAG=\nSCHEDULES=off\n' > .env
 docker image inspect "bizinsights:$tag" >/dev/null
 previous="$(sed -n 's/^APP_TAG=//p' .env)"
 set_tag() { sed -i "s/^APP_TAG=.*/APP_TAG=$1/" .env; }
+
+# Until the switch below, Compose works with the running release's tag. On a folder's very first
+# deploy there is none (.env's APP_TAG is empty, and the Compose file refuses an empty tag for every
+# command, the database's too): the new release's stands in.
+export APP_TAG="${previous:-$tag}"
 
 # The database first (it must be up for the migrations), then the WhatsApp service's own database.
 compose up -d --build postgres
@@ -74,6 +91,8 @@ check() {
 }
 
 log "switching from ${previous:-nothing}"
+# From here .env decides again (set_tag), for the switch and for a rollback alike.
+unset APP_TAG
 set_tag "$tag"
 compose up -d --remove-orphans web worker evolution backup cloudflared
 if ! check; then

@@ -5,6 +5,10 @@ CloudWatch, SES and S3. This page records what the code already has for each, wh
 replacement would have to be, and when it would be worth building. The cost side is in
 [AWS_COST_AUDIT.md](AWS_COST_AUDIT.md): together these services cost US$2.73 a month.
 
+(Written 2026-11-06. Customer Messaging (SMS) and the email module were removed from the app on
+2026-11-13: the `SmsProvider` interface, the SMS delivery events on SNS and the SMS and email
+automations named below no longer exist.)
+
 ## The adapter layer already exists
 
 The brief's "compatibility adapters" (stage 2) are already how the code is built. The API, the jobs

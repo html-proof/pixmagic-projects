@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { AlertTriangle, Check, CheckCircle2, QrCode, ShieldCheck, Smartphone } from "lucide-react";
 import { PROVIDER_INFO, WA_SETUP_STEPS, WA_SETUP_STEP_INFO, type WaProvider, type WaSetupStep } from "@app/shared/whatsapp";
-import { Fact, FactList, SoftBox, StepCard, StepNumber } from "@/components/automations/MarketingKit";
+import { Fact, FactList, SoftBox, StepCard, StepNumber } from "./MarketingKit";
 import { Badge } from "@/components/dashboard/Primitives";
 import { Alert } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
@@ -12,6 +12,7 @@ import { CloudSignup } from "./CloudSignup";
 import { SettingsForm } from "./SettingsForm";
 import type { WaMessage, WaMessageEvent, WaOverview, WaPairing, WaTemplatesResponse } from "./types";
 import { CONNECTION_TONE, MessageStatus, waError, waHref, WhatsappIcon, useWaAction } from "./WaUi";
+import { WA_OFF } from "./waErrors";
 
 // ---------------------------------------------------------------------------
 // The four-step setup: 1 Connect (choose how), 2 Authorize (scan WhatsApp's own QR code, type the
@@ -100,7 +101,7 @@ function ConnectStep({ overview, provider, setProvider, next }: { overview: WaOv
   if (!overview.platform.evolution) {
     return (
       <StepCard id="wa-step-connect" n={1} title="Connect">
-        <Alert kind="info">WhatsApp connections aren&apos;t set up on bizinsights yet, so nothing can be connected and nothing is sent. Nothing needs changing in your accounts.</Alert>
+        <Alert kind="info">{WA_OFF} Nothing can be connected until it is back on, and nothing needs changing in your accounts.</Alert>
       </StepCard>
     );
   }

@@ -22,7 +22,6 @@ const schema = z.object({
   APP_COMMIT: z.string().optional().default(""),
   APP_BUILT_AT: z.string().optional().default(""),
   APP_ENVIRONMENT: z.string().optional().default(""),
-  AWS_LAMBDA_FUNCTION_VERSION: z.string().optional().default(""),
   SESSION_SECRET: z.string().min(16),
   TOKEN_ENCRYPTION_KEYS: z.string(),
   OTP_PEPPER: z.string().min(8),
@@ -33,21 +32,8 @@ const schema = z.object({
    * before rotating OTP_PEPPER, and the rotation no longer touches them (docs/RUNBOOK.md).
    */
   CUSTOMER_HASH_KEY: z.string().optional().default(""),
-  /**
-   * Sign-in: an Amazon Cognito user pool (docs/cognito-setup.md, infra/aws/cognito.yaml). Empty pool
-   * or client id: every sign-in answers "unavailable". The region defaults to the pool id's prefix.
-   */
-  COGNITO_REGION: z.string().optional().default(""),
-  COGNITO_USER_POOL_ID: z.string().optional().default(""),
-  COGNITO_CLIENT_ID: z.string().optional().default(""),
-  /** The confidential app client's secret (a secret). */
-  COGNITO_CLIENT_SECRET: z.string().optional().default(""),
-  /** The user pool's OAuth domain, https://... (managed login). Needed for Google. */
-  COGNITO_DOMAIN: z.string().optional().default(""),
-  /** Which "Continue with ..." buttons work: Cognito provider names, comma separated (Google). */
-  COGNITO_IDENTITY_PROVIDERS: z.string().optional().default(""),
-  /** "1": passwordless sign-in with a code Cognito emails (needs the Essentials plan and SES email). */
-  COGNITO_EMAIL_OTP: z.string().optional().default(""),
+  /** "1": passwordless sign-in with a code the app emails (the sign-in page then offers it). */
+  AUTH_EMAIL_OTP: z.string().optional().default(""),
   /**
    * "1": a password sign-in also asks for a 6-digit code emailed by the app (apps/api/src/emailCode.ts),
    * for accounts without an authenticator app. Anything else: the password alone signs in.
@@ -65,32 +51,18 @@ const schema = z.object({
    */
   AUTH_CODE_LIMIT_HOURLY: z.string().optional().default(""),
   AUTH_CODE_LIMIT_DAILY: z.string().optional().default(""),
-  /** "1" when the app client has refresh-token rotation on. */
-  COGNITO_REFRESH_ROTATION: z.string().optional().default(""),
-  /** Credentials for the user pool's admin calls (on AWS: the function's own role, set at cold start). */
-  COGNITO_ADMIN_ACCESS_KEY_ID: z.string().optional().default(""),
-  COGNITO_ADMIN_SECRET_ACCESS_KEY: z.string().optional().default(""),
-  /** With temporary credentials (an AWS role, e.g. the Lambda function's on AWS hosting). */
-  COGNITO_ADMIN_SESSION_TOKEN: z.string().optional().default(""),
   /**
-   * Local development only: a Cognito emulator (cognito-local) at this address. Its tokens are
-   * signed with a key published on GitHub, so production refuses to start with it set.
-   */
-  COGNITO_ENDPOINT: z.string().optional().default(""),
-  /**
-   * Who checks sign-ins (docs/ikorex-migration: leaving AWS). "cognito": Amazon Cognito, as before.
-   * "migrating": the app's own sign-in (apps/api/src/localAuth.ts), which moves each Cognito user
-   * over at their next sign-in (migratingAuth.ts) while Cognito still runs. "local": the app's own
-   * only, once Cognito is gone; who never moved signs in again through "Forgot password?" or Google.
-   */
-  AUTH_MODE: z.enum(["cognito", "migrating", "local"]).optional().default("cognito"),
-  /**
-   * Google sign-in on the app's own OAuth client (AUTH_MODE "migrating" or "local"; with "cognito"
-   * Cognito holds Google). Its redirect URI is APP_URL + /auth/callback. Empty: no Google there.
+   * Google sign-in on the app's own OAuth client (apps/api/src/localAuth.ts). Its redirect URI is
+   * APP_URL + /auth/callback. Empty: no "Continue with Google".
    */
   GOOGLE_SIGNIN_CLIENT_ID: z.string().optional().default(""),
-  /** That client's secret (a secret: insights/<env>/app on AWS, where Cognito's Google already reads it). */
+  /** That client's secret (a secret: the server's env/app.env). */
   GOOGLE_SIGNIN_CLIENT_SECRET: z.string().optional().default(""),
+  /**
+   * Development and tests only: a stand-in for Google at this address (apps/web/e2e/fake-google.mjs).
+   * Whoever runs it decides who "signed in", so production refuses to start with it set.
+   */
+  GOOGLE_SIGNIN_ENDPOINT: z.string().optional().default(""),
   SHOPIFY_API_KEY: z.string().default(""),
   SHOPIFY_API_SECRET: z.string().default(""),
   SHOPIFY_SCOPES: z.string().default("read_orders,read_products"),
@@ -102,6 +74,8 @@ const schema = z.object({
    * apps/aws/src/settings.ts. Empty: no app declares more than the common list.
    */
   SHOPIFY_APP_OPTIONAL_SCOPES: z.string().optional().default(""),
+  /** Required scopes only some of our apps declare, on top of SHOPIFY_SCOPES: "appKey:scope,scope;appKey:scope" (scopes.ts appRequiredScopes). */
+  SHOPIFY_APP_SCOPES: z.string().optional().default(""),
   SHOPIFY_API_VERSION: z.string().default("2026-10"),
   /** Extra Shopify apps as JSON (see apps.ts); each one's secret is in SHOPIFY_APP_SECRET_<KEY>. */
   SHOPIFY_EXTRA_APPS: z.string().optional().default(""),
@@ -212,47 +186,6 @@ const schema = z.object({
    * the app's test number. Empty: no one.
    */
   WHATSAPP_TOKEN_CONNECT_WORKSPACES: z.string().optional().default(""),
-  /**
-   * Customer Messaging: SMS through AWS End User Messaging (docs/sms.md).
-   *  - off: nothing is sent to AWS. The pages work; rules and campaigns record dry runs.
-   *  - sandbox: test texts only, to numbers a merchant verified with AWS (AWS's own sandbox
-   *    allows no others); rules and campaigns still record dry runs.
-   *  - live: rules and campaigns text customers, after every consent, budget and sender check.
-   */
-  SMS_MODE: z.enum(["off", "sandbox", "live"]).default("off"),
-  /** Marketing texts (campaigns, abandoned checkouts, win-back, VIP): a switch of their own, off until the platform owner turns it on. */
-  SMS_MARKETING_ENABLED: z.string().optional().default(""),
-  /** The AWS region SMS calls go to unless a store's sender names another (Indian local routes: ap-south-1). Empty: AWS_REGION. */
-  SMS_DEFAULT_REGION: z.string().optional().default(""),
-  /** The configuration set whose event destination reports delivery (infra/cdk): one name, or JSON per region. */
-  SMS_CONFIGURATION_SET: z.string().optional().default(""),
-  /** A platform-owned origination identity stores may share (its AWS tags must say bizinsights:shared=true). Empty: none. */
-  SMS_SHARED_SENDER: z.string().optional().default(""),
-  /** Where merchants' sender-name requests go (the platform owner, who sets them up and registers them with AWS). Empty: they are recorded and logged only. */
-  SMS_SENDER_REQUESTS_TO: z.string().optional().default(""),
-  /** bizinsights' own ceiling on what all stores together may spend on texts in a month (US$), below AWS's account spending limit. */
-  SMS_ACCOUNT_MONTHLY_LIMIT_USD: z.coerce.number().min(0).default(20),
-  /** The most AWS may charge for one part of a text (MaxPrice is this times the parts); a dearer route refuses the text. */
-  SMS_MAX_PRICE_PER_PART_USD: z.coerce.number().min(0.001).max(5).default(0.25),
-  /** Price per part by country (US$), copied from AWS's price list, for estimates before AWS has billed any text there: {"AU":0.05}. */
-  SMS_PRICE_TABLE: z.string().optional().default("{}"),
-  /** Parts per second one sender may send (the origination identity's MPS at AWS). */
-  SMS_PARTS_PER_SECOND: z.coerce.number().int().min(1).max(1000).default(1),
-  /** Most recipients one campaign may have. */
-  SMS_CAMPAIGN_MAX_RECIPIENTS: z.coerce.number().int().min(1).max(1_000_000).default(2000),
-  /**
-   * Who sends the texts (docs/sms.md, "Twilio"): "aws" (End User Messaging SMS, with the function's
-   * role) or "twilio" (needs TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN; its webhooks come back to
-   * API_URL).
-   */
-  SMS_PROVIDER: z.enum(["aws", "twilio"]).default("aws"),
-  /** The Twilio account (AC…): not a secret. */
-  TWILIO_ACCOUNT_SID: z.string().optional().default(""),
-  /**
-   * The account's Auth Token: the API calls' password, and the key Twilio signs its webhooks with
-   * (an API key can't do the second, nor read the account's type, so there is none).
-   */
-  TWILIO_AUTH_TOKEN: z.string().optional().default(""),
   EMAIL_FROM: z.string().default("bizinsights <no-reply@localhost>"),
   /**
    * The senders of the codes (OTP_*: sign-up, sign-in, verification and password-reset codes), of
@@ -268,42 +201,14 @@ const schema = z.object({
   STAFF_FROM_NAME: z.string().regex(HEADER_NAME_RE).max(64).default(""),
   /** Where the app's emails send people with questions ("contact support@..."). Empty: no such line. */
   SUPPORT_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
-  /**
-   * Email integrations (docs/email.md). "Connect Gmail / Google Workspace" needs a Google OAuth
-   * client whose consent screen lists gmail.send; "Connect Outlook / Microsoft 365" an Entra app
-   * registration with delegated Mail.Send. Redirect URIs: <APP_URL>/api/email/oauth/google/callback
-   * and <APP_URL>/api/email/oauth/microsoft/callback. Empty: the button says it isn't set up yet.
-   */
-  EMAIL_GOOGLE_CLIENT_ID: z.string().optional().default(""),
-  EMAIL_GOOGLE_CLIENT_SECRET: z.string().optional().default(""),
-  EMAIL_MICROSOFT_CLIENT_ID: z.string().optional().default(""),
-  EMAIL_MICROSOFT_CLIENT_SECRET: z.string().optional().default(""),
-  /** "common" (work, school and personal accounts), "organizations" (work and school only) or one directory's id. */
-  EMAIL_MICROSOFT_AUTHORITY: z
-    .string()
-    .regex(/^(common|organizations|consumers|[0-9a-f-]{36}|[a-z0-9.-]+\.[a-z]{2,})$/i)
-    .default("common"),
-  /**
-   * Key-encryption keys for stored email credentials, in TOKEN_ENCRYPTION_KEYS' format. Empty: the
-   * TOKEN_ENCRYPTION_KEYS keyring is used. Each secret has its own random data key, wrapped by
-   * these keys, so a rotation re-wraps data keys only.
-   */
-  EMAIL_CREDENTIAL_KEYS: z.string().optional().default(""),
-  /** Messages a day per workspace unless the workspace sets a lower one; and the most any workspace may set. */
-  EMAIL_DEFAULT_DAILY_LIMIT: z.coerce.number().int().min(1).default(500),
-  EMAIL_MAX_DAILY_LIMIT: z.coerce.number().int().min(1).default(10_000),
-  /** Messages a minute per workspace, across all its accounts (protects shared sending capacity). */
-  EMAIL_WORKSPACE_PER_MINUTE: z.coerce.number().int().min(1).default(60),
-  /** DNS-over-HTTPS resolver for domain checks and SMTP host checks (JSON API). */
-  EMAIL_DOH_URL: z.string().url().default("https://cloudflare-dns.com/dns-query"),
-  /** Local development only: deliver every email to this Mailpit instead of Amazon SES. */
+  /** Local development only: deliver every email to this Mailpit instead of the mail provider. */
   MAILPIT_URL: z.string().optional().default(""),
   /**
-   * Who sends the app's own email (invitations, alerts): "resend" or "ses". Empty: Resend when its
-   * key is set, else SES where it is configured (core/mail). Changing it needs no code change.
+   * Who sends the app's own email (invitations, alerts): "resend". Empty: Resend when its key is
+   * set, else nothing is sent and each email is a line in the log (core/mail).
    */
-  EMAIL_PROVIDER: z.enum(["", "resend", "ses"]).optional().default(""),
-  /** Resend API key (Secrets Manager, APP_SECRET_ARN). Sending-only access is enough. */
+  EMAIL_PROVIDER: z.enum(["", "resend"]).optional().default(""),
+  /** Resend API key (the server's env/app.env). Sending-only access is enough. */
   RESEND_API_KEY: z.string().optional().default(""),
   /** Signing secret (whsec_...) of the Resend webhook endpoint POST /api/webhooks/email/resend. */
   RESEND_WEBHOOK_SECRET: z.string().optional().default(""),
@@ -348,7 +253,7 @@ const PUBLIC_SECRET_MARKERS = [
 ];
 const SECRET_VARS = ["SESSION_SECRET", "OTP_PEPPER", "TOKEN_ENCRYPTION_KEYS"] as const;
 /** Secrets that may be left empty (then another one is used), but never set to a public value. */
-const OPTIONAL_SECRET_VARS = ["EMAIL_CREDENTIAL_KEYS", "COGNITO_CLIENT_SECRET", "COGNITO_ADMIN_SECRET_ACCESS_KEY", "GOOGLE_SIGNIN_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS", "TWILIO_AUTH_TOKEN"] as const;
+const OPTIONAL_SECRET_VARS = ["GOOGLE_SIGNIN_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET", "ZAPIER_CLIENT_SECRET_PREVIOUS"] as const;
 
 /** Names (never values) of production secrets still set to a publicly known value. */
 export function publicSecrets(e: Pick<Env, (typeof SECRET_VARS)[number]> & Partial<Pick<Env, "CUSTOMER_HASH_KEY" | (typeof OPTIONAL_SECRET_VARS)[number]>>): string[] {
@@ -369,13 +274,13 @@ const isLocalUrl = (url: string) => {
 
 /**
  * Names (and why) of development-only settings present in a production configuration: each one
- * quietly turns a safeguard off. A Cognito emulator signs tokens with a published key; a Mailpit
- * relay reroutes every email, sign-in codes included; a local APP_URL breaks OAuth callbacks and
- * the Origin check, and is what the emulator bypass keys on.
+ * quietly turns a safeguard off. A stand-in for Google signs in whoever its operator says; a
+ * Mailpit relay reroutes every email, sign-in codes included; a local APP_URL breaks OAuth
+ * callbacks and the Origin check.
  */
-export function developmentSettings(e: Pick<Env, "APP_URL" | "API_URL" | "COGNITO_ENDPOINT" | "MAILPIT_URL">): string[] {
+export function developmentSettings(e: Pick<Env, "APP_URL" | "API_URL" | "GOOGLE_SIGNIN_ENDPOINT" | "MAILPIT_URL">): string[] {
   const found: string[] = [];
-  if (e.COGNITO_ENDPOINT) found.push("COGNITO_ENDPOINT (a local Cognito emulator)");
+  if (e.GOOGLE_SIGNIN_ENDPOINT) found.push("GOOGLE_SIGNIN_ENDPOINT (a stand-in for Google)");
   if (e.MAILPIT_URL) found.push("MAILPIT_URL (a local mail relay)");
   if (isLocalUrl(e.APP_URL)) found.push("APP_URL (a local address)");
   if (isLocalUrl(e.API_URL)) found.push("API_URL (a local address)");
@@ -395,7 +300,7 @@ export function env(): Env {
       // Fail closed: a deployment must not run on secrets published in this repository...
       const exposed = publicSecrets(parsed);
       if (exposed.length) {
-        throw new Error(`${exposed.join(", ")} still set to a placeholder or test value. Generate new ones (infra/cdk/scripts/put-secrets.mjs) before running in production.`);
+        throw new Error(`${exposed.join(", ")} still set to a placeholder or test value. Generate new ones (the server's env/app.env, docs/ikorex-migration) before running in production.`);
       }
       // ...nor with a development setting that turns a safeguard off.
       const dev = developmentSettings(parsed);

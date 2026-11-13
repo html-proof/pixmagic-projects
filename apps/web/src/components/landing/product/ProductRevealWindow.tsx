@@ -308,7 +308,7 @@ const CHART_W = 600;
 const CHART_H = 200;
 const CHART_POINTS = 22;
 
-/** Abstract rising line (and a lower previous-period line), as fractions of the chart height. */
+/** Abstract rising line, as fractions of the chart height. */
 const CURRENT_Y: number[] = (() => {
   const rnd = seeded(41);
   return Array.from({ length: CHART_POINTS }, (_, i) => {
@@ -316,15 +316,6 @@ const CURRENT_Y: number[] = (() => {
     const trend = 0.74 - t * 0.44;
     const wave = Math.sin(t * Math.PI * 5.2) * 0.06;
     return Math.min(0.9, Math.max(0.1, trend + wave + (rnd() - 0.5) * 0.08));
-  });
-})();
-const PREVIOUS_Y: number[] = (() => {
-  const rnd = seeded(77);
-  return Array.from({ length: CHART_POINTS }, (_, i) => {
-    const t = i / (CHART_POINTS - 1);
-    const trend = 0.8 - t * 0.22;
-    const wave = Math.sin(t * Math.PI * 4.4 + 1.2) * 0.05;
-    return Math.min(0.92, Math.max(0.2, trend + wave + (rnd() - 0.5) * 0.06));
   });
 })();
 
@@ -360,7 +351,6 @@ function currentYAt(t: number) {
 }
 
 const CURRENT_PATH = smoothPath(CURRENT_Y);
-const PREVIOUS_PATH = smoothPath(PREVIOUS_Y);
 const AREA_PATH = `${CURRENT_PATH} L ${CHART_W} ${CHART_H} L 0 ${CHART_H} Z`;
 
 function SalesChart({ p }: { p: MotionValue<number> }) {
@@ -381,10 +371,6 @@ function SalesChart({ p }: { p: MotionValue<number> }) {
           <span className="flex items-center gap-1.5">
             <span aria-hidden className="h-[2px] w-3 rounded-full" style={{ background: "var(--lp-gradient)" }} />
             This period
-          </span>
-          <span className="hidden items-center gap-1.5 sm:flex">
-            <span aria-hidden className="h-0 w-3 border-t border-dashed border-lp-muted" />
-            Previous
           </span>
         </span>
       }
@@ -409,7 +395,6 @@ function SalesChart({ p }: { p: MotionValue<number> }) {
             </linearGradient>
           </defs>
           <path d={AREA_PATH} fill={`url(#pr-area-${uid})`} />
-          <path d={PREVIOUS_PATH} fill="none" stroke="#7D8693" strokeOpacity="0.55" strokeWidth="1.25" strokeDasharray="4 5" vectorEffect="non-scaling-stroke" />
           <path d={CURRENT_PATH} fill="none" stroke={`url(#pr-line-${uid})`} strokeWidth="2" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
         </svg>
       </motion.div>

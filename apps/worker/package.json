@@ -12,8 +12,7 @@
     "ops:reencrypt": "vitest run --config ops/vitest.config.ts reencrypt",
     "ops:ad-persons": "vitest run --config ops/vitest.config.ts adPersons",
     "ops:ad-health": "vitest run --config ops/vitest.config.ts adHealth",
-    "ops:delete-workspace": "vitest run --config ops/vitest.config.ts deleteWorkspace",
-    "load:automations": "vitest run --config load/vitest.config.ts"
+    "ops:delete-workspace": "vitest run --config ops/vitest.config.ts deleteWorkspace"
   },
   "dependencies": {
     "@app/core": "workspace:*",

@@ -6,7 +6,6 @@ import type { MarketingFigures, MarketingGroup, MarketingSpendFigure, MarketingS
 import { ShopifyIcon } from "@/components/ShopifyIcon";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { fmtDateTime, fmtDay, fmtMoneyCompact, fmtPeriod, fmtRelative, fmtSpan, fmtTimes, periodChoices } from "@/components/dashboard/format";
-import { ChangeText } from "@/components/dashboard/HomeCards";
 import { LineChart, type LineSeries } from "@/components/dashboard/LineChart";
 import { ChartChoice } from "@/components/dashboard/Primitives";
 import type { Overview } from "@/components/dashboard/types";
@@ -94,19 +93,6 @@ export function MarketingPlatformFigures({ ov, provider }: { ov: Overview; provi
         Source <SourceBadge provider={provider} source="marketing" />
       </p>
       <MarketingFiguresGrid t={g.totals} currency={m.currency} testid={`ads-card-${provider}-marketing`} />
-      {g.previous && (
-        <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
-          <span className="inline-flex items-center gap-1">
-            Spend <ChangeText value={g.deltas.spend} neutral />
-          </span>
-          <span className="inline-flex items-center gap-1">
-            Clicks <ChangeText value={g.deltas.clicks} />
-          </span>
-          <span className="inline-flex items-center gap-1">
-            ROAS <ChangeText value={g.deltas.roas} />
-          </span>
-        </p>
-      )}
       {orders && (orders.orders !== 0 || orders.sales !== 0) && (
         <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted" data-testid={`ads-card-${provider}-sourced`}>
           <SourceBadge provider={provider} source="shopify" />

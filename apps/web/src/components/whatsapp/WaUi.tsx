@@ -5,12 +5,12 @@ import { useToast } from "@/components/AppUi";
 import { Badge, type Tone } from "@/components/dashboard/Primitives";
 import { actionError, ApiError, isTransient } from "@/lib/api";
 import type { WaMessage } from "./types";
+import { waServiceError } from "./waErrors";
 
 // ---------------------------------------------------------------------------
 // Shared pieces of WhatsApp Automation (/dashboard/whatsapp-automation): where we are, the API's own
 // words when it refuses, status pills, the WhatsApp mark and a phone-style bubble. The rules are in
-// @app/shared/whatsapp; paged lists, the drawer and the country picker come from the SMS area's
-// MessagingUi, which does the same jobs.
+// @app/shared/whatsapp; paged lists, the drawer and the country picker are in ./ListUi.
 // ---------------------------------------------------------------------------
 
 export const WA_PAGE = "/dashboard/whatsapp-automation";
@@ -28,11 +28,19 @@ export const waHref = (tab: string, extra: Record<string, string> = {}) => {
 };
 
 /** Refusals whose message the API wrote for the merchant (WhatsappError: a rule broken, a step to take first). */
-const SAID_BY_API = new Set([400, 403, 404, 409, 422, 429, 502, 503]);
+const SAID_BY_API = new Set([400, 403, 404, 409, 422]);
 
-/** A failed WhatsApp action in words: the API's own sentence when it wrote one, else the app's usual wording. */
+/**
+ * A failed WhatsApp action in words: the API's own sentence when it wrote one, the page's sentence
+ * for a refusal by the WhatsApp service (waErrors.ts: a 5xx's text never reaches here), else the
+ * app's usual wording.
+ */
 export function waError(e: unknown, what: string): string {
-  if (e instanceof ApiError && SAID_BY_API.has(e.status) && e.code !== "validation" && e.code !== "csrf" && e.message.trim() && !(isTransient(e) && e.status !== 503)) return e.message;
+  if (e instanceof ApiError) {
+    const service = waServiceError(e.status, e.code);
+    if (service) return service;
+    if (SAID_BY_API.has(e.status) && !isTransient(e) && e.code !== "validation" && e.code !== "csrf" && e.message.trim()) return e.message;
+  }
   return actionError(e, what);
 }
 

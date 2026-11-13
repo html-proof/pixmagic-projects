@@ -310,7 +310,7 @@ describe("installing from Shopify", () => {
     const store = await systemDb.store.findUniqueOrThrow({ where: { shopDomain: SHOP } });
     expect(store.workspaceId).toBe(ws);
     expect(await systemDb.workspace.findUnique({ where: { id: unclaimedWs } })).toBeNull();
-    expect(await systemDb.dataRequest.findUniqueOrThrow({ where: { id: pending.request.id } })).toMatchObject({ workspaceId: ws, emailHash: null, customerId: "7" });
+    expect(await systemDb.dataRequest.findUniqueOrThrow({ where: { id: pending.request.id } })).toMatchObject({ workspaceId: ws, customerId: "7" });
   });
 
   it("keeps a claimed store out of reach of anyone else's connect", async () => {

@@ -24,7 +24,6 @@ export default function ShopifyAttributionPage() {
         sub="What your store recorded of Meta and Google: visits from their sites, carts, checkouts, orders and sales, by site and by campaign. It works without an ad account connected, and sits beside what each platform credits to its own ads."
         r={s.dates}
         shown={s.shown}
-        current={!s.older}
       />
       <AdvertisingBody s={s} what="your Shopify attribution">
         {(ov) => (

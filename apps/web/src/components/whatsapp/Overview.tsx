@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { Check } from "lucide-react";
 import { PROVIDER_INFO, WA_AUTOMATION_STATE_LABEL, WA_SETUP_STEPS, WA_SETUP_STEP_INFO } from "@app/shared/whatsapp";
-import { StepNumber, TableCard } from "@/components/automations/MarketingKit";
+import { StepNumber, TableCard } from "./MarketingKit";
 import { Badge, Dot, Empty, type Tone } from "@/components/dashboard/Primitives";
 import { Card, FigureTile } from "@/components/PageKit";
 import { Alert } from "@/components/ui";
@@ -39,12 +39,6 @@ export function Overview({ base, overview: o, reload }: { base: string; overview
             Link the phone again
           </Link>
         </div>
-      )}
-
-      {o.retired && (
-        <Alert kind="info">
-          This store&apos;s earlier WhatsApp Business connection{o.retired.displayPhoneNumber ? ` (${o.retired.displayPhoneNumber})` : ""} was retired when WhatsApp Automation moved to its new service. Connect again below; nothing from the earlier one sends.
-        </Alert>
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

@@ -41,8 +41,8 @@ export function profitRoutes(app: App, deps: Deps) {
   });
 
   /**
-   * The Profit & Loss page's statement: the dashboard's dates (`preset`, `from`, `to`, `compare`...)
-   * and the dates they're compared with, a column per day, week, month or year (`grain`), each day for
+   * The Profit & Loss page's statement: the dashboard's dates (`preset`, `from`, `to`)
+   * and the period before them they're compared with, a column per day, week, month or year (`grain`), each day for
    * the trend, and the owner's costs in the dates a line each.
    */
   app.get("/workspaces/:ws/stores/:storeId/profit/statement", async (c) => {
@@ -55,9 +55,7 @@ export function profitRoutes(app: App, deps: Deps) {
         const q = z.object({ ...datesQuery, grain: z.enum(STATEMENT_GRAINS).optional() }).parse(c.req.query());
         const now = new Date();
         const dates = resolveQueryDates(q, now, store.timezone, await storeLimits(tx, { ws, storeId }, store));
-        const statement = await profitStatement(tx, store, dates, now, sees(access), q.grain);
-        // How the comparison was chosen, as the dashboard's answer says it, for the page's comparison menu.
-        return { ...statement, previous: { ...statement.previous, compare: q.compare } };
+        return profitStatement(tx, store, dates, now, sees(access), q.grain);
       }),
     );
   });

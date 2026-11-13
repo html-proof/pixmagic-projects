@@ -2,7 +2,7 @@
 import type { AccessKey } from "@app/shared/access";
 import { AD_PROVIDERS, type AdProvider, type AdSpendProvider } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
-import { comparisonHelp, CompareDates, CompareSelect, CustomDates, DateRangeSelect, type ShownComparison } from "@/components/dashboard/DateRange";
+import { CustomDates, DateRangeSelect } from "@/components/dashboard/DateRange";
 import { fmtRange } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { useApi } from "@/lib/api";
@@ -17,10 +17,10 @@ import { useAccountChoices, useAdvertisingQuestion, useQueryParam } from "./useA
 // ---------------------------------------------------------------------------
 
 const REPORTS = [
-  { id: "ads_summary", label: "Summary", need: "marketing.ads", about: "The overview's figures: ad spend, the platforms' own purchases and ROAS, your Shopify sales per unit of spend (MER) and AdSense's earnings, each with the figure compared with and the change." },
+  { id: "ads_summary", label: "Summary", need: "marketing.ads", about: "The overview's figures: ad spend, the platforms' own purchases and ROAS, your Shopify sales per unit of spend (MER) and AdSense's earnings." },
   { id: "ads_platforms", label: "By platform", need: "marketing.ads", about: "Each platform's totals for the dates; one without every day stored says Unavailable and why." },
   { id: "ads_daily", label: "By day", need: "marketing.ads", about: "Each platform's spend, impressions, clicks and own purchases day by day; a day without figures says so, never 0." },
-  { id: "ads_campaigns", label: "Campaigns", need: "marketing.campaigns", about: "Every campaign with its account, its figures and its change in spend and ROAS on the same whole days as the totals." },
+  { id: "ads_campaigns", label: "Campaigns", need: "marketing.campaigns", about: "Every campaign with its account and its figures." },
   { id: "adsense_daily", label: "AdSense by day", need: "marketing.ads", about: "AdSense's estimated earnings, page views, impressions and clicks day by day: money in, kept apart from ad spend." },
 ] as const satisfies ReadonlyArray<{ id: string; label: string; need: AccessKey; about: string }>;
 type ReportId = (typeof REPORTS)[number]["id"];
@@ -32,7 +32,6 @@ interface Table {
   section: string;
   label: string;
   range: { from: string; to: string };
-  previous: ShownComparison;
   header: string[];
   rows: Array<Array<string | number | null>>;
 }
@@ -66,13 +65,11 @@ export function AdvertisingReports() {
             <p className="mt-1 text-sm text-muted">Each report as it downloads, for the dates picked. The CSV holds exactly these rows.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <DateRangeSelect r={q.dates} shown={t ? { range: t.range, previous: t.previous, timezone: store?.timezone ?? "UTC" } : null} id="report-dates" label="Dates" size="sm" />
-            <CompareSelect r={q.dates} shown={t ? { range: t.range, previous: t.previous, timezone: store?.timezone ?? "UTC" } : null} current={!!t} id="report-compare" label="Compare with" size="sm" />
+            <DateRangeSelect r={q.dates} shown={t ? { range: t.range, timezone: store?.timezone ?? "UTC" } : null} id="report-dates" label="Dates" size="sm" />
           </div>
         </div>
         <div className="mt-2 flex flex-wrap justify-end gap-2">
           <CustomDates r={q.dates} />
-          <CompareDates r={q.dates} />
         </div>
         <div className="mt-3 flex flex-wrap gap-2" role="radiogroup" aria-label="Report">
           {reports.map((r) => (
@@ -130,7 +127,7 @@ export function AdvertisingReports() {
             {t.label}
           </h2>
           <p className="mt-0.5 text-xs text-muted">
-            {fmtRange(t.range.from, t.range.to)}, compared with {comparisonHelp(t.previous, t.range)}. {t.rows.length === 1 ? "1 row" : `${number.format(t.rows.length)} rows`}.
+            {fmtRange(t.range.from, t.range.to)}. {t.rows.length === 1 ? "1 row" : `${number.format(t.rows.length)} rows`}.
           </p>
           {t.rows.length === 0 ? (
             <p className="mt-3 text-sm text-muted">Nothing to report for these dates.</p>

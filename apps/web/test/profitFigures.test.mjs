@@ -222,7 +222,7 @@ test("the Profit sheet's profit and loss names the account left out of a spend i
   assert.equal(adsNotUsableWords({ demo: true, currency: null, leftOut: [] }, "AUD"), "The Google Ads demo's spend is simulated.");
 });
 
-test("Left over (the simple Home) is Business profit overview's figure: net profit once complete, else net sales less the costs known", () => {
+test("Left over is Business profit overview's figure: net profit once complete, else net sales less the costs known", () => {
   const profit = { grossProfit: 1350, costOfGoodsSold: 650, netSalesWithCost: 2000, netSalesWithoutCost: 0, profitOnCosted: 1350, marginOnCosted: 0.675 };
   // Costs list complete: net profit out of revenue (2,050 − 650 − 300).
   const done = overview(profit);

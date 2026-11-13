@@ -11,18 +11,13 @@ import {
   accountGroups,
   AdStatusNotes,
   BEING_READ,
-  ChangeNote,
-  ComparedLine,
   dailyMoneyColumns,
   missingReason,
   missingReasons,
-  runningWords,
-  throughLabel,
   timeZoneNote,
   UNAVAILABLE,
 } from "./AdsCommon";
 import { shownFigures, upToWords } from "./adFigures";
-import { noEarlierData } from "./DateRange";
 import { DemoChip } from "./Advertising";
 import { Alert } from "@/components/ui";
 import { fmtDay, fmtLongDay, fmtMoneyCompact, fmtMoneyWhole, fmtPeriod, fmtRange, fmtSpan, fmtTimes, periodChoices, plural } from "./format";
@@ -30,8 +25,8 @@ import { Icon } from "./Icons";
 import { GoogleReportPanel } from "./GoogleReport";
 import { LineChart, type LineSeries } from "./LineChart";
 import { MetaReportPanel } from "./MetaReport";
-import { B, comparedOnWholeDays } from "./Narrative";
-import { ChartChoice, Delta, NeutralDelta, Panel, Stat } from "./Primitives";
+import { B } from "./Narrative";
+import { ChartChoice, Panel, Stat } from "./Primitives";
 import { ColumnsWithTotal } from "./ColumnsWithTotal";
 import type { AdsModule, AdsProviderFigures, Overview } from "./types";
 
@@ -110,23 +105,21 @@ function SpendChart({ a, ov }: { a: AdsModule; ov: Overview }) {
 
 /**
  * The figures at a glance: for the whole range (or the days so far), or, when that's unavailable,
- * for the days every account has (`partial`: no changes then). With more than one platform counted,
+ * for the days every account has. With more than one platform counted,
  * each platform's own purchases (`PlatformClaim`) in place of the four figures added up.
  */
-function Glance({ a, t, ov, partial }: { a: AdsModule; t: AdTotals; ov: Overview; partial: boolean }) {
+function Glance({ a, t }: { a: AdsModule; t: AdTotals }) {
   const money = (n: number) => fmtMoney(n, a.currency);
-  // Changes belong to the whole range only.
-  const change = (value: number | null, neutral = false) => (partial ? undefined : <ChangeNote fig={a} value={value} ov={ov} neutral={neutral} />);
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <Stat label="Ad spend" value={money(t.spend)} note={change(a.deltas.spend, true)} />
-      <Stat label="Link clicks" value={known(t.linkClicks, fmtNum)} note={change(a.deltas.linkClicks)} />
+      <Stat label="Ad spend" value={money(t.spend)} />
+      <Stat label="Link clicks" value={known(t.linkClicks, fmtNum)} />
       {claimsApart(a) ? (
-        a.byProvider.map((p) => <PlatformClaim key={p.provider} a={a} p={p} ov={ov} />)
+        a.byProvider.map((p) => <PlatformClaim key={p.provider} a={a} p={p} />)
       ) : (
         <>
-          <Stat label="Purchases (platforms' count)" value={known(t.purchases, fmtNum)} note={change(a.deltas.purchases)} />
-          <Stat label="Return on ad spend (platforms' own)" value={t.purchases === null ? BEING_READ : fmtTimes(t.roas)} note={change(a.deltas.roas)} />
+          <Stat label="Purchases (platforms' count)" value={known(t.purchases, fmtNum)} />
+          <Stat label="Return on ad spend (platforms' own)" value={t.purchases === null ? BEING_READ : fmtTimes(t.roas)} />
           <Stat label="Purchase value (platforms' count)" value={known(t.purchaseValue, money)} />
           <Stat label="Cost per purchase" value={t.purchases === null ? BEING_READ : t.costPerPurchase !== null ? money(t.costPerPurchase) : "—"} />
         </>
@@ -145,7 +138,7 @@ function Glance({ a, t, ov, partial }: { a: AdsModule; t: AdTotals; ov: Overview
  * One platform's own purchases, with their value, its ROAS and its cost per purchase: its claim, named
  * as its own, from its own figures (the whole range or its days so far), never added to another's.
  */
-function PlatformClaim({ a, p, ov }: { a: AdsModule; p: AdsProviderFigures; ov: Overview }) {
+function PlatformClaim({ a, p }: { a: AdsModule; p: AdsProviderFigures }) {
   const money = (n: number) => fmtMoney(n, a.currency);
   const { totals: t, through } = shownFigures(p);
   return (
@@ -158,7 +151,7 @@ function PlatformClaim({ a, p, ov }: { a: AdsModule; p: AdsProviderFigures; ov: 
           <span data-testid={`ads-glance-claim-${p.provider}`}>
             {known(t.purchaseValue, money)} worth · ROAS {fmtTimes(t.roas)}
             {t.costPerPurchase !== null ? ` · ${money(t.costPerPurchase)} a purchase` : ""}
-            {through ? ` · ${upToWords(through)}` : ""} · <ChangeNote fig={p} value={p.deltas.purchases} ov={ov} />
+            {through ? ` · ${upToWords(through)}` : ""}
           </span>
         ) : undefined
       }
@@ -180,35 +173,19 @@ export function SalesVsSpend({ a, ov }: { a: AdsModule; ov: Overview }) {
   if (!s) return null;
   const money = (n: number) => fmtMoney(n, a.currency);
   const one = fmtMoneyWhole(1, a.currency);
-  const label = s.previous && a.compared ? `vs ${fmtSpan(a.compared.previous.from, a.compared.previous.to)}` : null;
-  /** The change against the dates compared with, and the figure before; without a comparison, what the figure is. */
-  const change = (d: number | null, kind: "neutral" | "good" | "cost", fallback: string, before: string | null) =>
-    label ? (
-      <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-        {kind === "neutral" ? <NeutralDelta value={d} label={label} /> : <Delta value={d} invert={kind === "cost"} label={label} />}
-        {before !== null && <span>before: {before}</span>}
-      </span>
-    ) : (
-      fallback
-    );
-  const p = s.previous;
   const sourced = a.sourced ?? null;
   return (
     <Panel
       id="d-ads-vs-sales"
       title="Next to your Shopify sales"
-      help={`Your store's own figures for ${fmtRange(ov.range.from, ov.range.to)}, set against everything spent on ads, in ${a.currency}. ${label ? "Changes compare whole dates with whole dates." : "Changes show once the dates picked are over."}`}
+      help={`Your store's own figures for ${fmtRange(ov.range.from, ov.range.to)}, set against everything spent on ads, in ${a.currency}.`}
     >
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-testid="ads-vs-sales">
-        <Stat label="Net sales (Shopify)" value={money(s.netSales)} note={change(s.deltas.netSales, "good", "Every sale, whatever brought it", p ? money(p.netSales) : null)} />
-        <Stat label="Orders (Shopify)" value={fmtNum(s.orders)} note={change(s.deltas.orders, "good", "Every order, whatever brought it", p ? fmtNum(p.orders) : null)} />
-        <Stat label={`Sales per ${one} of ads (MER)`} value={fmtTimes(s.salesPerSpend)} note={change(s.deltas.salesPerSpend, "good", "Net sales ÷ ad spend", p ? fmtTimes(p.salesPerSpend) : null)} />
+        <Stat label="Net sales (Shopify)" value={money(s.netSales)} note="Every sale, whatever brought it" />
+        <Stat label="Orders (Shopify)" value={fmtNum(s.orders)} note="Every order, whatever brought it" />
+        <Stat label={`Sales per ${one} of ads (MER)`} value={fmtTimes(s.salesPerSpend)} note="Net sales ÷ ad spend" />
         <Stat label="Ads as share of sales" value={fmtPct(s.shareOfSales)} note="Ad spend ÷ net sales" />
-        <Stat
-          label="Cost per Shopify order"
-          value={s.costPerOrder === null ? "—" : money(s.costPerOrder)}
-          note={change(s.deltas.costPerOrder, "cost", "Ad spend ÷ every order, whatever brought it", p ? (p.costPerOrder === null ? "—" : money(p.costPerOrder)) : null)}
-        />
+        <Stat label="Cost per Shopify order" value={s.costPerOrder === null ? "—" : money(s.costPerOrder)} note="Ad spend ÷ every order, whatever brought it" />
       </div>
       <p className="mt-3 text-xs text-muted">
         Sales per {one} of ads (the marketing efficiency ratio) counts every sale your store made, not only the ones the platforms credit to their ads: it is your store&apos;s own measure, and
@@ -380,19 +357,6 @@ export function AdsDetail({ ov }: { ov: Overview }) {
   const split = c && sameDays && a.byProvider.length > 1 ? a.byProvider.map((p) => `${PLATFORM[p.provider].name} ${spendOf(p) === null ? UNAVAILABLE.toLowerCase() : money(spendOf(p)!)}`).join(", ") : null;
   const googleP = a.byProvider.find((p) => p.provider === "google");
   const google = googleP ? shownFigures(googleP).totals : null;
-  const missing = a.notCompared === "no_history" ? noEarlierData(a.historyFrom, "ads") : null;
-  const on = comparedOnWholeDays(ov);
-  const through = throughLabel(a, ov);
-  const change = (d: number | null) =>
-    a.notCompared === "running"
-      ? `, ${runningWords(ov)}: nothing to compare yet`
-      : a.notCompared === "no_history"
-        ? ", with no earlier data to compare"
-        : a.notCompared === "incomplete" || d === null
-          ? ""
-          : d === 0
-            ? `, the same as ${on}${through === "vs before" ? "" : ` (${through})`}`
-            : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on ${on}${through === "vs before" ? "" : ` (${through}: whole days only)`}`;
   const shown = c ?? a.partial?.totals ?? null;
   const apart = claimsApart(a);
   const reports = a.campaigns !== undefined;
@@ -440,8 +404,7 @@ export function AdsDetail({ ov }: { ov: Overview }) {
           {c && (
             <>
               <p>
-                {upTo ? <>Up to {fmtDay(upTo, { year: false })}, you</> : "You"} spent <B>{money(c.spend)}</B> on ads{split ? <> ({split})</> : null}
-                {change(a.deltas.spend)}.
+                {upTo ? <>Up to {fmtDay(upTo, { year: false })}, you</> : "You"} spent <B>{money(c.spend)}</B> on ads{split ? <> ({split})</> : null}.
               </p>
               {upTo && reasons.length > 0 && <p className="text-muted">{reasons.join(" ")}</p>}
               <p>
@@ -520,18 +483,12 @@ export function AdsDetail({ ov }: { ov: Overview }) {
               : c || !a.partial
                 ? fmtRange(ov.range.from, ov.range.to)
                 : `${fmtRange(a.partial.from, a.partial.to)} only, the days every account has`}
-            .{" "}
-            {a.compared && !(!c && a.partial) ? (
-              <>
-                <ComparedLine fig={a} show={(t) => money(t.spend)} what="spend" />.{" "}
-              </>
-            ) : null}
-            {missing ? `${missing} ` : ""}In {a.currency}.
+            . In {a.currency}.
           </>
         }
       >
         {shown ? (
-          <Glance a={a} t={shown} ov={ov} partial={!c} />
+          <Glance a={a} t={shown} />
         ) : (
           <div className="space-y-1 text-sm text-muted">
             <p className="text-xl font-semibold text-text">{UNAVAILABLE}</p>

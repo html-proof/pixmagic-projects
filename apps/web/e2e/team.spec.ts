@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV, E2E_MAILPIT_URL } from "../playwright.config";
-import { asNewVisitor, signUp, uniqueEmail } from "./helpers";
+import { asNewVisitor, openMenuGroup, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Team & Access through the real app: an owner shares part of the dashboard with someone outside
@@ -55,6 +55,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   const ws = await createWorkspace(page, "Acme Goods");
   await insertStore(ws, `team-${Date.now()}.myshopify.com`, ["read_orders", "read_products", "read_customers"]);
   await page.goto("/dashboard");
+  await openMenuGroup(page, "settings");
   await sidebar(page).getByRole("link", { name: "Team & Access" }).click();
   await expect(page).toHaveURL(/\/team/);
   await expect(page.getByRole("heading", { name: "Team & Access" })).toBeVisible();
@@ -153,7 +154,7 @@ test("an owner shares Customers and Products with a client, changes it while the
   await expect(sidebar(guest).getByRole("link", { name: "Products" })).toHaveCount(0);
   // And their APIs refuse the shared session outright, whatever the page would have done.
   const adminApis = await guest.evaluate(
-    async (w) => Promise.all(["team", "members", "api-keys", "audit-logs", "billing", "privacy-requests", "staff/employees", "email/accounts"].map(async (p) => [p, (await fetch(`/api/workspaces/${w}/${p}`)).status] as const)),
+    async (w) => Promise.all(["team", "members", "api-keys", "audit-logs", "billing", "privacy-requests", "staff/employees"].map(async (p) => [p, (await fetch(`/api/workspaces/${w}/${p}`)).status] as const)),
     ws,
   );
   expect(adminApis.filter(([, status]) => status !== 403)).toEqual([]);

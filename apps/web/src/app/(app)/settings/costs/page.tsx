@@ -117,7 +117,7 @@ export default function CostsPage() {
               The costs bizinsights can&apos;t read from Shopify or your ad accounts: rent, salaries, software, your Shopify plan and apps,
               shipping labels, packaging, payment fees, ads on platforms you haven&apos;t connected, and loan interest or income tax. Each is
               spread over the days it covers (a monthly cost counts in full for a whole month), in {data.currency}, and shown on the dashboard
-              and in the Profit sheet&apos;s profit and loss as fixed, variable or below operating profit. They are your own figures: bizinsights
+              and in Profit &amp; Loss as fixed, variable or below operating profit. They are your own figures: bizinsights
             doesn&apos;t check them.
           </p>
         </div>

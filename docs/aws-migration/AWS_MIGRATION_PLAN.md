@@ -21,7 +21,9 @@ How changes reach production: [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.m
   rolls itself back if its checks fail (CLAUDE.md). Nobody deploys by hand.
 - Each change is its own pull request or console action, so each can be undone on its own.
 - Changes that trade away a function or high availability are the owner's call, not this plan's.
-- No production data is deleted. The three manual database snapshots stay (owner, 2026-10-29).
+- No production data is deleted. The three manual database snapshots stayed (owner, 2026-10-29)
+  until the owner had them deleted on 2026-11-12 for the US$50 ceiling
+  ([MIGRATION_STATUS.md](MIGRATION_STATUS.md), change 18).
 
 ## The brief's stages, applied
 
@@ -71,28 +73,39 @@ place, but only with a forced new deployment, and the way back must be the `FARG
 provider, because returning to the launch type makes CloudFormation replace the service, which its
 fixed name refuses. The stack is built that way (docs/whatsapp.md, "Cost").
 
-**6. AWS WAF → Cloudflare's rules** (10.08). Cloudflare already proxies `bizinsights.io`, so its
-free-plan security can stand in for the WAF. In three pull requests, each checked before the next:
+**6. AWS WAF → Cloudflare's rules** (10.08, less 0.40 for one new secret). Cloudflare already
+proxies `bizinsights.io`, so its free-plan security can stand in for the WAF. The owner's "just do
+it" of 2026-11-12 set the order below (the side door first, so the origin is never without both);
+each step is its own pull request, checked live before the next.
 
-1. *Cloudflare first, both running.* In the Cloudflare dashboard (owner), turn on the Free managed
-   ruleset and add the one rate-limiting rule the Free plan allows on `/api/` (the per-webhook and
-   pixel exemptions as today). Watch both for a week: Cloudflare's Security Events against the WAF's
-   sampled requests.
-2. *Close the side door.* Without the WAF, `d2mr8m2p1qkh58.cloudfront.net` would let anyone skip
-   Cloudflare. The viewer-request function already knows Cloudflare's ranges
-   (`infra/cdk/lib/cloudflare.ts`); it starts answering 403 to requests on the API paths that don't
-   come from them. First check what calls the CloudFront name directly (webhook registrations,
-   smoke tests, Cognito, the fallback distribution) and move it to `bizinsights.io`.
-3. *Remove the WAF.* Drop `webAclId` from the distribution and the Edge stack's web ACL.
+1. *Close the side door.* `d2mr8m2p1qkh58.cloudfront.net` lets anyone skip Cloudflare; with the
+   WAF gone nothing would stand there. Cloudflare adds a secret header to every request and
+   CloudFront's viewer-request function answers 403 without it
+   ([aws-deployment.md](../aws-deployment.md#origin-lock-only-cloudflare-reaches-cloudfront)). Two
+   deploys: `originLock: "report"` (the function knows the secret, refuses nothing), the owner
+   adds the header in Cloudflare, `/edge-lock` answers 204, then `"enforce"`. Checked first: what
+   calls the CloudFront name directly. The WAF's sampled requests of 2026-11-12 (three hours, all
+   258 requests): nothing but the smoke tests; every webhook arrives on `bizinsights.io`.
+2. *Cloudflare's rules* (the owner's dashboard). The Free managed ruleset stays on; one
+   rate-limiting rule, all the Free plan allows, on `/api/` except `/api/webhooks/` and
+   `/api/pixel/`: **250 requests per 10 seconds per address**, blocked for 10 seconds. That is the
+   WAF's 1,500 a minute as a steady rate; a burst is cut sooner (the WAF counted a whole minute).
+   Bot Fight Mode stays off.
+3. *Remove the WAF*, in two pull requests: the distribution drops `webAclId` (and the Edge stack
+   stops exporting the ACL's ARN, after the App stack stopped reading it), then the Edge stack
+   drops the web ACL and its two IP sets. The Edge stack itself stays: the us-east-1 log bucket and
+   the two rules that pass IAM and root sign-in events on.
 
 What is lost: AWS's IP-reputation and known-bad-input rule groups, and the per-IP limit at the edge
 counted over 60 seconds (Cloudflare Free counts over 10). What stays: the app's own per-IP limits
-(1,500 a minute, `apps/aws/src/app.ts`, counted in DynamoDB) and every per-route limit.
+(1,500 a minute, `apps/aws/src/app.ts`, counted in DynamoDB) and every per-route limit. Back:
+re-add the web ACL ([aws-deployment.md](../aws-deployment.md), "Domain").
 
-**7. Secrets Manager → SSM Parameter Store SecureString** (up to 2.43, optional). Six secrets at
-0.40 each; SecureString parameters in the standard tier are free. `loadSecrets`
-(`apps/aws/src/secrets.ts`) reads both kinds already. Careful work for the two database logins that
-CloudFormation generated and the ECS task reads, and the smallest saving here, so last.
+**7. Secrets Manager → SSM Parameter Store SecureString** (2.97 since the origin lock's secret made
+seven; 2.43 when this was written, with six). 0.40 a secret; SecureString parameters in the
+standard tier are free. `loadSecrets` (`apps/aws/src/secrets.ts`) reads both kinds. Careful work for
+the database logins that CloudFormation generated and the ECS task reads, so it goes in three
+releases, the first shipped 2026-11-12: [SECRETS_TO_PARAMETER_STORE.md](SECRETS_TO_PARAMETER_STORE.md).
 
 ## Step 3: give up high availability (saves ~29.98)
 

@@ -6,7 +6,7 @@ import { hasFullAccess } from "@app/shared/access";
 import type { AdProvider } from "@app/shared/ads";
 import { useApp } from "@/components/AppContext";
 import { GoogleIcon, MetaIcon } from "@/components/BrandIcons";
-import { comparedWith, CompareDates, CompareSelect, CustomDates, DateRangeSelect, type DateRangeState, type Shown } from "@/components/dashboard/DateRange";
+import { CustomDates, DateRangeSelect, type DateRangeState, type Shown } from "@/components/dashboard/DateRange";
 import { fmtDateTime, fmtRange } from "@/components/dashboard/format";
 import type { Overview } from "@/components/dashboard/types";
 import { StoreMetaDiscovery } from "@/components/integrations/MetaDiscovery";
@@ -16,8 +16,8 @@ import { apiHref, friendlyError, isTransient, liveDataChanged } from "@/lib/api"
 import type { AccountChoice, AdvertisingState } from "./useAdvertising";
 
 // ---------------------------------------------------------------------------
-// The pieces every Advertising page shares: its header (the dates, what they're compared with, the
-// account picked, a download), the loading and failure states, and what to say with nothing connected.
+// The pieces every Advertising page shares: its header (the dates, the account picked, a download),
+// the loading and failure states, and what to say with nothing connected.
 // ---------------------------------------------------------------------------
 
 export const PLATFORM: Record<AdProvider, { name: string; Icon: (p: { size?: number }) => ReactNode }> = {
@@ -64,7 +64,7 @@ export function DownloadCsv({ section, query, label = "Download CSV" }: { sectio
 }
 
 /**
- * The page's title and its question: the dates, what they're compared with, and (`actions`) the
+ * The page's title and its question: the dates and (`actions`) the
  * account and a download. Printing (or saving as PDF, from the browser's print dialog) leaves the
  * menus out and says the store and the dates in words instead, as the Shopping Funnel does.
  * `badge` follows the title (the demo's DEMO DATA), `note` the line under it (the demo's disclaimer).
@@ -77,7 +77,6 @@ export function AdvertisingHeader({
   note,
   r,
   shown,
-  current,
   actions,
 }: {
   title: string;
@@ -87,11 +86,9 @@ export function AdvertisingHeader({
   note?: ReactNode;
   r: DateRangeState;
   shown: Shown;
-  current: boolean;
   actions?: ReactNode;
 }) {
   const { store, access, allowed } = useApp();
-  const compared = comparedWith(shown);
   return (
     <div className="animate-rise">
       <h1 className="page-title flex flex-wrap items-center gap-2">
@@ -104,12 +101,10 @@ export function AdvertisingHeader({
       {shown && (
         <p className="mt-1 hidden text-sm print:block">
           {store?.name ?? store?.shopDomain} · {fmtRange(shown.range.from, shown.range.to)}
-          {compared ? ` · ${compared}` : ""}
         </p>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-2 print:hidden">
         <DateRangeSelect r={r} shown={shown} id="ad-dates" label="Dates" size="sm" />
-        <CompareSelect r={r} shown={shown} current={current} id="ad-compare" label="Compare with" size="sm" />
         {actions}
         {(allowed("reports.export") || hasFullAccess(access.role)) && (
           <button type="button" className="btn-secondary h-9 gap-2 px-3 text-sm" onClick={() => window.print()} data-testid="ad-print">
@@ -120,7 +115,6 @@ export function AdvertisingHeader({
       </div>
       <div className="mt-2 flex flex-wrap gap-2 empty:hidden print:hidden">
         <CustomDates r={r} />
-        <CompareDates r={r} />
       </div>
     </div>
   );

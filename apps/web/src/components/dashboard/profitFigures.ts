@@ -180,8 +180,7 @@ export function profitOf(ov: Overview, k: Costs, ads: { offered: boolean; shown:
 
 /**
  * What is left of the dates' sales after the costs bizinsights can see: Business profit overview's
- * figure, and the simple Home's "Left over" number, worked out once so the two never differ. Net
- * profit when every cost is known and the costs list is marked complete (`profitOf`), out of
+ * figure. Net profit when every cost is known and the costs list is marked complete (`profitOf`), out of
  * revenue; otherwise net sales less the costs known, out of net sales.
  */
 export interface LeftOver {

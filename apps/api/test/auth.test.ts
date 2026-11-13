@@ -1,8 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEnvCache } from "@app/core";
 import { systemDb } from "@app/db";
-import { buildApp } from "../src/app.js";
-import { unconfiguredCognito } from "../src/cognito.js";
 import { signSession, readSession, REVALIDATE_MS } from "../src/session.js";
 import { CLIENT_IP_HEADER } from "../src/context.js";
 import { LIMITS } from "../src/rateLimit.js";
@@ -328,11 +326,6 @@ describe("signing in with email and password", () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it("answers 'try again' while Cognito isn't configured, instead of signing anyone in or out", async () => {
-    const app = buildApp({ ...ctx.deps, auth: unconfiguredCognito() });
-    const res = await app.request("/auth/login", { method: "POST", headers: { ...ORIGIN, "content-type": "application/json" }, body: JSON.stringify({ email: "a@x.com", password: "whatever-it-is" }) });
-    expect(res.status).toBe(503);
-  });
 });
 
 describe("forgot password", () => {
@@ -481,7 +474,7 @@ describe("an account with no Cognito user yet", () => {
 describe("Continue with Google", () => {
   let restore: () => void;
   beforeEach(() => {
-    restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "Google" });
+    restore = withEnv({ GOOGLE_SIGNIN_CLIENT_ID: "test-google-client", GOOGLE_SIGNIN_CLIENT_SECRET: "test-google-secret" });
   });
   afterEach(() => restore());
 
@@ -787,8 +780,8 @@ describe("Continue with Google", () => {
 
   it("sends a provider that isn't switched on to the sign-in error page", async () => {
     restore();
-    // An old setting that still names Apple: Apple sign-in is gone, and Google isn't listed.
-    restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "SignInWithApple" });
+    // Google's client isn't configured, and Apple sign-in is gone.
+    restore = withEnv({ GOOGLE_SIGNIN_CLIENT_ID: "", GOOGLE_SIGNIN_CLIENT_SECRET: "" });
     expect((await get("/auth/oauth/google/start")).headers.location).toBe("http://localhost:3001/auth/error?reason=provider_unavailable&provider=google");
     expect((await get("/auth/oauth/apple/start")).headers.location).toBe("http://localhost:3001/auth/error?reason=provider_unavailable&provider=apple");
     expect((await get("/auth/config")).json()).toEqual({ providers: { google: false }, emailOtp: false, loginCode: false });
@@ -915,7 +908,7 @@ describe("account security", () => {
   });
 
   it("lists how the account signs in, and has no password to change after Google", async () => {
-    const restore = withEnv({ COGNITO_DOMAIN: "https://auth.example.test", COGNITO_IDENTITY_PROVIDERS: "Google" });
+    const restore = withEnv({ GOOGLE_SIGNIN_CLIENT_ID: "test-google-client", GOOGLE_SIGNIN_CLIENT_SECRET: "test-google-secret" });
     try {
       const browser = testBrowser(ctx);
       const start = await browser.get("/auth/oauth/google/start");
@@ -998,7 +991,7 @@ describe("signing in with an emailed code (Cognito EMAIL_OTP)", () => {
   });
 
   it("sends a code, signs in with it once, and answers unknown addresses the same", async () => {
-    const restore = withEnv({ COGNITO_EMAIL_OTP: "1" });
+    const restore = withEnv({ AUTH_EMAIL_OTP: "1" });
     try {
       const u = ctx.auth.addUser({ email: "a@x.com" });
       const browser = testBrowser(ctx);

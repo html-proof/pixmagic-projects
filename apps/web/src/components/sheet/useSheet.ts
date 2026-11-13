@@ -2,22 +2,23 @@
 import { useMemo } from "react";
 import type { BusinessEvent } from "@app/shared/businessEvents";
 import { daysBetweenInclusive } from "@app/shared/dates";
-import { dayShown, isSheetGrain, parseEventFilter, parseWeekdays, sheetColumns, sheetRows, sheetTotals, weekdaysParam, type EventFilter, type SheetDay, type SheetGrain } from "@app/shared/sheet";
+import { dayShown, parseEventFilter, parseWeekdays, sheetColumns, sheetRows, sheetTotals, weekdaysParam, type EventFilter, type SheetDay, type SheetGrain } from "@app/shared/sheet";
 import { profitAds, type ProfitSetup } from "@app/shared/profit";
 import { seesModule } from "@app/shared/access";
 import { useApp } from "@/components/AppContext";
 import { useQueryParam } from "@/components/advertising/useAdvertising";
-import { useDateRange, type Shown } from "@/components/dashboard/DateRange";
+import type { DateRangeState, Shown } from "@/components/dashboard/DateRange";
 import { leftOutOf, leftOutWords } from "@/components/dashboard/profitFigures";
 import type { AdsModule, FunnelModule, Overview } from "@/components/dashboard/types";
 import { useApi, useLiveApi } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
-// What the Profit sheet asks: the dashboard's dates (the same address-bar state as every dashboard
-// page), the columns (?by=day|week|month), the days shown (?days=weekends, ?days=0,2,4) and the
-// events they're narrowed to (?events=with|without|kind:sale|event:<id>), so a link reproduces the
-// view. The figures are the dashboard's own answer narrowed to the sheet (GET …/overview?parts=sheet);
-// the events come from GET …/business-events. @app/shared/sheet adds them up.
+// What the day-by-day sheet on Profit & Loss asks (its Detailed Table): the page's own dates and
+// columns (days, weeks or months: the page's Daily / Weekly / Monthly), the days shown
+// (?days=weekends, ?days=0,2,4) and the events they're narrowed to (?events=with|without|kind:sale|
+// event:<id>), so a link reproduces the view. The figures are the dashboard's own answer narrowed to
+// the sheet (GET …/overview?parts=sheet); the events come from GET …/business-events.
+// @app/shared/sheet adds them up.
 // ---------------------------------------------------------------------------
 
 /** Orders and visits arrive within a minute: the sheet looks again every minute, as the dashboard does. */
@@ -32,10 +33,12 @@ export function autoGrain(from: string, to: string): SheetGrain {
   return n <= 45 ? "day" : n <= 190 ? "week" : "month";
 }
 
-export function useSheet() {
+/**
+ * `dates`: the page's dates (one picker for the statement and the sheet). `by`: the columns picked
+ * on the page, null to follow the dates' length (`autoGrain`).
+ */
+export function useSheet({ dates, by }: { dates: DateRangeState; by: SheetGrain | null }) {
   const { workspace, store, allowed, me, access } = useApp();
-  const dates = useDateRange(store?.timezone ?? "UTC", { day: store?.startDay ?? null, created: !!store?.shopCreatedAt });
-  const [by, setBy] = useQueryParam("by", isSheetGrain);
   const [daysParam, setDaysParam] = useQueryParam("days", isDaysParam);
   const [events, setEvents] = useQueryParam("events", isEventsParam);
   const weekdays = useMemo(() => parseWeekdays(daysParam), [daysParam]);
@@ -46,7 +49,7 @@ export function useSheet() {
   const live = useLiveApi<Overview>(path, LIVE_EVERY_MS);
   // Never one store's figures under another store's name while switching.
   const ov = live.data && store && live.data.store.id === store.id ? live.data : null;
-  const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
+  const shown: Shown = ov && { range: ov.range, timezone: ov.store.timezone };
   // The events of the dates on screen (the API's own resolved dates, so they always match the columns).
   const eventsPath = base && ov ? `${base}/business-events?from=${ov.range.from}&to=${ov.range.to}` : null;
   const ev = useApi<{ events: BusinessEvent[] }>(eventsPath);
@@ -138,8 +141,6 @@ export function useSheet() {
     eventsError: ev.error,
     reloadEvents: ev.reload,
     setEventList: (events: BusinessEvent[]) => ev.setData({ events }),
-    by,
-    setBy,
     weekdays,
     setWeekdays: (days: number[]) => setDaysParam(weekdaysParam(days)),
     eventFilter,

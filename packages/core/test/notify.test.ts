@@ -38,9 +38,7 @@ describe("alertEmail", () => {
 
   it("links each area to its page, and an unknown code to support", () => {
     expect(alertEmail(alert("webhook_failed"), { workspace: null, store: null }).text).toContain("https://app.test/settings/stores");
-    expect(alertEmail(alert("email_account_reauth:acc1", "Reconnect shop@acme.test."), { workspace: null, store: null }).text).toContain(
-      "https://app.test/settings/email/accounts",
-    );
+    expect(alertEmail(alert("inventory_stock", "3 products are running low."), { workspace: null, store: null }).text).toContain("https://app.test/inventory/low-stock");
     expect(alertEmail(alert("staff_open_shifts", "2 shifts have been open"), { workspace: null, store: null }).text).toContain("https://app.test/staff/timesheets");
     const unknown = alertEmail(alert("brand_new_code"), { workspace: null, store: null });
     expect(unknown.subject).toBe("Something needs your attention");
@@ -49,8 +47,8 @@ describe("alertEmail", () => {
   });
 
   it("passes on the messages the app composes itself", () => {
-    const body = "The email account shop@acme.test must be reconnected before it can send again (Settings → Email → Accounts).";
-    expect(alertEmail(alert("email_account_reauth:acc1", body, "warning"), { workspace: "Acme", store: null }).text).toContain(body);
+    const body = "2 shifts have been open for more than 16 hours (Staff → Timesheets).";
+    expect(alertEmail(alert("staff_open_shifts", body, "warning"), { workspace: "Acme", store: null }).text).toContain(body);
   });
 
   it("escapes the merchant's names in the HTML", () => {

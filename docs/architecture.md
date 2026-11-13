@@ -1,29 +1,32 @@
 # Architecture and conventions
 
 How the code is organised, where new code goes, and the conventions it follows. For running it see
-[local-dev.md](local-dev.md); for production see [aws-deployment.md](aws-deployment.md) (AWS, where
-every merge to `main` deploys) and [RUNBOOK.md](RUNBOOK.md).
+[local-dev.md](local-dev.md); for production see
+[ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md](ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md)
+(the iKorex server, since 2026-11-13) and [RUNBOOK.md](RUNBOOK.md). Production ran on AWS until
+then ([aws-deployment.md](aws-deployment.md) is the record); its infrastructure code (`infra/cdk`),
+its deploy workflow and the Lambda entry point were removed from the repository the same day and
+are in Git's history.
 
 ## The shape of the system
 
-The application code runs on AWS (`apps/aws`, `infra/cdk`) and, for development, the demos and
-e2e, as one local Node process (`apps/aws/src/local.ts`). A third entry, `apps/aws/src/selfhost.ts`,
-runs it on a server of its own (web and worker processes, PostgreSQL for the queue, schedules and
-coordinator; `infra/ikorex`, docs/ikorex-migration), built for the move off AWS and not yet live.
-Only the thin entry that wires it to its surroundings differs.
+The application code runs on a server of its own (`apps/aws/src/selfhost.ts`: web and worker
+processes, PostgreSQL for the queue, schedules and coordinator; `infra/ikorex`,
+docs/ikorex-migration) and, for development, the demos and e2e, as one local Node process
+(`apps/aws/src/local.ts`). Only the thin entry that wires it to its surroundings differs. (The
+package is still named `apps/aws`: it held the Lambda entry point too, until AWS was left.)
 
 ```
-                        AWS                                   local server
-browser ──► CloudFront + WAF ──► Lambda "api"           or  Node HTTP server
+                        the server                            local server
+browser ──► Cloudflare ──► its tunnel ──► "web" container  or  Node HTTP server
               /api/*, /webhooks/*, /pixel/*, /shopify/*  ──► Hono app (apps/api)
               everything else                            ──► static UI (apps/web, Next.js static export)
-                                                             (if the function can't answer: apps/web's /unavailable page, from S3)
 
-jobs   SQS (sync, webhooks, aggregate, email, smsEvents, whatsapp) ──► Lambda "jobs"   or  in-process queues ──► consume()       (apps/worker)
-cron   EventBridge Scheduler (*/15, 03:15)    ──► Lambda "cron"   or  POST /__scheduled ──► runScheduled()  (apps/worker)
+jobs   PostgreSQL queue (sync, webhooks, aggregate, email, whatsapp) ──► "worker" container  or  in-process queues ──► consume()  (apps/worker)
+cron   schedules in the worker (*/15, 03:15)  or  POST /__scheduled ──► runScheduled()  (apps/worker)
 
 apps/api and apps/worker ──► packages/core (Shopify, Meta, Google, WhatsApp, email, staff, persistence)
-                         ──► packages/db   (Prisma; RDS PostgreSQL on AWS, a local Postgres in development)
+                         ──► packages/db   (Prisma; PostgreSQL in a container on the server, a local Postgres in development)
 everything               ──► packages/shared (pure logic, no I/O)
 ```
 
@@ -44,13 +47,12 @@ Each package may import only the ones above it in this table, never one below.
 
 | Package | Holds | Must not |
 | --- | --- | --- |
-| `packages/shared` | Pure functions and constants: KPI formulas, dates, roles and permissions, HMAC/AES, WhatsApp template rules, Zod schemas shared by API and UI, the staff pay/time engine (`@app/shared/staff`), the email rule and template engine (`@app/shared/email`), Customer Messaging's SMS rules (`@app/shared/sms`: parts and encoding, variables, consent, delivery statuses), the Automations hub's trigger catalog and status scale (`@app/shared/automations`), the Google Ads demo's generator and the Google Ads analytics figures (`adsDemo.ts`, `adsAnalytics.ts`). Browser-safe subpath exports (`@app/shared/roles`, `/dates`, `/whatsapp`, `/staff`, `/email`, ...). | Do I/O, read env, import Prisma. The UI imports subpaths only: the root barrel pulls `node:crypto` into the browser. |
+| `packages/shared` | Pure functions and constants: KPI formulas, dates, roles and permissions, HMAC/AES, WhatsApp template rules, Zod schemas shared by API and UI, the staff pay/time engine (`@app/shared/staff`), email addresses as the app's own mail checks, normalizes and masks them (`@app/shared/email`), the Google Ads demo's generator and the Google Ads analytics figures (`adsDemo.ts`, `adsAnalytics.ts`). Browser-safe subpath exports (`@app/shared/roles`, `/dates`, `/whatsapp`, `/staff`, `/email`, ...). | Do I/O, read env, import Prisma. The UI imports subpaths only: the root barrel pulls `node:crypto` into the browser. |
 | `packages/db` | Prisma schema, migrations (with RLS policies), `systemDb` / `tenantDb` / `withTenant` / `withDb`. | Contain business rules. |
-| `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync (the GraphQL documents in `shopifyQueries.ts`), token encryption and key rotation (`keyRotation.ts`), normalizers, persistence and aggregates, alerts and audit, ad platforms (`ads/`: one client per platform, and `googleAdsSource.ts`, the source a Google Ads connection reads from: Google's API, or the generator behind the Google Ads demo, [ads-demo.md](ads-demo.md); `adConnections/`: connected accounts, their tokens, sync and reports, `demo.ts` the demo connection), WhatsApp, email integrations (`email/`: OAuth, SMTP, delivery, rules; docs/email.md), the Inventory module (`inventory/`: stock levels and locations, alerts, stock changes, its reports; docs/inventory.md), Customer Messaging (`sms/`, imported as `@app/core/sms`: SMS through AWS End User Messaging behind an `SmsProvider`; docs/sms.md), the Automations hub (`automations/`, imported as `@app/core/automations`: one adapter per channel over the SMS and email engines, the merged history; docs/automations.md), Zapier (`zapier/`, imported as `@app/core/zapier`: bizinsights as the OAuth provider of its Zapier app, the event outbox and its deliveries; [zapier.md](zapier.md)), the store's own costs (`expenses.ts`: Profit & Loss, Settings → Costs and the dashboard's `expenses` module, the recurring costs' payments recorded by the cron sweep; the rules, net profit included, in `@app/shared/expenses`; [kpis.md](kpis.md) "Costs and net profit"). Every Meta Graph API call, ads and WhatsApp alike, goes through `metaGraph.ts` (token in the Authorization header, paging links only to graph.facebook.com). The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
+| `packages/core` | Everything that talks to the database or an outside API on the app's behalf: Shopify client and sync (the GraphQL documents in `shopifyQueries.ts`), token encryption and key rotation (`keyRotation.ts`), normalizers, persistence and aggregates, alerts and audit, ad platforms (`ads/`: one client per platform, and `googleAdsSource.ts`, the source a Google Ads connection reads from: Google's API, or the generator behind the Google Ads demo, [ads-demo.md](ads-demo.md); `adConnections/`: connected accounts, their tokens, sync and reports, `demo.ts` the demo connection), WhatsApp, the Inventory module (`inventory/`: stock levels and locations, alerts, stock changes, its reports; docs/inventory.md), Zapier (`zapier/`, imported as `@app/core/zapier`: bizinsights as the OAuth provider of its Zapier app, the event outbox and its deliveries; [zapier.md](zapier.md)), the store's own costs (`expenses.ts`: Profit & Loss, Settings → Costs and the dashboard's `expenses` module, the recurring costs' payments recorded by the cron sweep; the rules, net profit included, in `@app/shared/expenses`; [kpis.md](kpis.md) "Costs and net profit"). Every Meta Graph API call, ads and WhatsApp alike, goes through `metaGraph.ts` (token in the Authorization header, paging links only to graph.facebook.com). The config schema (`env.ts`) and logger. | Know about HTTP requests or queues' delivery mechanics. |
 | `apps/api` | HTTP: routing, auth, permission checks, input validation, response shapes. | Hold business logic that a job or another route could need: put it in core. |
 | `apps/worker` | Queue consumers and cron sweeps (`src/handlers/`: one module per job, re-exported by `handlers.ts`): retries, backoff, failure bookkeeping, then a call into core. `ops/` holds one-off maintenance tasks (RUNBOOK.md). | |
-| `apps/aws` | The Lambda entry (one build, three functions: api, jobs, cron; plus `cognitoEmail.ts`, its own small entry in the same package for the Cognito pool's email trigger): loads secrets at cold start, wires DynamoDB, SQS, S3 and SES into `Deps`, serves the UI and the API on one origin, gives every outbound call its timeout (`withTimeout`), runs migrations on request. The app's shared settings (`settings.ts`) and the local server (`local.ts`, `dev.ts`, `localQueues.ts`), which wires the same app to in-process stand-ins. | Contain logic beyond that wiring. |
-| `infra/cdk` | The AWS infrastructure as code (edge, data, app, auth, WhatsApp and CI stacks) and the deploy, data-copy, smoke-test and rollback scripts. | Hold application code. |
+| `apps/aws` | The server's entry (`selfhost.ts`, `server.ts`: one bundle run as `web` and as `worker`; `admin.ts`, its maintenance command): wires the PostgreSQL queue, schedules and coordinator, the blob folder and the mailer into `Deps`, serves the UI and the API on one origin, gives every outbound call its timeout (`withTimeout`), runs migrations on request. The app's shared settings (`settings.ts`) and the local server (`local.ts`, `dev.ts`, `localQueues.ts`), which wires the same app to in-process stand-ins. | Contain logic beyond that wiring. |
 | `infra/ikorex` | The self-hosted deployment (docs/ikorex-migration): Compose files, the app and PostgreSQL images, backups, monitoring, `ship.sh` / `deploy.sh`, env templates (never real values). | Hold application code or secrets. |
 | `apps/web` | The UI (see [Frontend](#frontend-appsweb)). Depends on `@app/shared` only; talks to the API over HTTP. | Import core/db, or compute KPIs the API already returns. |
 
@@ -107,19 +109,17 @@ Where a new piece of code goes:
 
 Where every connection of a store stands is worked out once, on the server:
 `GET /workspaces/:ws/stores/:storeId/integrations` (`routes/integrations.ts`) answers each module
-(Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, email) on one scale of six statuses:
+(Shopify, Meta Ads, Google Ads, AdSense, WhatsApp) on one scale of six statuses:
 connected, pending, reauthorization_required, syncing, error, disconnected. The scale, each
 provider's states mapped onto it, and the ad cards' own states (`connectionState`, `platformState`,
 which `apps/web/src/lib/adConnections.ts` re-exports) are pure functions in
 `@app/shared/integrations`; core's `integrations/status.ts` composes what each module already says
 about itself (the store's status and `syncProblem`, the ad rows and waiting sign-ins,
-`waConnectionView`, the Automations hub's SMS and email cards) and decides nothing again. A new
+`waConnectionView`) and decides nothing again. A new
 provider adds its mapping in shared and its module in core, and no page needs logic of its own.
 Zapier isn't one of its modules: its Settings card reads `GET …/zapier`
-([zapier.md](zapier.md#settings--integrations)). Every caller is told the same statuses; a
-channel's accounts and reasons stay with whoever may open its own page (the SMS sender with View
-campaigns, and neither SMS's nor email's with an API key). The answer's shape, the mappings and who
-is offered which action: [api/api-overview.md](api/api-overview.md#integration-status).
+([zapier.md](zapier.md#settings--integrations)). Every caller is told the same statuses. The
+answer's shape, the mappings and who is offered which action: [api/api-overview.md](api/api-overview.md#integration-status).
 
 Meta has a second answer of its own, `GET /workspaces/:ws/stores/:storeId/meta/discovery` (core's
 `integrations/metaDiscovery.ts`, `@app/shared/metaDiscovery`): Meta found through the store's
@@ -139,8 +139,8 @@ access with an app, so Meta seen only in Shopify is never "connected":
   (`parseShopify`, `parseShopifyList` for a page), `core/whatsapp/webhook.ts` (Evolution API's
   deliveries) and `core/whatsapp/cloud.ts` (Meta's, for Cloud API numbers).
   What doesn't fit is logged (field paths, never values) and skipped, not thrown: a retry would only
-  meet the same payload again. The WhatsApp and email automations read an order or checkout only
-  once they are about to act on it, so a store that doesn't use them logs nothing about it. The
+  meet the same payload again. WhatsApp Automation reads an order or checkout only
+  once it is about to act on it, so a store that doesn't use it logs nothing about it. The
   exception is the GDPR topics: a `customers/redact` or `customers/data_request` that can't be read
   fails at once (`UnrecoverableError`: recorded as failed and alerted), never marked as done.
 - Each cron sweep runs on its own: one that throws is logged and the rest of the tick still runs.
@@ -170,8 +170,8 @@ of truth and almost every screen is "load, show, edit, save".
 | --- | --- |
 | Server data | `useApi(path)` (`lib/api.ts`): each answer is kept with the request it answers, transient failures retry by themselves, `reload()` and `setData()` for edits. `useLiveApi(path, ms)` for data that must stay live (the dashboard). |
 | Session, workspaces, current workspace and store | `AppContext` (`useApp()`), signed-in pages only. |
-| The dashboard's date range, its comparison and open detail | The URL (`?preset=&from=&to=`, `?compare=&cfrom=&cto=`, `?view=`), so a link reproduces the view. The Advertising area (/advertising, [advertising.md](advertising.md)) reads the same dates and adds `?platform=&account=`; the Shopping Funnel (/funnel, [kpis.md](kpis.md) "Shopping Funnel page") adds `?device=&visitor=&landing=&country=`; the Profit sheet (/sheet, [kpis.md](kpis.md) "Profit sheet") `?by=&days=&events=`. |
-| Per-device preferences | `lib/storage.ts` (`readLocal` / `writeLocal`): never throws, so blocked storage only loses the preference. |
+| The dashboard's date range and open detail | The URL (`?preset=&from=&to=`, `?view=`), so a link reproduces the view. The Advertising area (/advertising, [advertising.md](advertising.md)) reads the same dates and adds `?platform=&account=`; the Shopping Funnel (/funnel, [kpis.md](kpis.md) "Shopping Funnel page") adds `?device=&visitor=&landing=&country=`; Profit & Loss (/profit, [kpis.md](kpis.md) "Profit & Loss page") `?tab=&grain=`, and for its day-by-day sheet `?days=&events=`. |
+| Per-device preferences (which Home, which menu and its open groups, the narrowed sidebar, the look around answered) | `lib/storage.ts` (`readLocal` / `writeLocal`): never throws, so blocked storage only loses the preference. |
 | Form drafts | Component state. |
 
 Write a hand-made `api()` call in an effect only when `useApi` can't express it (paging with
@@ -190,7 +190,7 @@ while rendering is caught by `app/(app)/error.tsx` inside the shell, or `app/err
 pages. Unknown paths get `app/not-found.tsx`.
 
 **The signed-in look (the owner's Stitch design, 2026-11-06).** Every signed-in page follows the
-approved Stitch prototypes (docs/kpis.md "The simple Home"), through the shared pieces rather than
+approved Stitch prototypes (docs/kpis.md "The Sales pages"), through the shared pieces rather than
 page by page:
 - `globals.css` tokens: a cool off-white page, navy ink, slate secondary text, cool hairlines and a
   faint shadow.
@@ -204,29 +204,56 @@ page by page:
   `@font-face`, so nothing is preloaded.
 - `components/PageKit.tsx` holds the pieces a rebuilt page's layout is made of: `Card` (a white
   card with its heading), `FigureTile` and `ChangeTag` (a page's few numbers), `InShortLine` (the
-  opening sentence), `ShareRow` (a labelled share bar) and `PageTabs` (a row of tabs).
+  opening sentence), `ShareRow` (a labelled share bar), `PageTabs` (a row of tabs) and `HelpTip`
+  (the small "i" beside a figure's name: what it measures, on hover, focus or tap).
 
-A new page uses these pieces rather than its own borders and radii. The menu itself is unchanged:
-the owner kept it.
+A new page uses these pieces rather than its own borders and radii.
+
+**Finding your way (2026-11-11).** Every page keeps its name, its address and its place in the menu's
+whole list; what changed is how much of the list is read at once.
+- **The short menu** (`SIMPLE_MENU` in lib/features.ts; the rules, tested, in `lib/menu.ts`; drawn by
+  `AppShell.tsx`). The sidebar lists the everyday pages (Dashboard, Sales & Orders, Products,
+  Customers, Inventory or Stock, Advertising, Profit & Loss) and folds the rest into four groups:
+  More reports (Business Overview, Discounts, Shopping Funnel), Store (Orders,
+  Shipping, Sales channels, Staff, My work), Marketing (the whole list's "Marketing & integrations")
+  and Settings. A group opens
+  with a click and stays open on that device (localStorage `menu-open`); the group holding the
+  page being looked at is open by itself. A group of one page is shown as that page, and a menu of
+  fewer than ten entries (a member shown a few pages, a shared dashboard) doesn't fold at all. "Show
+  every page" at the foot brings back the whole list as it always was (`menu-layout`), and "Show
+  fewer pages" returns. A new entry goes into the whole list and into the everyday list or one of
+  the groups, both in `Sidebar`.
+- **The narrowed sidebar** (wide screens): the button beside the logo narrows it to its icons
+  (`menu-rail`), each named on hover and to screen readers; a group is one icon, which widens the
+  sidebar with that group open.
+- **The look around** (`components/Tour.tsx`, steps and card placement in `lib/tour.ts`): a few
+  steps over the page itself, each lighting up one part (what needs you, the numbers, the dates,
+  the menu, search, the bell, help) by its `data-tour` name. It is only ever offered: the simple
+  Home shows one row on a device that hasn't answered (`tour-seen`), and the help button keeps
+  "Show me around". Skip or Escape leaves at any step; a step whose part isn't on the page is left
+  out. A new part of the frame worth pointing at gets a `data-tour` name and a step.
+- **What a figure measures** (`components/dashboard/figureHelp.ts`): one wording per headline figure,
+  behind its `HelpTip` on the Home's four numbers and the Sales Overview's, from the definitions in
+  [kpis.md](kpis.md). A figure with a name a merchant may not know gets a `help` there.
 
 **The Sales pages (Stitch screens 05–12).** The dashboard's topics (`?view=sales`, `products`,
 `customers`, `orders`, `shipping`, `channels`, `discounts`, `timing`, `overview`) are pages of their
 own, not panels over the Home: `components/dashboard/SalesFrame.tsx` draws the frame (title, the
 store's status as a pill, the date chip, Download and Print, the breadcrumb back to Home) and the
-row of tabs, Overview · Products · Customers · Orders & shipping · Visitors · Ads · Profit & Loss ·
-Profit sheet. The last four tabs are the pages they always were (/funnel, /advertising, /profit,
-/sheet), which put `SalesTabs` above their own header; a tab is shown to whoever the menu shows its
-page to, and moving between tabs keeps the dates. The tabs' layouts are in
+row of tabs, Overview · Products · Customers · Orders & shipping · Visitors · Ads · Profit & Loss.
+The last three tabs are the pages they always were (/funnel, /advertising, /profit); the first two
+put `SalesTabs` above their own header, and Profit & Loss (which took the Profit sheet in on
+2026-11-13, [kpis.md](kpis.md) "Profit & Loss page") draws its own sections' tabs instead. A tab is
+shown to whoever the menu shows its page to, and moving between tabs keeps the dates. The tabs' layouts are in
 `components/dashboard/SalesViews.tsx` (each from the same overview answer the Home reads); the
 panels with more detail, and the topics that share the Overview tab, stay in `Details.tsx`. Every
 menu entry still opens its own page.
 
 **The Settings pages (Stitch screens 30–35).** The settings menu and its pages are unchanged; what is
 on each follows the design: Integrations is screen 30's Connections, a card per connection two to a
-row (Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, SMS, Email, Zapier), each with its own state
+row (Shopify, Meta Ads, Google Ads, AdSense, WhatsApp, Zapier), each with its own state
 and the same on the one scale of six (`data-status`, [Integration status](#integration-status)).
-SMS and Email are told by `GET …/integrations` alone (`components/integrations/ChannelCards.tsx`);
-the others keep their own answers and wording (`IntegrationRow.tsx`, `AdRow.tsx`, `ZapierCard.tsx`).
+Each keeps its own answers and wording (`IntegrationRow.tsx`, `AdRow.tsx`, `ZapierCard.tsx`).
 Workspace and Costs are screen 31's Business details (the time zone and currency locked, as Shopify
 gives them), Team & Access is screen 32, Notifications 33, Profile and Security 34, Privacy requests
 and Audit log 35; Shopify, Advertising, Billing and API keys take the same look. Each page's title is
@@ -247,20 +274,17 @@ approve", Record payment per person). The other pages take the same look from th
 screen 29: the organization and who is signed in at the top, one big Clock in, and the sections as
 a bar of icons along the bottom of a phone; it sets the same Inter type (`app-look`) as the app.
 
-**The Marketing pages (Stitch screens 14–20).** Automations, Customer Messaging, WhatsApp and the
-email pages keep their routes and section menus; what is on each page follows the design, through
-`components/automations/MarketingKit.tsx` on top of PageKit: tables with a tinted head row
+**The Marketing pages (Stitch screens 14–20).** WhatsApp Automation's pages keep their routes and
+section menu; what is on each page follows the design, through
+`components/whatsapp/MarketingKit.tsx` on top of PageKit: tables with a tinted head row
 (`TableCard`, `TableHead`, `Th`, `TD`, `ROW`), a channel's chip (`Chip`), the line of a page's few
-facts (`FactsLine`), numbered form parts (`StepCard`, `StepTitle`: the number stays in the
-heading's words for screen readers and the specs), a channel's card with one status word and its
-facts (`ChannelPanel`, `FactList`), a filter bar (`FilterBar`) and the design's switch (`Switch`, a
-real checkbox with role "switch"). /automations is screen 14 (the automations as rows, each
-channel's card under them), the setup and the builders are 19 (numbered steps ending in "Check and
-turn on"), the message histories and Delivery Analytics are 17, campaigns (SMS and WhatsApp) are 15,
-consent, segments and WhatsApp customers are 16, and the SMS setup and sender, WhatsApp setup and
-settings and the email accounts and domains are 18. Every figure is the page's own API answer; what
-the design shows and no API returns (a total reach per channel, a "Pause all" across channels, SMS
-spend beside the sender) is left out.
+facts (`FactsLine`), numbered form parts (`StepCard`), and a channel's card with one status word
+and its facts (`ChannelPanel`, `FactList`). The setup and the builders are screen 19 (numbered
+steps), the message history is 17, campaigns are 15, WhatsApp customers are 16, and WhatsApp setup
+and settings are 18. Every figure is the page's own API answer; what the design shows and no API
+returns (a total reach per channel, a "Pause all" across channels) is left out. The design's other
+Marketing screens were for the Automations hub (screen 14), Customer Messaging (SMS) and Email
+integrations, which were removed from the app on 2026-11-13.
 
 **Fonts and prefetch.** Signed-in pages are in Inter (above). Only the landing page, the split-card
 auth pages (`AuthSplitShell`) and the legal pages (`LegalPage`: /support, /privacy, /terms,
@@ -320,11 +344,10 @@ leaves 7–8 ms per frame:
 
 | Setting | Lives in | Read by |
 | --- | --- | --- |
-| App settings (public: app ids, API versions, scopes, flags) | `apps/aws/src/settings.ts` (shipped in the functions' package, put in `process.env` at cold start by `apps/aws/src/index.ts`; not in the 4 KB environment); locally overridden by `apps/aws/.env` | `env()` in `packages/core/src/env.ts` |
-| Secrets (session, encryption keys, client secrets) | Secrets Manager `insights/production/*`, set with `infra/cdk/scripts/put-secrets.mjs` ([aws-deployment.md](aws-deployment.md)); locally `apps/aws/.env` (from `.env.example`) | `apps/aws/src/secrets.ts` at cold start, into `process.env`, then `env()` |
-| Services (queues, coordinator, payload store, mail) | infra/cdk (queue URLs, table, bucket, SES region in the functions' environment) | `apps/aws/src/index.ts` (AWS) or `local.ts` (local), passed as `Deps` |
-| Sign-in (Amazon Cognito: pool, client, domain; the client secret) | the Auth stack (`infra/aws/cognito.yaml` via infra/cdk), into the runtime parameter and a secret ([cognito-setup.md](cognito-setup.md)) | `cognitoConfig()` in `apps/api/src/cognito.ts` |
-| AWS settings (URLs, ids, flags) and infrastructure choices | SSM parameter `/insights/production/runtime`; CDK context (`infra/cdk/lib/config.ts`, `cdk.json`, the deploy workflow's `-c` flags) | `apps/aws` at cold start; `infra/cdk` at deploy |
+| App settings (public: app ids, API versions, scopes, flags) | `apps/aws/src/settings.ts` (shipped in the server's bundle, put in `process.env` at start by `selfHostSettings`); locally overridden by `apps/aws/.env` | `env()` in `packages/core/src/env.ts` |
+| Secrets (session, encryption keys, client secrets) | the server's `env/*.env` files, mode 600, one per container ([ikorex-migration/ENVIRONMENT_VARIABLES_MIGRATION.md](ikorex-migration/ENVIRONMENT_VARIABLES_MIGRATION.md)); locally `apps/aws/.env` (from `.env.example`) | the container's environment, then `env()` |
+| Services (queues, coordinator, payload store, mail) | `infra/ikorex/docker-compose.yml` and the env files (the database, the blob folder, the mail provider's key) | `apps/aws/src/selfhost.ts` (the server) or `local.ts` (local), passed as `Deps` |
+| Sign-in (the app's own, `apps/api/src/localAuth.ts`: accounts in `auth_accounts`; Google on the app's own OAuth client) | the server's `env/app.env` (`GOOGLE_SIGNIN_CLIENT_ID`, its secret); nothing else to set ([cognito-setup.md](cognito-setup.md) is the record of Cognito, the provider until 2026-11-13) | `googleSignInConfig()` in `apps/api/src/localAuth.ts` |
 | Feature flags for unfinished work | `apps/web/src/lib/features.ts` | the UI |
 | Local tooling (docker compose, Prisma CLI, `ops:*` tasks) | repo-root `.env` (from `.env.example`) | those tools only |
 
@@ -338,8 +361,8 @@ so the deploy's config check warns when the id is set and the secret isn't (and 
 secret to `put-secrets.mjs`, if it has a recognisable one). Code reads settings through
 `env()`, not `process.env`. The exceptions are deliberate: the logger (`LOG_LEVEL`), the database
 connections (`DATABASE_URL` / `APP_DATABASE_URL`), per-app Shopify secrets whose names are dynamic
-(`SHOPIFY_APP_SECRET_<KEY>`), and `apps/aws`, which puts the secrets into `process.env` at cold start
-and reads the Lambda's own settings (queue URLs, bucket, table, region) before `env()` can run.
+(`SHOPIFY_APP_SECRET_<KEY>`), and `apps/aws`, which puts the shipped settings into `process.env` at start
+and reads the server's own settings (the database, the blob folder, the role it runs as) before `env()` can run.
 
 Local tools and the local server use the `app_dev` database; production's `app` is only ever reached
 by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture-decisions.md#adr-008-defaults-that-can-only-reach-production-on-purpose)).
@@ -356,7 +379,7 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
   use default exports.
 - **Errors**: `XxxError extends Error` (or `AppError`, for a rule the person broke) and sets
   `this.name`, so logs say which.
-- **API**: route files by area (`routes/smsAutomations.ts`), registration functions `<area>Routes`.
+- **API**: route files by area (`routes/staffPayroll.ts`), registration functions `<area>Routes`.
 - **Relative imports inside packages** use the `.js` extension (`./dates.js`), except in the
   `packages/shared` modules the UI imports by subpath (`ads.ts`, `sales.ts`): Next's bundler does
   not map `./dates.js` to `dates.ts` in a workspace package, so those stay extensionless.
@@ -365,14 +388,13 @@ by pointing `DATABASE_URL` at it on purpose ([ADR-008](architecture/architecture
 
 | Kind | Where | Runs with |
 | --- | --- | --- |
-| Unit (pure logic, config files, AWS adapters, the local server) | `packages/shared/test`, `packages/core/test`, `apps/aws/test`, `apps/web/test` (`node --test`) | `pnpm test` |
-| Infrastructure (synthesized stacks) | `infra/cdk/test` | `pnpm --filter @infra/cdk test` |
-| Integration (real Postgres, faked Cognito/Shopify/Meta) | `apps/api/test`, `apps/worker/test` | `pnpm test:integration` (database `*_test`; `TEST_PG_PORT` points it at a throwaway server) |
+| Unit (pure logic, config files, the server's adapters, the local server) | `packages/shared/test`, `packages/core/test`, `apps/aws/test`, `apps/web/test` (`node --test`) | `pnpm test` |
+| Integration (real Postgres, faked sign-in provider/Shopify/Meta) | `apps/api/test`, `apps/worker/test` | `pnpm test:integration` (database `*_test`; `TEST_PG_PORT` points it at a throwaway server) |
 | End to end (Playwright against the local server) | `apps/web/e2e` | `pnpm e2e` |
 | Lint (TypeScript, React hooks) and import cycles | everywhere | `pnpm lint` (CI fails on any finding; `scripts/check-import-cycles.mjs` fails on any module that imports itself through others, `import()` included) |
 
 A bug fix comes with the test that would have caught it. CI also checks the dependency audit, that
-the migrations produce exactly `schema.prisma`, and that the Lambda package builds.
+the migrations produce exactly `schema.prisma`, and that the server bundle builds.
 
 A release's migrations are applied before its code goes live ([aws-deployment.md](aws-deployment.md),
 "Migrations before the switch"), so the release before keeps running on them for up to a minute of

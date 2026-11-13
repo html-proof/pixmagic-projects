@@ -1,5 +1,12 @@
 # bizinsights on AWS: deployment runbook
 
+**This page is a record.** Production left AWS on 2026-11-13 and AWS's side was deleted the same
+day ([ikorex-migration/LEAVING_AWS.md](ikorex-migration/LEAVING_AWS.md)); the server's runbook is
+[ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md](ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md).
+What this page names in the repository (`infra/cdk`, `.github/workflows/aws-deploy.yml`, the Lambda
+entry point `apps/aws/src/index.ts`, `apps/aws/scripts/build.mjs`) was removed after it and is in
+Git's history: the last commit that holds it is `a5177a93`.
+
 How bizinsights on AWS is built, deployed, filled with data, tested, rolled back and, at cutover,
 made the only production (the old Cloudflare deployment still serves merchants until then, see
 [Retiring the old Cloudflare deployment](#retiring-the-old-cloudflare-deployment)). The design and its reasoning are in
@@ -19,16 +26,16 @@ Account `605411278365`, region `ap-southeast-2` (Sydney); the WAF web ACL lives 
 | Background jobs | SQS `insights-production-{sync,webhooks,aggregate,email,whatsapp}` + `-dlq` → Lambda `insights-production-jobs` | `apps/aws/src/consumer.ts`, `sqsQueues.ts` |
 | Schedules | EventBridge Scheduler `*/15` and `03:15 UTC` → Lambda `insights-production-cron` (on since 2026-10-16: `schedulesEnabled` in `infra/cdk/lib/config.ts`) | `runScheduled()` in `apps/worker` |
 | Migrations before the switch | Lambda `insights-production-migrate-before-live` (App stack, runs only during deploys, through the custom resource `MigrateBeforeLive`) runs a release's migrations on its new cron version before the `live` aliases move ("Migrations before the switch" below) | `infra/cdk/lib/migrate-before-live.ts`, `apps/aws/src/migrate.ts` |
-| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, single-AZ in 2b since 2026-11-08 (Multi-AZ before), private, encrypted, 14-day PITR) | `infra/cdk/lib/data-stack.ts` |
+| Database | RDS PostgreSQL 17 `insights-production` (db.t4g.micro, single-AZ in 2b since 2026-11-08 (Multi-AZ before), private, encrypted, 7-day PITR since 2026-11-12 (14 before)) | `infra/cdk/lib/data-stack.ts` |
 | Way out to the internet | EC2 NAT instance `insights-production-nat-b` (t4g.nano, in the database's AZ, both AZs' functions through it since 2026-11-08; `nat-a` before that; Systems Manager only) | `infra/cdk/lib/nat-instances.ts` |
 | Coordinator | DynamoDB `insights-production-coord` | `apps/aws/src/dynamoCoord.ts` |
 | Large webhook bodies | S3 `insights-production-payloads-605411278365` (7-day lifecycle) | `apps/aws/src/s3Blobs.ts` |
 | Dumps, artifacts | S3 `insights-production-artifacts-605411278365` (30 days, versioned) | `infra/cdk/scripts/migrate-data.mjs` |
 | Sign-in | Cognito pool `insights-production` (from `infra/aws/cognito.yaml`); its emails (codes) through Lambda `insights-production-cognito-email` and Resend, "Sign-in emails" below | `apps/api/src/cognito.ts`, `apps/aws/src/cognitoEmail.ts` |
 | App email | Resend (bizinsights.io verified, live 2026-10-16); SES as fallback (sandbox: verified recipients only); "App email" below | `packages/core/src/mail/`, `apps/aws/src/mailers.ts`, `apps/aws/src/sesMailer.ts` |
-| Secrets | Secrets Manager `insights/production/{app,db-owner,db-system,worker-cognito,evolution-api,evolution-db}` (`db-owner`: the cron and the admin host only; `db-system`: every function's database login, [system-database-role.md](system-database-role.md)); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
+| Secrets | Secrets Manager `insights/production/{app,db-owner,db-system,worker-cognito,evolution-api,evolution-db,origin-lock}`, each with a copy in Parameter Store under the same name after a slash (`/insights/production/app`, …), which the functions read first: the move to Parameter Store, [SECRETS_TO_PARAMETER_STORE.md](aws-migration/SECRETS_TO_PARAMETER_STORE.md) (`db-owner`: the cron and the admin host only; `db-system`: every function's database login, [system-database-role.md](system-database-role.md); `origin-lock`: what Cloudflare adds to each request, read by no function, [Origin lock](#origin-lock-only-cloudflare-reaches-cloudfront)); settings in SSM `/insights/production/runtime` | `apps/aws/src/secrets.ts` |
 | WhatsApp service | Evolution API 2.3.7 on ECS Fargate: service `insights-production-evolution-a` in cluster `insights-production-whatsapp` (one task, private subnets, no public address), reached by the functions only at `http://evolution-a.whatsapp.production.insights.internal:8080` (Cloud Map); its own database `evolution` on the same RDS instance; logs `/ecs/insights-production-evolution-a` ([whatsapp.md](whatsapp.md)) | `infra/cdk/lib/whatsapp-stack.ts` (stack `InsightsWhatsapp-production`), `apps/aws/src/evolutionDb.ts` |
-| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$80/month (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
+| Logs, alarms | CloudWatch (90 days), dashboard `insights-production`, SNS `insights-production-alarms`, budget US$50/month, tax included (emails `budgetEmail`) | `infra/cdk/lib/app-stack.ts` |
 | DB admin | EC2 `insights-production-admin` (t4g.nano, Systems Manager only, normally **stopped**) | `infra/cdk/lib/data-stack.ts` |
 | Audit (whole account) | CloudTrail `insights-account` (every Region) → S3 `insights-account-trail-605411278365` (1 year); IAM Access Analyzer `insights-account` in all 18 enabled Regions (StackSet `insights-account-access-analyzer`); GuardDuty (turned on by hand) | `infra/cdk/lib/audit-stack.ts` |
 
@@ -71,7 +78,9 @@ node infra/cdk/scripts/put-secrets.mjs --from C:\Users\Seban\Videos\saas-project
 
 It copies the values that must equal production's (TOKEN_ENCRYPTION_KEYS decrypts every stored
 store and ad-platform token; OTP_PEPPER keys stored customer hashes; SHOPIFY_API_SECRET), generates
-SESSION_SECRET and APP_RLS_PASSWORD, and prints key names only. A secret only its owner has
+SESSION_SECRET and APP_RLS_PASSWORD, and prints key names only. It writes the secret and then its
+copy in Parameter Store (`/insights/production/app`, what the functions read first); should the
+copy fail, it says so, and the next Deploy to AWS copies it. A secret only its owner has
 (META_APP_SECRET, GOOGLE_ADS_CLIENT_SECRET, WHATSAPP_APP_SECRET, ...): copy it to the clipboard and run
 
 ```powershell
@@ -94,7 +103,6 @@ secret among them:
 | `GOOGLE_ADS_CLIENT_ID` | `GOOGLE_ADS_CLIENT_SECRET` (the "Insights web" client's) | Google Ads and AdSense say "Coming soon"; their connections stop syncing |
 | `WHATSAPP_CONFIG_ID` (set 2026-10-25), on the app `WHATSAPP_APP_ID` (empty, so `META_APP_ID`: WhatsApp's Cloud API option runs on the Meta Ads app "Insights") | `META_APP_SECRET` while WhatsApp is on the Meta Ads app, as now (the check names it so); `WHATSAPP_APP_SECRET` only on an app of its own; `WHATSAPP_WEBHOOK_VERIFY_TOKEN` too | WhatsApp's Cloud API option (Embedded Signup) can't be offered; linking a phone with a QR code still works (docs/whatsapp.md) |
 | `SHOPIFY_API_KEY`, each app in `SHOPIFY_EXTRA_APPS` | `SHOPIFY_API_SECRET`, `SHOPIFY_APP_SECRET_<KEY>` | That Shopify app's stores can't install or refresh their access |
-| `EMAIL_GOOGLE_CLIENT_ID`, `EMAIL_MICROSOFT_CLIENT_ID` (empty today) | `EMAIL_GOOGLE_CLIENT_SECRET`, `EMAIL_MICROSOFT_CLIENT_SECRET` | Connect Gmail / Outlook says it isn't set up |
 
 WhatsApp's Cloud API option is off while `WHATSAPP_CONFIG_ID` is empty, and then nothing warns
 about WhatsApp's Meta secret: the check's line on the Deploy run names what it still needs instead
@@ -117,7 +125,7 @@ and setting names only, never a value):
 aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --payload '{\"action\":\"config\"}' config.json
 ```
 
-`config.json` then says which ad platforms, email integrations and sign-in options are on, what
+`config.json` then says which ad platforms and sign-in options are on, what
 the WhatsApp service and its Cloud API option still need (`whatsapp.evolutionNeeds`,
 `whatsapp.embeddedSignupNeeds`), and lists under
 `halfConfigured` each provider whose secret is missing. After adding one with `--set`, run
@@ -203,7 +211,11 @@ One-time setup in the repository's Settings → Environments → `production`: v
 `cdk deploy`. They hold the same values as production's in config.ts, so they change nothing; a different
 value overrides config.ts's for that deploy. Unset, each reaches the deploy empty, which keeps
 config.ts's (production's schedules stay on); `AWS_SCHEDULES=off` still switches the schedules off
-for every Deploy run while it is set. Required reviewers and branch
+for every Deploy run while it is set. `AWS_WHATSAPP` (unset since 2026-11-13, so the service runs; it was `off` from 2026-11-12, when nobody was using WhatsApp, until the owner asked for it back the next day: [whatsapp.md](whatsapp.md), "Cost")
+works the same way: `off` leaves the WhatsApp service with no task, gives the functions no
+`EVOLUTION_API_URL` and drops the three `whatsapp-service-*` alarms; it was made for the time from
+the iKorex cutover to stage F (docs/ikorex-migration/AWS_TO_IKOREX_MIGRATION_MATRIX.md, cutover
+step 2). Any other value, or deleting the variable, keeps config.ts's one task. Required reviewers and branch
 rules for an environment need a paid plan for a private repository; the role's trust does that job.
 
 The role admits a token only when all of these claims match exactly (`githubDeployClaims` in
@@ -660,6 +672,71 @@ job signs in only with the OIDC deploy role and checks that it did.
   is vitest's "Start at". A busy PC (demos, other test runs, other sessions' builds) makes the
   integration tests and the e2e suite 2-3 times slower too and can time a test out even plugged in
   and awake (2026-10-19 20:28Z): re-run the job once the PC is quiet.
+- A job that is "in progress" on bizinsights-pc with no steps, then fails or is cancelled after 10
+  minutes with nothing in its log, while the runner shows online: Windows' Smart App Control is
+  blocking the runner's worker program (2026-11-09 to 11-11: #359, #360, #361, #362). A restart
+  doesn't help and it isn't the network. Check, without elevation:
+
+  ```powershell
+  Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-CodeIntegrity/Operational'; Id=3077; StartTime=(Get-Date).AddHours(-2)} | Format-List TimeCreated, Message
+  ```
+
+  It names `\actions-runner\bin.<version>\Runner.Worker.exe` or `Runner.Worker.dll` and policy
+  `{0283ac0f-fff1-49ae-ada1-8a933130cad6}` (VerifiedAndReputableDesktop, which is Smart App Control;
+  `VerifiedAndReputablePolicyState` under `HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy` is 1
+  while it enforces). The Application log has the other half at the same second: `.NET Runtime`
+  1026, "An Application Control policy has blocked this file. (0x800711C7)".
+  Why: GitHub doesn't sign the runner's Windows programs (event 3089 beside each 3077:
+  `TotalSignatureCount=0`), so Smart App Control lets each one run only while Microsoft's cloud
+  service vouches for that exact file, and that can stop on any day without anything changing on
+  the PC. Runner 2.338.2 arrived on 2026-11-03 and ran every job until 11-08; from 11-09 05:07Z
+  its worker was blocked, here and for other people on the same day
+  ([actions/runner#4770](https://github.com/actions/runner/issues/4770), open since 2026-10-11).
+  Smart App Control had been enforcing since 2026-08-24, so neither it nor the runner's update was
+  new. Windows has no exception for one program. What doesn't fix it: an older runner (2.337.0 and
+  2.338.0 are unsigned too and were blocked for others, and GitHub stops sending jobs to a runner
+  30 days behind a release). What does, both the owner's decision:
+  - Smart App Control off: Windows Security → App & browser control → Smart App Control → Off.
+    Defender antivirus and SmartScreen stay on. This PC has KB5127648 (2026-10-15), whose known
+    issue is that the switch back to On can be greyed out until Microsoft fixes it.
+  - Or GitHub's machines for a while: delete the repository variable `SELF_HOSTED_RUNNER` (back:
+    "Setting the variable" below). The deploy role trusts the workflow file on `main`, not the
+    machine, so Deploy to AWS works from there; the 2,000 free minutes a month are the limit
+    (first section above).
+
+  Until one is done, hold pull requests as drafts (below): every job sent to the PC ends as a red or
+  cancelled check.
+  2026-11-11: the owner chose GitHub's machines. `SELF_HOSTED_RUNNER` was deleted at 08:19Z and the
+  next job ran its steps to the end on `ubuntu-latest` (run 42986152890, #362). Smart App Control
+  is still on and bizinsights-pc is still registered, online and unused. CI and Deploy now spend
+  the 2,000 minutes; when they run out, jobs stop with the "payments have failed or your spending
+  limit" annotation (first section above) until the 1st, unless the PC can take them again. Before
+  setting the variable back, Smart App Control has to be off, or one small job has to be seen
+  running its steps on the PC (a docs-only pull request costs one 10-minute red check if it is
+  still blocked).
+  2026-11-13: the owner had the PC cut off from AWS. `aws logout` removed the owner's sign-in on
+  the PC (the account has no IAM users and no access keys, so nothing there can reach AWS until
+  someone runs `aws login` again), and bizinsights-pc was removed from GitHub (Settings → Actions →
+  Runners is empty), so no job, Deploy included, can run on the PC. CI and Deploy stay on GitHub's
+  machines, as they were. The runner's Windows service (stopped), `C:\actions-runner` and the
+  ghrunner account are still on the PC and can no longer connect; "Back to GitHub's runners" below
+  removes them (skip `config.cmd remove`, the registration is already gone, and delete the service
+  with `sc.exe delete "actions.runner.html-proof-pixmagic-projects.bizinsights-pc"`). To use the PC
+  again, install the runner again from the top of this section before setting the variable.
+  Setting the variable: its value must be JSON, quotes included, because every `runs-on` passes it
+  to `fromJSON`. Windows PowerShell 5.1 drops the double quotes inside a single-quoted argument to
+  a program, so `--body '["self-hosted","bizinsights-pc"]'` (right in Git Bash) stores
+  `[self-hosted,bizinsights-pc]` there. Every run then fails within seconds with no job started,
+  and a Deploy on `main` would too: that happened on 2026-11-11 from 08:23Z to 08:30Z (run
+  42987297392, #361), with the command copied from this entry. In Windows PowerShell:
+
+  ```powershell
+  gh variable set SELF_HOSTED_RUNNER --body '[\"self-hosted\",\"bizinsights-pc\"]'
+  ```
+
+  Or type the value in GitHub (Settings → Secrets and variables → Actions → Variables). Then
+  check it: `gh variable get SELF_HOSTED_RUNNER` must print `["self-hosted","bizinsights-pc"]`.
+  A broken value is put right by deleting it (`gh variable delete SELF_HOSTED_RUNNER`).
 - While the runner deploys, nobody deploys by hand: the two don't share a lock.
 - With one runner a pull request sometimes has to wait: another needs the runner first, or it has to
   land after another. Hold it by making it a draft (`gh pr ready <n> --undo`), never by cancelling
@@ -704,7 +781,7 @@ job signs in only with the OIDC deploy role and checks that it did.
   deployed. Again by hand (idempotent): the same command with `{"action":"evolution-db"}`.
 - psql: start the admin host, then `aws ssm start-session --target <instance id>` (needs the Session
   Manager plugin), credentials from the `insights/production/db-owner` secret. Stop it afterwards.
-- Restore: RDS point-in-time restore (any second in the last 14 days) to a new instance, or a dump
+- Restore: RDS point-in-time restore (any second in the last 7 days) to a new instance, or a dump
   from the artifacts bucket through the admin host.
 
 ## Test
@@ -779,8 +856,9 @@ a hosted zone that isn't the registrar's nameservers would only be a second, ign
     site's `apps/web/public/.well-known/security.txt` (it still gave the old contact address after
     the site's file changed). The site's file is the one to edit; it expires 2027-10-15, so renew its
     `Expires` line before then. Cloudflare's copy is kept, switched off: don't switch it back on.
-  - Rollback: switch the two records back to **DNS only**. Nothing in AWS has to change: from
-    anywhere but Cloudflare's ranges `CF-Connecting-IP` is ignored.
+  - Rollback: switch the two records back to **DNS only**. From anywhere but Cloudflare's ranges
+    `CF-Connecting-IP` is ignored. With the origin lock enforcing (below), set it to `"report"`
+    and deploy first: CloudFront then refuses what doesn't come through Cloudflare.
 - **One origin**: the session cookie, the CSRF check and every OAuth callback use APP_URL
   (`https://bizinsights.io`, set on the functions by the App stack). CloudFront answers on
   `bizinsights.io`, `www` and its own name; the viewer-request function sends GET/HEAD on the other two
@@ -799,6 +877,107 @@ Records before the switch (GoDaddy's parking page, imported by Cloudflare on 202
 rollback: `A bizinsights.io 15.197.148.33` and `A bizinsights.io 3.33.130.190` (both proxied),
 `CNAME www → bizinsights.io` (proxied). Putting them back (and `domain` out of config.ts) returns the
 app to `d2mr8m2p1qkh58.cloudfront.net`.
+
+### Origin lock: only Cloudflare reaches CloudFront
+
+`d2mr8m2p1qkh58.cloudfront.net` is a public name, and so are CloudFront's addresses: without a lock
+anyone can call them and skip Cloudflare, its rules and its rate limit. So Cloudflare adds a secret
+to every request it passes on, the header `x-origin-lock`, and CloudFront's viewer-request function
+(`infra/cdk/lib/viewer-request.ts`) answers **403** to a request without it. Page requests (GET,
+HEAD) on the other names still get their 301 to `https://bizinsights.io` first.
+
+**Where it stands (2026-11-13): there is nothing left to lock.** The rest of this section is
+history, and how it would be set up again. `"enforce"` was merged that day once `/edge-lock`
+answered 204, and never deployed: its one Deploy (05:31 UTC) stopped at the function itself,
+because CloudFront takes a comment of at most 128 characters and the enforcing one had 138, and
+the stack rolled back (the comment is shorter now and a test counts it; `config.ts` is back on
+`"report"`). At 06:03 UTC `bizinsights.io` moved to the iKorex server, and between 07:14 and 07:38
+UTC the owner's "delete everything in AWS" took the stacks
+([LEAVING_AWS.md](ikorex-migration/LEAVING_AWS.md)): the distribution, its viewer function and the
+WAF are gone, and the cloudfront.net name no longer resolves. Two things outlived them:
+
+- **Cloudflare's rule `Origin lock for CloudFront`** kept adding the header on both names, to the
+  server through the tunnel, which doesn't read it. Deleted on 2026-11-13 at 07:50 UTC (the owner's
+  "Yes, delete it"; Rules → Overview, the rule's menu → Delete): Cloudflare sends the secret to
+  nobody now.
+- **The secret** `insights/production/origin-lock` and its Parameter Store copy
+  `/insights/production/origin-lock`: the Data stack kept it on purpose (`RETAIN`), US$0.40 a
+  month until it is deleted with the rest of Secrets Manager.
+
+- **The secret** is `insights/production/origin-lock` in Secrets Manager (US$0.40 a month): 48
+  letters and digits the Data stack generated; nobody has seen it and it is in no file. CloudFormation
+  copies it into the function's source when the App stack deploys (a dynamic reference, as for
+  `ORIGIN_VERIFY`), so it is not in this repository or in the template. The function takes the
+  header off before the origin, so the app never sees or logs it. It is a different secret from
+  `ORIGIN_VERIFY` (CloudFront → the function URL): Cloudflare's copy opens CloudFront only.
+- **The switch** is `domain.originLock` in `infra/cdk/lib/config.ts`: `"report"` (nothing is
+  refused) or `"enforce"`. The App stack's output `OriginLock` says which is deployed.
+- **The check**: `https://bizinsights.io/edge-lock` is answered by the function itself, **204** when
+  the request carried the secret and **403** when it didn't, in both modes. 204 means Cloudflare is
+  sending the header. The smoke tests ask it on every deploy: a warning while reporting, a failure
+  once enforcing, together with a POST straight to the cloudfront.net name that must get 403.
+- **Not locked**: `/_next/static/*` (the build's public files, from S3, no viewer function) and the
+  fallback distribution's "temporarily unavailable" page. Neither reaches the function or the database.
+- Cloudflare's address ranges are not required as well: `cloudflare.ts` is kept by hand, and a range
+  Cloudflare added would mean 403s for the clients behind it.
+
+**Giving Cloudflare the secret** (the owner; once, and again after a new value). In PowerShell,
+signed in with `aws login`, this puts the value on the clipboard without showing it:
+
+```powershell
+aws secretsmanager get-secret-value --secret-id insights/production/origin-lock --region ap-southeast-2 --query SecretString --output text | Set-Clipboard
+```
+
+`(Get-Clipboard).Length` should say 48. Then in the Cloudflare dashboard, zone `bizinsights.io`:
+**Rules → Overview**, section **Request Header Transform Rules** → **Create rule** (to change the
+value later: click the rule's name there, replace the Value, **Save**).
+
+| Field | Value |
+| --- | --- |
+| Rule name | `Origin lock for CloudFront` |
+| If incoming requests match | **Custom filter expression**: Hostname **equals** `bizinsights.io` **Or** Hostname **equals** `www.bizinsights.io` (as an expression: `(http.host eq "bizinsights.io") or (http.host eq "www.bizinsights.io")`) |
+| Then, modify request header | **Set static**, header name `x-origin-lock`, value: paste (Ctrl+V) |
+
+**Deploy**, then empty the clipboard (`Set-Clipboard -Value " "`) and check:
+
+```powershell
+curl.exe -s -o NUL -w "%{http_code}" https://bizinsights.io/edge-lock
+```
+
+**204** is right. 403 means the value or the header's name is wrong: edit the rule and paste again.
+The paste is the step that goes wrong: with an expired `aws login` the command copies nothing and
+Ctrl+V pastes whatever was copied before (on 2026-11-12 the rule went live holding the header's own
+name), hence the length check, and nothing else copied between the command and the paste. The rule
+list shows the header's value in plain text to whoever may open the zone in Cloudflare's dashboard:
+that account is as sensitive as the secret.
+"Set static" replaces a header of that name a client sent, so nobody can pass their own. The rule
+names the two hosts so the secret never goes to another origin of the zone.
+
+**Order, always**: `"report"` deployed → the rule in Cloudflare → `/edge-lock` answers 204 →
+`"enforce"`. Enforcing before Cloudflare sends the header answers 403 to everyone, and the
+deploy's rollback doesn't undo it: it moves the functions' aliases, not CloudFront's function.
+
+**If every page says "Forbidden" (403)**: Cloudflare stopped sending the header. Look at the
+Transform Rule first (deleted, disabled, its value changed): putting it back fixes the site within
+seconds. If that can't be done, switch the lock off at CloudFront: console → CloudFront → Functions
+→ `insights-production-viewer-request` → Build: change `var ENFORCE = true;` to `false`, **Save
+changes**, then Publish → **Publish function** (live in about a minute). Follow with a pull request
+that sets `originLock: "report"`, or the next deploy enforces again.
+
+**A new value** (the old one may have leaked, or Cloudflare's account changed hands). Three
+deploys, nothing refused in between:
+
+1. Pull request: `originLock: "report"`. Merge, Deploy.
+2. New value, not shown:
+   `aws secretsmanager put-secret-value --secret-id insights/production/origin-lock --region ap-southeast-2 --secret-string (aws secretsmanager get-random-password --password-length 48 --exclude-punctuation --query RandomPassword --output text) --query VersionId`
+3. Copy it to Cloudflare's rule as above (edit the rule's value).
+4. Pull request: `originLockRead` to today's date, so CloudFormation reads the secret again. Merge,
+   Deploy; `/edge-lock` answers 204 again (403 between steps 3 and 4 is expected).
+5. Pull request: `originLock: "enforce"`. Merge, Deploy.
+
+**Going back** to no lock: `originLock: "report"` (or remove it; the secret is kept, `RETAIN`).
+Before switching the two DNS records to DNS only (the rollback above), set `"report"` and deploy:
+with the lock enforcing, requests that don't come through Cloudflare are refused.
 
 ## Roll back
 
@@ -997,7 +1176,9 @@ would ship whatever `$LATEST` has.
 
 A Deploy to AWS run does this by itself when the deploy changed `/insights/production/runtime` (its
 step "Restart the functions on changed runtime settings", with the run's id in the description): a
-secret changed in Secrets Manager alone still needs the loop above. Its log says "Runtime settings
+secret changed in Secrets Manager alone still needs the loop above (and, changed any other way
+than with `put-secrets.mjs`, a Deploy to AWS first: the functions read its copy in Parameter Store,
+which only `put-secrets.mjs` and a deploy write). Its log says "Runtime settings
 unchanged: nothing to restart." on most runs. "Couldn't read the runtime settings" means it restarted
 nothing, and the AWS CLI's error just above it says why. Until 2026-11-01 every run said that: on the
 PC's runner, Git Bash rewrote `--name /insights/production/runtime` into a Windows path
@@ -1051,8 +1232,15 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   It needs the owner's own device, so no deploy can do it. `aws login` keeps working (the browser
   sign-in asks for the key).
 - **Alerts**: the alarms email `alertEmail` (config.ts: bizinsightsaus@yahoo.com), an SNS
-  subscription that works only once confirmed from AWS's first email to that address. The budget
-  already emails `budgetEmail` (config.ts) and needs no confirmation.
+  subscription that works only once confirmed from AWS's first email to that address ("AWS
+  Notification - Subscription Confirmation"; look in spam too). The first one was never confirmed:
+  SNS dropped it, CloudFormation still listed it, and on 2026-11-12 the topic had **no subscriber
+  at all**, so no alarm had ever reached anyone. A new confirmation email was sent that day, and the
+  subscription has a construct id of its own (`AlarmEmail2`, app-stack.ts) so the deploy made it
+  again. Check: `aws sns list-subscriptions-by-topic --region ap-southeast-2 --topic-arn
+  arn:aws:sns:ap-southeast-2:605411278365:insights-production-alarms` shows a real ARN, not
+  `PendingConfirmation`. The budget already emails `budgetEmail` (config.ts) and needs no
+  confirmation.
 - **WhatsApp's Cloud API option**: Meta's Tech Provider steps (business verification, App Review,
   the app's WhatsApp webhook), in Meta's consoles only: [whatsapp.md](whatsapp.md), "Owner's steps
   (Cloud API)". Linking a phone with a QR code needs nothing from the owner.
@@ -1088,9 +1276,7 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
   `https://bizinsights.io/api/ads/meta/callback` in Facebook Login for Business of Meta app 971575545351940
   (bizinsights' own sign-in: [ads-setup.md](ads-setup.md#how-connecting-works); steps in
   [ads-review-packs.md](ads-review-packs.md)). Nango's old `…/api/ads/nango/oauth-callback` was removed from both on
-  2026-11-02 ([ads-setup.md](ads-setup.md#leaving-nango), step (d));
-  and, once their clients
-  exist, `https://bizinsights.io/api/email/oauth/google/callback` and `.../microsoft/callback`. Both
+  2026-11-02 ([ads-setup.md](ads-setup.md#leaving-nango), step (d)). Both
   Shopify apps are already there (main `insights-14`, PixMagic `pixmagic-7`). To go back to an
   earlier Shopify version, use the Dev Dashboard (the app → **Versions** → that version →
   **Release**): `shopify app release --version <tag>` answers "could not be found" for every version
@@ -1098,8 +1284,9 @@ share Resend's limits with the app's email (free tier: 100 a day, 3,000 a month)
 
 ## Cost (US$/month, on-demand, approximate)
 
-The owner's ceiling is **US$50-80 a month** (2026-10-18), keeping everything above, Multi-AZ
-included. Since 2026-11-08 the database is single-AZ and there is one NAT instance (Fault
+The owner's ceiling is **US$50 a month, GST included**, since 2026-11-12 (the next heading). The
+rest of this section is the history behind it: the ceiling was **US$50-80 a month** from 2026-10-18,
+keeping everything above, Multi-AZ included. Since 2026-11-08 the database is single-AZ and there is one NAT instance (Fault
 tolerance): the two RDS rows below halve and the NAT row is ~8.3, ~30 a month less. Measured, priced and independently re-checked on 2026-10-18 (AWS Price List API, Sydney,
 before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's traffic):
 
@@ -1110,7 +1297,7 @@ before the 10% GST that AWS Australia adds; usage from CloudWatch at that day's 
 | Two NAT instances: t4g.nano $0.0053/hour + public IPv4 $0.005/hour + 8 GB gp3, each ~8.3 | 16.58 |
 | GuardDuty after its trial (ends ~2026-11-14): RDS protection 2.26 + **Advanced RDS (`RDS_DATA_RISK`) 6.78** + CloudTrail events ~1.5 + S3/Lambda/DNS/flow logs ~0.2 | ~10.7 |
 | WAF: web ACL $5 + 5 rules × $1 + requests | ~10.2 |
-| CloudWatch: 33 alarms (26 of the App stack's 27, its `whatsapp-service-unreachable` being in the WhatsApp row; 6 for the NAT instances; Cognito's email), 10 free, US$0.10 each (three added 2026-10-29: `sync-jobs-failed-for-good`, `ad-connections-need-merchants`, `ad-figures-differ`, +0.30; recounted the same day, the 25 before were 30); logs, dashboard and the 10 custom metrics the log filters count (10 free; an 11th would be US$0.30) in the free tier | ~2.3 |
+| CloudWatch: 34 alarms since 2026-11-12 (`db-login-failures`, +0.10, and its log filter's metric, the 11th custom one, +0.30: the figure here is from before them) (26 of the App stack's 27, its `whatsapp-service-unreachable` being in the WhatsApp row; 6 for the NAT instances; Cognito's email), 10 free, US$0.10 each (three added 2026-10-29: `sync-jobs-failed-for-good`, `ad-connections-need-merchants`, `ad-figures-differ`, +0.30; recounted the same day, the 25 before were 30; three fewer from the release that removes Customer Messaging (SMS), 2026-11-13: the two `sms-hold-*` alarms and the SMS events queue's age alarm, and their two custom metrics); logs, dashboard and the 10 custom metrics the log filters count (10 free; an 11th would be US$0.30) in the free tier | ~2.3 |
 | Secrets Manager (3 × $0.40 + calls), KMS (Cognito email key + ~60-90k requests, 20k free) | ~2.5 |
 | Admin host's disk (stopped), EBS snapshots, SQS (~1.3 M requests, 1 M free), S3, DynamoDB, SES (X-Ray tracing is off since 2026-11-06: nothing read the traces) | ~2.4 |
 | Audit stack (since 2026-10-18): the trail's first copy of management events is free, and so are the 18 external-access analyzers; its bucket's log and digest files (S3 PUTs from 18 Regions every ~5 minutes, ~200-270 bytes per event compressed, ~1-3 GB a year kept for 395 days) | ~0.35 (≤1) |
@@ -1157,12 +1344,60 @@ most ~52 MiB of 4 GiB). Connections are the nearer limit: the API has no concurr
 RDS Proxy. NAT instances replaced the NAT gateway ($0.059/hour + $0.059/GB, ~47 with its address)
 on 2026-10-17: two of them cost a third of one gateway.
 
-**Budget** `insights-production-monthly-<digest>`: US$80, tax included, emails `budgetEmail` when the
-month passes 50/75/90/100% (US$40/60/72/80) and when AWS forecasts it above US$80. Nothing is
-stopped at any threshold. Until Basic support, the reservation and the Advanced RDS decision are in
-place, the 100% email is expected every month: it is accurate, not noise. The name carries a digest
-of the alerts because CloudFormation replaces a budget whose alerts change. The alarm topic still
-has no subscriber.
+### The US$50 ceiling (2026-11-12)
+
+The owner's ceiling is **US$50 a month, GST included** (2026-11-12), which is US$45.45 of charges
+before AWS Australia's 10% GST. What a day costs, from Cost Explorer for 2026-11-10 (the last full
+day it had), by usage type, with the month each line makes at 30 days:
+
+| Line | US$/day | US$/month | Standing on 2026-11-12 |
+| --- | --- | --- | --- |
+| Database instance, db.t4g.micro single-AZ | 0.600 | 18.00 | Stays |
+| WAF: web ACL 5 + five rules | 0.334 | 10.02 | Stays until Cloudflare's rules replace it (MIGRATION_STATUS.md, change 6) |
+| WhatsApp service, Fargate Spot | 0.181 | 5.43 | Off from release 179 (`AWS_WHATSAPP=off`); **on again** since 2026-11-13 (the owner's request) |
+| NAT instance, t4g.nano | 0.127 | 3.81 | Stays |
+| Its public IPv4 address | 0.120 | 3.60 | Stays |
+| CloudWatch alarms above the 10 free (31 on 2026-11-12: US$2.10) | 0.110 | 3.30 | Stays |
+| Database backups above the free 20 GB | 0.102 | 3.06 | Falls: backups kept 7 days, not 14, since release 178 |
+| Database storage, 20 GB gp3 | 0.092 | 2.76 | Stays |
+| Secrets Manager, 6 secrets | 0.085 | 2.55 | Stays |
+| NAT instance's disk and its snapshots | 0.070 | 2.10 | Stays |
+| KMS key | 0.033 | 1.00 | Stays |
+| Cost Explorer (the daily cost email), S3, the rest | 0.03 | ~0.9 | Stays |
+| Route 53 hosted zone (charged on the 1st) | | 0.50 | Stays |
+| **A day, as measured** | **1.88** | **~57** | |
+
+On top of that, on the 1st: **Business Support+, US$29**. GST is 10% of everything.
+
+| The month, from December 2026 | Before GST | With GST |
+| --- | --- | --- |
+| As it stood on 2026-11-10, with the support plan | ~86 | ~95 |
+| WhatsApp off and backups 7 days (both live 2026-11-12; the backups' saving, taken as half, isn't measured yet), GuardDuty out of its trial with RDS protection off (+~1.7) | ~81 | ~89 |
+| and the support plan on Basic (owner, root console, from 2026-11-14) | ~52 | ~57 |
+| and the WAF replaced by Cloudflare's rules (change 6) | ~42 | **~46** |
+
+So the ceiling holds only with **all three**: the support plan on Basic, the WAF gone, and
+GuardDuty's RDS protection off before its trial ends (~2026-11-15; left on it adds ~9, Security
+events). Any one of them left in place puts the month above US$50, and with all three there is
+about US$4 to spare. November 2026 can't come in under US$50: the support plan's 29 was charged
+on the 1st and the month stood at US$64.20 with GST on the 11th.
+
+What is left after that, none of it done: a 1-year No Upfront reservation of the database takes
+its hour from US$0.025 to 0.020 (~3.65 a month; AWS could not charge the card for the two orders
+of 2026-10-18), the six secrets could move to free Parameter Store SecureStrings (~2.5), and the
+three manual snapshots of October counted toward the backups charged above until the owner had
+them deleted on 2026-11-12 (MIGRATION_STATUS.md, change 18).
+
+**Budget** `insights-production-monthly-<digest>`: US$50 since 2026-11-12 (US$80 before), tax
+included, emails `budgetEmail` when the month passes 50/70/85/95% (US$25/35/42.50/47.50; they were
+50/75/90/100 until the owner's brief of 2026-11-12 asked for these) and when AWS
+forecasts it above US$50. Nothing is stopped at any threshold. Until the three things under
+the US$50 ceiling above are in place, the 95% email is expected every month: it is accurate,
+not noise. The audit behind the ceiling, with the inventory:
+[aws-migration/COST_CEILING_50.md](aws-migration/COST_CEILING_50.md). November 2026 was already above US$50 when the budget was lowered, so its
+emails came at once. The name carries a digest
+of the alerts because CloudFormation replaces a budget whose alerts change. The alarm topic is
+another thing: it emails only once its subscription is confirmed (Owner-only steps, Alerts).
 
 **Cost Anomaly Detection**: AWS's `Default-Services-Subscription` (on its `Default-Services-Monitor`)
 emails `budgetEmail` daily about any anomaly with a total impact of **US$5** or more (set by hand
@@ -1189,10 +1424,11 @@ now: `aws lambda invoke --region ap-southeast-2 --function-name insights-product
 the log line `cost report sent` carry Resend's message id, never the address. Turn it off with
 `costReport: false` (or `-c costReport=off` for one deploy).
 
-Not costing anything yet, but watch: three manual RDS snapshots never expire, and backups may pass
-the 20 GB free allowance once the 14-day chain fills; four log groups keep logs forever (the RDS
-postgresql group and three CDK helper groups; 1.1 MB together on 2026-10-18, under a cent a month,
-not worth a deploy yet); storage autoscaling can grow the disk to 100 GB and it never shrinks back.
+Watch: a manual RDS snapshot never expires (one is left, `insights-production-pre-table-drop-20261112`;
+the three of October were deleted on 2026-11-12), and backups pass the 20 GB free allowance
+(`ChargedBackupUsage`; kept 7 days since 2026-11-12, 14 before); three CDK helper
+log groups keep logs forever (under a cent a month; the RDS postgresql group expires like the
+functions' logs since 2026-11-12); storage autoscaling can grow the disk to 100 GB and it never shrinks back.
 
 Looked at on 2026-10-18 and not worth it: moving region (us-east-1 is ~US$18 cheaper, but every
 request crosses the Pacific, Cognito users can't move with their passwords, and the data would
@@ -1225,7 +1461,7 @@ stopped the app. Now nothing the app needs is in one AZ only:
   cost one failover instead of a reboot.
 - **Way out to the internet**: a NAT instance per AZ (`nat-instances.ts`, `natGateways: 2`); each
   AZ's app subnet routes through its own, so an outage of one AZ leaves the other's functions able
-  to reach Cognito, Shopify, Google, Meta and SMTP. Each instance is recovered onto new hardware if
+  to reach Cognito, Shopify, Google and Meta. Each instance is recovered onto new hardware if
   AWS's host fails (alarm `insights-production-nat-<a|b>-system-check`) and rebooted if it stops
   answering (`...-instance-check`); its id and addresses survive both, so the routes stay valid.
   While one is down (a few minutes), only the functions running in its AZ lose the internet, and
@@ -1301,7 +1537,7 @@ few hours).
 What production does have, at no extra cost:
 - Functions in two AZs; queues with retries, backoff, a dead-letter queue (`insights-production-dlq`)
   and jobs that wait out a database outage instead of failing (apps/worker `deferForDb`).
-- Database: 14 days of point-in-time restore, kept even if the instance is deleted
+- Database: 7 days of point-in-time restore (14 until 2026-11-12), kept even if the instance is deleted
   (`DeleteAutomatedBackups: false`), deletion protection, a final snapshot on delete, storage
   autoscaling to 100 GB. DynamoDB with point-in-time recovery; versioned artifacts bucket.
 - Scheduled runs: Scheduler retries a hand-over Lambda refuses (10 minutes), Lambda retries a failed
@@ -1310,9 +1546,9 @@ What production does have, at no extra cost:
 - Alarms on the topic `insights-production-alarms`: function errors (Cognito's email function too), throttles and latency, queue age,
   the dead-letter queue, database CPU/memory/storage/connections, the NAT instances' status checks
   and CPU, the WhatsApp service (`whatsapp-service-down`, `-memory`, `-unreachable`), plus RDS's own events (availability, failure, failover, low storage, maintenance,
-  recovery, restoration). **Nobody receives them until an alert email is set** (Owner-only steps).
+  recovery, restoration). **Nobody receives them until the alert email's subscription is confirmed** (Owner-only steps, Alerts).
 - Alarms on what the logs say (log metric filters in `infra/cdk/lib/app-stack.ts`): bursts of error
-  lines per function, texts on hold, automated messages refused, WhatsApp's service not answering;
+  lines per function, WhatsApp messages refused (`messaging-send-failures`), WhatsApp's service not answering;
   and, each counted over an hour (what to do: [RUNBOOK.md](RUNBOOK.md)):
   - `sync-jobs-failed-for-good`: 10 or more sync-queue jobs ran out of attempts in an hour (the
     jobs function's `"sync job failed"` line with `"final":true` and `"attempts"` 6 or more, core's
@@ -1333,6 +1569,52 @@ What production does have, at no extra cost:
     check while the difference stays.
   - Cost: US$0.10 a month each (the cost table); the three metrics they count are within CloudWatch's
     ten free custom metrics.
+
+## Security events
+
+Since 2026-11-12 the account watches itself for the few things GuardDuty's RDS protection was kept
+for, at about US$0.40 a month instead of ~9 (cost recommendations of 2026-11-12, item 2). Base
+GuardDuty stays on (~2 a month: stolen credentials, crypto-mining, traffic to known bad hosts);
+its two RDS features, `RDS_LOGIN_EVENTS` and `RDS_DATA_RISK`, are the owner's to turn off once
+the alarm email is confirmed:
+
+```
+aws guardduty update-detector --region ap-southeast-2 --detector-id 2cc280b1e6b94af686f44551c5029339 --features 'Name=RDS_LOGIN_EVENTS,Status=DISABLED,AdditionalConfiguration=[{Name=RDS_DATA_RISK,Status=DISABLED}]'
+```
+
+(`ENABLED` twice turns them back on; GuardDuty then re-learns the database's normal logins.)
+
+What is already there and isn't repeated: the database in subnets with no route out, a security
+group that admits the functions, the WhatsApp service and the admin host only, `rds.force_ssl`,
+encryption, deletion protection, backups, CloudTrail in every Region, Access Analyzer, root MFA.
+
+What was added, all to the alarm topic (`insights-production-alarms`):
+
+- **`db-login-failures`** (alarm): PostgreSQL refused five or more logins in five minutes, counted
+  from its own log (`password authentication failed`, `no pg_hba.conf entry`; log group
+  `/aws/rds/instance/insights-production/postgresql`, kept 90 days). In normal running there are
+  none. After a deploy or a secret change it means a password out of step: the log line names the
+  role (`app`, `app_rls`, `app_system`, `evolution`). Otherwise something inside the network is
+  guessing: see which role and from which address in the log, and what was deployed or started.
+- **Five EventBridge rules** on CloudTrail's events (free; `infra/cdk/lib/security-events.ts`), each
+  an email saying what was called, by whom, from which address, and whether AWS refused it:
+  - `security-database`: any RDS `Delete*` or `Modify*` call (an instance, snapshot, backup or
+    parameter group; a snapshot shared with another account is `ModifyDBSnapshotAttribute`).
+  - `security-database-network`: a rule added to the database's security group.
+  - `security-trail`: the audit trail stopped, deleted or pointed elsewhere.
+  - `security-iam`: a new IAM user or access key (the account has neither), or a managed policy
+    attached to a user, group or role.
+  - `security-root-sign-in`: the root user signing in to the console, successfully or not.
+
+  IAM's calls and root's sign-ins reach EventBridge in us-east-1 only, so the Edge stack has two
+  rules there that pass them on to Sydney's default bus.
+
+A deploy that changes one of these things sends the email too (a new role with a managed policy, a
+database setting): the "Who" line then names CloudFormation's role. An email nobody can account
+for: look the call up in CloudTrail (Event history, by event name and time), and if it wasn't
+ours, rotate what the caller used and undo the change. The root emails are a reminder as much as a
+warning: routine work, the CLI's `aws login` included, is better done as an IAM Identity Center
+user or a role than as root.
 
 ## Security checks (Trusted Advisor)
 
@@ -1427,7 +1709,7 @@ Instances `b8fd5938-4576-428f-8f65-cccf23441f4b`, Amazon S3 Server Access Logs E
 ## Capacity: what binds first (checked 2026-10-20)
 
 The design (Cognito, Lambda, Postgres, DynamoDB, CloudFront) holds a million accounts; the
-configuration is sized for a small merchant base and the US$80 budget. In the order they bind:
+configuration is sized for a small merchant base and the US$50 budget. In the order they bind:
 
 | Limit | Today | Lifts with |
 | --- | --- | --- |

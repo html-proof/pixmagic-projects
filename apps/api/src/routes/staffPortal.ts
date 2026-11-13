@@ -24,7 +24,7 @@ import {
 import { sha256Hex } from "@app/shared";
 import { BREAK_KINDS, localDayOf, passwordProblems, shiftDay } from "@app/shared/staff";
 import { body, clientIp, HttpError, requireAppOrigin, requireUser, type Ctx, type Deps } from "../context.js";
-import { CognitoError, CognitoUnavailableError } from "../cognito.js";
+import { CognitoError, CognitoUnavailableError } from "../authContract.js";
 import { resolveUser } from "../identity.js";
 import { newSession, provesAddress, setSessionCookies } from "../session.js";
 import { recordSession } from "../devices.js";

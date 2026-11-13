@@ -2,11 +2,11 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Paperclip, Send } from "lucide-react";
-import { ROW, TableCard, TableHead, TD, Th } from "@/components/automations/MarketingKit";
+import { ROW, TableCard, TableHead, TD, Th } from "./MarketingKit";
 import { FigureTile } from "@/components/PageKit";
 import { WA_ATTACHMENT_MAX_BYTES, WA_ATTACHMENT_TYPES, WA_SEND_REASONS, WA_SEND_REASON_INFO, WA_TEXT_MAX, type WaSendReason } from "@app/shared/whatsapp";
 import { Dialog, Skeleton } from "@/components/AppUi";
-import { Drawer, plural, usePagedList } from "@/components/messaging/MessagingUi";
+import { Drawer, plural, usePagedList } from "./ListUi";
 import { Alert, EmptyState } from "@/components/ui";
 import { LoadError } from "@/components/LoadError";
 import { api, useApi } from "@/lib/api";

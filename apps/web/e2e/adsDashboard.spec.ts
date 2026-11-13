@@ -1,14 +1,14 @@
 import { expect, test } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { createWorkspace, fullDashboard, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
+import { createWorkspace, insertAdConnection, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
  * The Advertising area with a Meta ad account whose days are stored: the dashboard's old ads panel
- * address opens it with its dates; the overview (Advertising Performance) compares the spend with the
- * week before and shows Meta's card, its campaign and what its purchases leave after the spend; Shopify
- * attribution sets the store's own sales against the spend (sales per unit of spend, cost per order, with
- * the change on whole dates); the Meta Ads page draws one figure over the days and credits orders by Shopify's
+ * address opens it with its dates; the overview (Advertising Performance) shows the spend, with no
+ * change on the week before, Meta's card, its campaign and what its purchases leave after the spend; Shopify
+ * attribution sets the store's own sales against the spend (sales per unit of spend, cost per order);
+ * the Meta Ads page draws one figure over the days and credits orders by Shopify's
  * visit record beside Meta's own purchases; the campaign comparison and the reports show the same
  * campaign. Meta itself can't run in e2e: the live report says so and nothing else waits on it.
  */
@@ -44,9 +44,7 @@ async function seedOrder(ws: string, storeId: string, id: string, on: string, pr
   );
 }
 
-test("the Advertising area sets the store's sales against the spend, compares it with the week before, and shows each platform, campaign and report", async ({ page }) => {
-  // Its panels are the full dashboard's (lib/features.ts SIMPLE_HOME).
-  await fullDashboard(page);
+test("the Advertising area sets the store's sales against the spend and shows each platform, campaign and report", async ({ page }) => {
   const email = uniqueEmail("ads-panel");
   await signUp(page, email);
   const ws = await createWorkspace(page, "Ads Panel Co");
@@ -79,14 +77,15 @@ test("the Advertising area sets the store's sales against the spend, compares it
   const nav = page.getByRole("complementary").getByRole("navigation", { name: "App" });
   await expect(nav.getByRole("link", { name: "Advertising" })).toHaveAttribute("aria-current", "page");
 
-  // Spend against the week before: $70 now, $35 then, up 100%, and what was compared.
+  // Spend: $70 in these dates. The week before had $35: no change on it and no figure for it is shown.
   const spend = page.getByTestId("kpi-spend");
   await expect(spend.getByTestId("kpi-spend-value")).toHaveText("$70.00");
-  await expect(spend).toContainText("▲ 100%");
-  await expect(spend.getByTestId("kpi-spend-compared")).toContainText("$35.00");
-  // Meta's own purchases, named as Meta's count: 7 both weeks.
+  await expect(spend).not.toContainText("100%");
+  await expect(spend).not.toContainText("$35.00");
+  await expect(page.getByTestId("kpi-spend-compared")).toHaveCount(0);
+  // Meta's own purchases, named as Meta's count.
   await expect(page.getByTestId("kpi-purchases")).toContainText("Platforms' own count");
-  await expect(page.getByTestId("kpi-purchases")).toContainText("■ 0%");
+  await expect(page.getByTestId("kpi-purchases")).not.toContainText("0%");
 
   await expect(page.getByTestId("kpi-mer")).toContainText("2.29×");
   // Advertising Performance: Meta's card from its own API, its campaign among the top ones, and what's left of the
@@ -102,7 +101,7 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(page.getByTestId("profit-after-spend")).toContainText("$210.00");
   await expect(page.getByTestId("profit-after-products")).toHaveCount(0);
 
-  // Shopify attribution: $160 of sales for $70 of ads: 2.29 per unit of spend; $35 of ads per order. Before: $50 for $35, $35 per order.
+  // Shopify attribution: $160 of sales for $70 of ads: 2.29 per unit of spend; $35 of ads per order.
   await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Shopify attribution" }).click();
   await expect(page).toHaveURL(/\/advertising\/attribution\?preset=custom/);
   const vs = page.getByTestId("ads-vs-sales");
@@ -110,7 +109,7 @@ test("the Advertising area sets the store's sales against the spend, compares it
   await expect(vs).toContainText("$160.00");
   await expect(vs).toContainText("2.29×");
   await expect(vs).toContainText("$35.00");
-  await expect(vs).toContainText("before: 1.43×");
+  await expect(vs).not.toContainText("before");
   // Shopify credits the order from the Facebook ad to Meta: 1 order, $100, 1.43 per unit of Meta's spend; Meta's own count says 7 purchases worth $280.
   const meta = page.getByTestId("ads-attribution-meta");
   await expect(meta).toContainText("$100.00");
@@ -133,12 +132,12 @@ test("the Advertising area sets the store's sales against the spend, compares it
   // Meta itself can't be asked here (no Meta app in e2e): the live report says it couldn't be loaded instead of breaking the page.
   await expect(page.getByRole("region", { name: "Meta Ads report" })).toContainText("load the Meta Ads report");
 
-  // Every campaign side by side, with its change on the same whole days.
+  // Every campaign side by side.
   await page.getByRole("navigation", { name: "Advertising" }).getByRole("link", { name: "Campaign comparison" }).click();
   const row = page.getByTestId("campaign-row").filter({ hasText: "Spring" });
   await expect(row).toContainText("$70.00");
   await expect(row).toContainText("Shop ads");
-  await expect(row).toContainText("▲ 100%");
+  await expect(row).not.toContainText("▲");
   await expect(row).toContainText("Active");
   // Its budget as the last sync stored it; Meta has no campaign type.
   await expect(row.getByTestId("campaign-budget")).toHaveText("$10.00 a day");
@@ -222,8 +221,6 @@ test("a real Google Ads account's campaigns show Google's type, delivery and bud
 });
 
 test("trend charts group by week and month, the week presets run Monday to Sunday, and the Advertising pages print", async ({ page }) => {
-  // Its panels are the full dashboard's (lib/features.ts SIMPLE_HOME).
-  await fullDashboard(page);
   const email = uniqueEmail("ads-periods");
   await signUp(page, email);
   const ws = await createWorkspace(page, "Ads Periods Co");

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { systemDb, withTenant } from "@app/db";
+import { addDays } from "@app/shared";
 import { collectionSales } from "@app/core/reports";
 import { clean, createStore, createWorkspace, setup, signIn, teardown, type TestCtx } from "./helpers.js";
 
@@ -15,8 +16,8 @@ beforeEach(async () => clean(ctx));
 
 const SCOPES = ["read_orders", "read_products"];
 type Store = Awaited<ReturnType<typeof createStore>>;
+// 8 and 9 March, compared with the two days just before them.
 const RANGE = "preset=custom&from=2026-03-08&to=2026-03-09";
-const AGAINST = "compare=custom&cfrom=2026-03-01&cto=2026-03-02";
 
 interface Line {
   product: string | null;
@@ -96,10 +97,10 @@ async function trade(store: Store) {
     data: { workspaceId: store.workspaceId, storeId: store.id, orderId: o1.id, shopifyId: "o1-refund", localDay: "2026-03-09", happenedAt: new Date("2026-03-09T10:00:00Z"), actionType: "return", lineType: "product", lineItemShopifyId: "o1-0", quantity: 1, amount: -17.5, discount: 0, tax: 0 },
   });
   // The dates compared with: one tee.
-  await seedOrder(store, "o0", "2026-03-01T12:00:00Z", [{ product: "tee", qty: 1, price: 20 }]);
+  await seedOrder(store, "o0", "2026-03-06T12:00:00Z", [{ product: "tee", qty: 1, price: 20 }]);
 }
 
-const get = (headers: Record<string, string>, ws: string, storeId: string, qs = `${RANGE}&${AGAINST}`) =>
+const get = (headers: Record<string, string>, ws: string, storeId: string, qs = RANGE) =>
   ctx.app.inject({ method: "GET", url: `/workspaces/${ws}/stores/${storeId}/analytics/collections/sales?${qs}`, headers });
 
 describe("sales by collection (GET .../analytics/collections/sales)", () => {
@@ -110,7 +111,7 @@ describe("sales by collection (GET .../analytics/collections/sales)", () => {
     const res = await get(a.headers, ws, store.id);
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json();
-    expect(body).toMatchObject({ complete: true, baseline: true, range: { from: "2026-03-08", to: "2026-03-09" }, previous: { from: "2026-03-01", to: "2026-03-02", compare: "custom" }, total: 3 });
+    expect(body).toMatchObject({ complete: true, baseline: true, range: { from: "2026-03-08", to: "2026-03-09" }, previous: { from: "2026-03-06", to: "2026-03-07" }, total: 3 });
     expect(body.items.map((c: { title: string }) => c.title)).toEqual(["Summer", "Sale", "Home"]);
     const [summer, sale, home] = body.items;
     // Tee 2 × 20 less 5, Hat 10, o5's tee sold and cancelled, one tee refunded the next day.
@@ -125,15 +126,16 @@ describe("sales by collection (GET .../analytics/collections/sales)", () => {
     // The gift is in no collection; Old's collections were never read: neither is guessed.
     expect(body.none).toMatchObject({ netSales: 8, units: 1, orders: 1 });
     expect(body.unknown).toMatchObject({ netSales: 7, units: 1, orders: 1 });
-    // Against 1 March: one tee in Summer and Sale, nothing in Home (no change worked out from 0).
+    // Against 6 and 7 March: one tee in Summer and Sale, nothing in Home (no change worked out from 0).
     expect(summer.previous).toEqual({ netSales: 20, units: 1, orders: 1 });
     expect(summer.deltas).toEqual({ netSales: 0.375, units: 1, orders: 1 });
     expect(home.previous).toEqual({ netSales: 0, units: 0, orders: 0 });
     expect(home.deltas).toEqual({ netSales: null, units: null, orders: null });
     expect(body.totals.previous).toEqual({ netSales: 20, units: 1, orders: 1 });
 
-    // The 9th alone: only the refund, a negative sale of Summer and Sale, and no order.
-    const ninth = (await get(a.headers, ws, store.id, "preset=custom&from=2026-03-09&to=2026-03-09&compare=custom&cfrom=2026-03-01&cto=2026-03-01")).json();
+    // The 9th alone, against a day only the tee sold on: only the refund, a negative sale of Summer and Sale, and no order.
+    const fresh = await systemDb.store.findUniqueOrThrow({ where: { id: store.id } });
+    const ninth = await withTenant(ws, (tx) => collectionSales(tx, { ws, storeId: store.id }, fresh, { range: { from: "2026-03-09", to: "2026-03-09" }, previous: { from: "2026-03-06", to: "2026-03-06" } }));
     expect(ninth.items.map((c: { title: string; netSales: number; units: number; orders: number }) => [c.title, c.netSales, c.units, c.orders])).toEqual([
       ["Sale", -17.5, -1, 0],
       ["Summer", -17.5, -1, 0],
@@ -145,7 +147,7 @@ describe("sales by collection (GET .../analytics/collections/sales)", () => {
     const { a, ws, store } = await owner();
     await catalog(store);
     await seedOrder(store, "now", "2026-03-08T12:00:00Z", [{ product: "mug", qty: 2, price: 10 }, { product: "hat", qty: 2, price: 10 }]);
-    await seedOrder(store, "then", "2026-03-01T12:00:00Z", [{ product: "tee", qty: 1, price: 30 }]);
+    await seedOrder(store, "then", "2026-03-06T12:00:00Z", [{ product: "tee", qty: 1, price: 30 }]);
     const body = (await get(a.headers, ws, store.id)).json();
     expect(body.items.map((c: { title: string; netSales: number }) => [c.title, c.netSales])).toEqual([
       ["Home", 20],
@@ -155,26 +157,31 @@ describe("sales by collection (GET .../analytics/collections/sales)", () => {
     expect(body.items[2]).toMatchObject({ previous: { netSales: 30, units: 1, orders: 1 }, deltas: { netSales: -1, units: -1, orders: -1 } });
   });
 
-  it("compares with the year before only when those orders are imported; never a made-up change", async () => {
+  it("compares with the days before only when their orders are imported; never a made-up change", async () => {
     const { a, ws, store } = await owner();
-    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date("2026-03-01T00:00:00Z") } });
+    // Shopify shared orders from the 7th on: the 6th, the first day compared with, isn't in.
+    await systemDb.store.update({ where: { id: store.id }, data: { ordersHistoryFrom: new Date("2026-03-07T00:00:00Z") } });
     await catalog(store);
     await trade(store);
-    const res = await get(a.headers, ws, store.id, `${RANGE}&compare=year`);
+    await systemDb.order.deleteMany({ where: { shopifyId: "o0" } });
+    const res = await get(a.headers, ws, store.id);
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json();
-    expect(body).toMatchObject({ complete: true, baseline: false, previous: { from: "2025-03-08", to: "2025-03-09", compare: "year" }, historyFrom: "2026-03-01" });
+    expect(body).toMatchObject({ complete: true, baseline: false, previous: { from: "2026-03-06", to: "2026-03-07" }, historyFrom: "2026-03-07" });
     expect(body.items[0]).toMatchObject({ title: "Summer", netSales: 27.5, previous: null, deltas: { netSales: null, units: null, orders: null } });
     expect(body.totals.previous).toBeNull();
   });
 
   it("answers a 366-day range against the 366 days before it, as the dashboard compares them", async () => {
-    // What the products page sends for a financial year with a 29 February in it: the days before
-    // have none, a day past the 12 months custom comparison dates may span (collectionDates.ts).
+    // What the products page sends for a financial year with a 29 February in it: the 366 days
+    // before have none, so they run a day past 12 months (collectionDates.ts).
     const { a, ws, store } = await owner();
-    const res = await get(a.headers, ws, store.id, "preset=custom&from=2023-07-01&to=2024-06-30&compare=previous");
+    const res = await get(a.headers, ws, store.id, "preset=custom&from=2023-07-01&to=2024-06-30");
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toMatchObject({ range: { from: "2023-07-01", to: "2024-06-30" }, previous: { from: "2022-06-30", to: "2023-06-30", compare: "previous" } });
+    expect(res.json()).toMatchObject({ range: { from: "2023-07-01", to: "2024-06-30" }, previous: { from: "2022-06-30", to: "2023-06-30" } });
+    // A preset by its name, as the page sends the dashboard's own: this week against the same days last week.
+    const week = (await get(a.headers, ws, store.id, "preset=wtd")).json();
+    expect(week.previous).toMatchObject({ from: addDays(week.range.from, -7), to: addDays(week.range.to, -7) });
   });
 
   it("withholds every figure until the dates' sales are all in", async () => {
@@ -258,7 +265,7 @@ describe("sales by collection (GET .../analytics/collections/sales)", () => {
     await seedProduct(storeB, "gift", "Gift", [{ id: "99", title: "Their collection" }]);
     await seedProduct(storeB, "mug", "Mug", [{ id: "12", title: "Their home" }]);
     await seedOrder(storeB, "b1", "2026-03-08T12:00:00Z", [{ product: "gift", qty: 3, price: 100 }, { product: "mug", qty: 1, price: 50 }]);
-    for (const qs of [`${RANGE}&${AGAINST}`, "preset=nonsense"]) {
+    for (const qs of [RANGE, "preset=nonsense"]) {
       expect((await get(a.headers, ws, storeB.id, qs)).statusCode).toBe(404);
       expect((await get(a.headers, wsB, storeB.id, qs)).statusCode).toBe(404);
     }

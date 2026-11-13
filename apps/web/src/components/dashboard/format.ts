@@ -80,7 +80,18 @@ export function fmtPeriod(p: { key: string; from: string; to: string }, g: Exclu
   return whole ? name : `${name} · ${fmtSpan(p.from, p.to)} only`;
 }
 
-const lastOfMonth = (day: string) => new Date(Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)), 0)).toISOString().slice(0, 10);
+/**
+ * A day, week or month of a small chart in as few words as say which: "Mon 9 Nov", "9–15 Nov",
+ * "Nov 2026". A month the dates picked cut short is named by the days of it they hold
+ * ("1–13 Nov 2026"), as a week always is.
+ */
+export function fmtPeriodShort(p: { key: string; from: string; to: string }, g: PeriodGranularity): string {
+  if (g === "day") return `${fmtWeekday(p.from)} ${fmtDay(p.from, { year: false })}`;
+  if (g === "month" && p.from.endsWith("-01") && p.to === lastOfMonth(p.from)) return fmtMonth(p.key, { short: true, year: true });
+  return fmtSpan(p.from, p.to, { year: g === "month" });
+}
+
+const lastOfMonth =(day: string) => new Date(Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)), 0)).toISOString().slice(0, 10);
 
 /** Money without cents, for labels on chart marks: "A$1,751". */
 export function fmtMoneyWhole(n: number, currency: string): string {
@@ -101,14 +112,6 @@ export function fmtRange(from: string, to: string): string {
 export function fmtClock(time: string): string {
   const [h = 0, m = 0] = time.split(":").map(Number);
   return new Intl.DateTimeFormat(undefined, { timeZone: "UTC", hour: "numeric", minute: "2-digit" }).format(new Date(Date.UTC(2026, 0, 1, h, m)));
-}
-
-/**
- * The dates the numbers are compared with: "16 Oct 2026 until 4:44 pm" while the dates picked are
- * still running (their comparison stops at the same time of day), otherwise as `fmtRange`.
- */
-export function fmtComparison(c: { from: string; to: string; until?: string }): string {
-  return c.until ? `${fmtRange(c.from, c.to)} until ${fmtClock(c.until)}` : fmtRange(c.from, c.to);
 }
 
 /** An instant shown in the store's time zone, e.g. "8 Mar, 3:30 pm". */

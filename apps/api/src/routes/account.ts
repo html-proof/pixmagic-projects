@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { systemDb, type User } from "@app/db";
-import { accountDeletionEmail, assertDeletable, detachUserAdGrants, env, logger, releaseAdLoginsWhere, revokeReleasedAdGrants, workspaceDeletionSummary, type WorkspaceDeletionSummary } from "@app/core";
+import { accountDeletionEmail, assertDeletable, detachUserAdGrants, env, logger, releaseAdLoginsWhere, revokeReleasedAdGrants, type WorkspaceDeletionSummary } from "@app/core";
 import { revokeZapierGrants } from "@app/core/zapier";
 import { accountPasswordProblem, EMAIL_CODE_RE, SIGN_IN_FAILED_EVENT } from "@app/shared";
 import { accessTokenFor, body, clientIp, HttpError, requireUser, sessionOf, sessionProvesAddress, type Ctx, type Deps } from "../context.js";
-import { CognitoError, type CognitoUser, type SignInMethod } from "../cognito.js";
+import { CognitoError, type CognitoUser, type SignInMethod } from "../authContract.js";
 import { cognitoUsernameKey, notifyEmailChanged, notifyMethodAdded, notifyMethodRemoved, notifyPasswordChanged, notifyTwoStepChanged, recordAuthEvent } from "../identity.js";
 import { endSessions, recordSession } from "../devices.js";
 import {
@@ -20,6 +20,9 @@ import {
 } from "../session.js";
 import type { App } from "../app.js";
 import { accountDeletion, checkDeletionCode, deletionConfirmation, runWorkspaceDeletion, sendDeletionCode, spendDeletionCode } from "../deletion.js";
+// The workspaces a person is the only owner of go with their account, once they have been shown
+// which: the Delete account dialog lists them (GET /auth/account/deletion) and sends their ids back.
+import { soleOwnedWorkspaces } from "../accountRemoval.js";
 import { limit, LIMITS } from "../rateLimit.js";
 import { cognitoFailure, enabledProviders, publicUser } from "./auth.js";
 
@@ -521,24 +524,6 @@ export function accountRoutes(app: App, deps: Deps) {
   });
 
   // ---------------- Deleting the account: a code emailed to the account's address (deletion.ts) ----------------
-
-  /**
-   * The workspaces `userId` is the only owner of, as their deletion would find them. They go with
-   * the account (a workspace with another owner keeps running without them), once the person has
-   * been shown which: the Delete account dialog lists them (GET /auth/account/deletion) and sends
-   * their ids back with the code.
-   */
-  async function soleOwnedWorkspaces(userId: string): Promise<WorkspaceDeletionSummary[]> {
-    const owned = await systemDb.membership.findMany({ where: { userId, role: "owner" }, select: { workspaceId: true }, orderBy: { createdAt: "asc" } });
-    const sole: WorkspaceDeletionSummary[] = [];
-    for (const m of owned) {
-      const others = await systemDb.membership.count({ where: { workspaceId: m.workspaceId, role: "owner", userId: { not: userId } } });
-      if (others) continue;
-      const summary = await workspaceDeletionSummary(m.workspaceId);
-      if (summary) sole.push(summary);
-    }
-    return sole;
-  }
 
   /** A workspace that goes with the account, as the dialog shows it. */
   const workspaceView = (w: WorkspaceDeletionSummary) => ({ id: w.id, name: w.name, stores: w.stores.map((s) => s.name ?? s.shopDomain), members: w.members, paidPlan: w.paidPlan, pendingPlan: w.pendingPlan });

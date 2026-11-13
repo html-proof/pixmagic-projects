@@ -16,7 +16,6 @@ import {
   waEncrypt,
   type FetchLike,
 } from "@app/core";
-import { smsDecrypt, smsEncrypt } from "@app/core/sms";
 import { testEnv } from "../../../test-support/env.js";
 
 /**
@@ -101,28 +100,8 @@ describe("rotating the token encryption key", () => {
     expect(waDecrypt(sid, "webhook", w.bodyEnc!)).toBe('{"event":"messages.upsert"}');
   });
 
-  it("re-encrypts Customer Messaging's numbers and texts and the invitations' links, so the old key can be removed", async () => {
+  it("re-encrypts the invitations' links, so the old key can be removed", async () => {
     const ws = await systemDb.workspace.create({ data: { name: "W" } });
-    const store = await systemDb.store.create({
-      data: { workspaceId: ws.id, shopDomain: "m.myshopify.com", grantedScopes: ["read_orders"], status: "active", timezone: "UTC", pixelIngestKey: "pk-m" },
-    });
-    const sid = store.id;
-    const base = { workspaceId: ws.id, storeId: sid };
-    // Customer Messaging: a contact (number, first name), a checkout's recovery link, a text waiting to
-    // go (its values and body), one sent already (both cleared) and a test number.
-    const contact = await systemDb.smsContact.create({ data: { ...base, phoneHash: "h", phoneEnc: smsEncrypt(sid, "phone", "+61400000002"), phoneMasked: "002", firstNameEnc: smsEncrypt(sid, "name", "Mia") } });
-    const checkout = await systemDb.smsCheckout.create({ data: { ...base, checkoutToken: "ct-1", recoveryUrlEnc: smsEncrypt(sid, "recovery", "https://m.myshopify.com/checkouts/ct-1/recover"), lastActivityAt: new Date() } });
-    const job = await systemDb.smsMessageJob.create({
-      data: { ...base, dedupeKey: "rule:r1:order:1", purpose: "automation", category: "transactional", sendAfter: new Date(), valuesEnc: smsEncrypt(sid, "values", '{"first_name":"Mia"}'), bodyEnc: smsEncrypt(sid, "body", "Hi Mia, your order is on its way") },
-    });
-    await systemDb.smsMessageJob.create({ data: { ...base, dedupeKey: "rule:r1:order:0", purpose: "automation", category: "transactional", sendAfter: new Date(), status: "delivered" } });
-    const testNumber = await systemDb.smsTestNumber.create({ data: { ...base, phoneHash: "t", phoneEnc: smsEncrypt(sid, "test_phone", "+61400000003"), phoneMasked: "003" } });
-    // A checkout goes by its updated_at (retention), and contacts are listed by it: re-encrypting must
-    // not make an old row look recently touched.
-    const longAgo = new Date("2026-01-01T00:00:00Z");
-    await systemDb.smsCheckout.updateMany({ where: { id: checkout.id }, data: { updatedAt: longAgo } });
-    await systemDb.smsContact.updateMany({ where: { id: contact.id }, data: { updatedAt: longAgo } });
-
     // Team & Access: an invitation, its link kept sealed so it can be copied again.
     const owner = await systemDb.user.create({ data: { email: "owner-k@example.com" } });
     const actor = { workspaceId: ws.id, userId: owner.id, role: "owner" as const };
@@ -130,50 +109,38 @@ describe("rotating the token encryption key", () => {
     const link = await invitationLink(actor, invitationId);
 
     useKeys(`${NEW},${OLD}`);
-    // The contact, the checkout, the waiting text, the test number and the invitation; the sent text has nothing left to re-encrypt.
-    expect(await reencryptAllTokens()).toBe(5);
+    expect(await reencryptAllTokens()).toBe(1);
     expect(await reencryptAllTokens()).toBe(0);
 
     useKeys(NEW);
-    const c = await systemDb.smsContact.findUniqueOrThrow({ where: { id: contact.id } });
-    expect([smsDecrypt(sid, "phone", c.phoneEnc), smsDecrypt(sid, "name", c.firstNameEnc!)]).toEqual(["+61400000002", "Mia"]);
-    expect(c.updatedAt).toEqual(longAgo);
-    const k = await systemDb.smsCheckout.findUniqueOrThrow({ where: { id: checkout.id } });
-    expect(smsDecrypt(sid, "recovery", k.recoveryUrlEnc!)).toBe("https://m.myshopify.com/checkouts/ct-1/recover");
-    expect(k.updatedAt).toEqual(longAgo);
-    const j = await systemDb.smsMessageJob.findUniqueOrThrow({ where: { id: job.id } });
-    expect([smsDecrypt(sid, "values", j.valuesEnc!), smsDecrypt(sid, "body", j.bodyEnc!)]).toEqual(['{"first_name":"Mia"}', "Hi Mia, your order is on its way"]);
-    const t = await systemDb.smsTestNumber.findUniqueOrThrow({ where: { id: testNumber.id } });
-    expect(smsDecrypt(sid, "test_phone", t.phoneEnc)).toBe("+61400000003");
     // The same link, copied again with the new key alone.
     expect((await systemDb.invitation.findUniqueOrThrow({ where: { id: invitationId } })).tokenSealed).toMatch(/^v2\./);
     expect(await invitationLink(actor, invitationId)).toEqual(link);
   });
 
-  it("a Customer Messaging value or invitation link no key opens fails the run at the end, after every other row", async () => {
+  it("an invitation link no key opens fails the run at the end, after every other row", async () => {
     const V3 = "3:" + Buffer.alloc(32, 3).toString("base64");
     const ws = await systemDb.workspace.create({ data: { name: "W" } });
-    const store = await systemDb.store.create({
-      data: { workspaceId: ws.id, shopDomain: "u.myshopify.com", grantedScopes: ["read_orders"], status: "active", timezone: "UTC", pixelIngestKey: "pk-u" },
-    });
-    const sid = store.id;
-    const base = { workspaceId: ws.id, storeId: sid };
-    // Under v1, which is then removed: a contact and an invitation's link nobody can read again.
-    const lost = await systemDb.smsContact.create({ data: { ...base, phoneHash: "h1", phoneEnc: smsEncrypt(sid, "phone", "+61400000004"), phoneMasked: "004" } });
+    // Under v1, which is then removed: an invitation's link nobody can read again.
     const owner = await systemDb.user.create({ data: { email: "owner-u@example.com" } });
     const actor = { workspaceId: ws.id, userId: owner.id, role: "owner" as const };
     const { invitationId } = await createTeamInvitation(actor, { email: "lee@example.com", role: "admin", permissions: [] }, { mailer: memoryMailer() });
-    // Under v2, still there: another contact.
+    // Under v2, still there: a store's token.
     useKeys(NEW);
-    const kept = await systemDb.smsContact.create({ data: { ...base, phoneHash: "h2", phoneEnc: smsEncrypt(sid, "phone", "+61400000005"), phoneMasked: "005" } });
+    const store = await systemDb.store.create({
+      data: { workspaceId: ws.id, shopDomain: "u.myshopify.com", grantedScopes: ["read_orders"], status: "active", timezone: "UTC", pixelIngestKey: "pk-u" },
+    });
+    await systemDb.store.update({
+      where: { id: store.id },
+      data: encryptTokenFields(store.id, { accessToken: "shpat_u", scopes: ["read_orders"], accessTokenExpiresAt: null, refreshToken: null, refreshTokenExpiresAt: null }),
+    });
 
     useKeys(`${V3},${NEW}`);
-    // The parts that failed name what they did rewrite: the other contact.
-    await expect(reencryptAllTokens()).rejects.toThrow(/but Customer Messaging data, invitation links failed: 1 Customer Messaging row\(s\) could not be re-encrypted .*; 1 rows were; 1 invitation link\(s\) could not be re-encrypted; 0 were/);
+    // The part that failed is named, and the run says what it did rewrite: the store's token.
+    await expect(reencryptAllTokens()).rejects.toThrow(/re-encrypted 1 rows, but invitation links failed: 1 invitation link\(s\) could not be re-encrypted; 0 were/);
     useKeys(V3);
-    expect(smsDecrypt(sid, "phone", (await systemDb.smsContact.findUniqueOrThrow({ where: { id: kept.id } })).phoneEnc)).toBe("+61400000005");
+    expect(await getAccessToken(await systemDb.store.findUniqueOrThrow({ where: { id: store.id } }), memoryCoord())).toBe("shpat_u");
     // Nothing unreadable was written over.
-    expect((await systemDb.smsContact.findUniqueOrThrow({ where: { id: lost.id } })).phoneEnc).toMatch(/^v1\./);
     expect((await systemDb.invitation.findUniqueOrThrow({ where: { id: invitationId } })).tokenSealed).toMatch(/^v1\./);
   });
 

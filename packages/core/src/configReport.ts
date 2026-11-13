@@ -7,11 +7,9 @@
  * setting names only: never a value, secret or not.
  */
 import type { AdProvider } from "@app/shared";
-import type { OAuthProvider } from "@app/shared/email";
 import { adsConfigured, adsRestricted } from "./adConnections/config.js";
 import { appSecretVar } from "./apps.js";
-import { emailOAuthConfigured } from "./email/oauth.js";
-import { env, switchedOn } from "./env.js";
+import { env } from "./env.js";
 import { logger } from "./logger.js";
 import { zapierConfig } from "./zapier/config.js";
 
@@ -46,12 +44,10 @@ export interface ConfigReport {
     /** Whether the functions reach the service (the cron's "config" action asks it; absent elsewhere). */
     service?: { reachable: boolean; version: string | null };
   };
-  /** The email integrations ("Connect Gmail", "Connect Outlook"), and Resend for the app's own email. */
-  email: Record<OAuthProvider, boolean> & { resend: boolean };
-  /** Sign-in: the Cognito pool and app client, "Continue with Google", Cognito's passwordless codes, and the app's emailed code after the password. */
-  auth: { cognito: boolean; google: boolean; emailOtp: boolean; loginCode: boolean; loginCodeExempt: number };
-  /** Customer Messaging: the platform's mode (off | sandbox | live), the marketing switch, and whether the delivery events' configuration set and a shared sender are set. */
-  sms: { mode: string; provider: string; marketing: boolean; configurationSet: boolean; sharedSender: boolean; twilio: boolean };
+  /** Resend, for the app's own email. */
+  email: { resend: boolean };
+  /** Sign-in: "Continue with Google" (the app's own client), passwordless emailed codes, and the emailed code after the password. */
+  auth: { google: boolean; emailOtp: boolean; loginCode: boolean; loginCodeExempt: number };
   /** Zapier (docs/zapier.md): its OAuth client fully set up (id, secret, redirect URI), and whether Connect has an invite link to open. */
   zapier: { configured: boolean; inviteUrl: boolean };
   credentials: ProviderCredentials[];
@@ -130,8 +126,6 @@ export function providerCredentials(vars: Vars = process.env): ProviderCredentia
       'Google Ads and AdSense say "Coming soon" and their connections stop syncing',
     ),
     whatsapp,
-    pair("Gmail (email sending)", "EMAIL_GOOGLE_CLIENT_ID", "EMAIL_GOOGLE_CLIENT_SECRET", "Connect Gmail says it isn't set up"),
-    pair("Outlook (email sending)", "EMAIL_MICROSOFT_CLIENT_ID", "EMAIL_MICROSOFT_CLIENT_SECRET", "Connect Outlook says it isn't set up"),
     // bizinsights' own OAuth client for its Zapier app (docs/zapier.md): the id is public, the secret is the one entered in Zapier too.
     pair("Zapier", "ZAPIER_CLIENT_ID", "ZAPIER_CLIENT_SECRET", "Zapier can't connect to bizinsights (its endpoints answer not_configured) and Settings says Zapier isn't set up yet"),
   ];
@@ -176,18 +170,15 @@ export function configReport(): ConfigReport {
       embeddedSignupNeeds: embeddedSignupNeeds(),
       webhookVerifyToken: !!e.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
     },
-    email: { ...emailOAuthConfigured(), resend: !!e.RESEND_API_KEY },
+    email: { resend: !!e.RESEND_API_KEY },
     auth: {
-      cognito: !!e.COGNITO_USER_POOL_ID && !!e.COGNITO_CLIENT_ID,
-      // As the sign-in pages are told (apps/api routes/auth.ts enabledProviders): needs the pool's domain too.
-      google: !!e.COGNITO_DOMAIN && e.COGNITO_IDENTITY_PROVIDERS.split(",").some((p) => p.trim() === "Google"),
-      emailOtp: e.COGNITO_EMAIL_OTP === "1",
+      // As the sign-in pages are told (apps/api routes/auth.ts enabledProviders).
+      google: !!e.GOOGLE_SIGNIN_CLIENT_ID && !!e.GOOGLE_SIGNIN_CLIENT_SECRET,
+      emailOtp: e.AUTH_EMAIL_OTP === "1",
       loginCode: e.AUTH_LOGIN_EMAIL_CODE === "1",
       // How many addresses skip that code (never which).
       loginCodeExempt: e.AUTH_LOGIN_CODE_EXEMPT.split(",").filter((a) => a.trim()).length,
     },
-    // twilio: both of Twilio's settings are there (never their values).
-    sms: { mode: e.SMS_MODE, provider: e.SMS_PROVIDER, marketing: switchedOn(e.SMS_MARKETING_ENABLED), configurationSet: !!e.SMS_CONFIGURATION_SET.trim(), sharedSender: !!e.SMS_SHARED_SENDER.trim(), twilio: !!e.TWILIO_ACCOUNT_SID.trim() && !!e.TWILIO_AUTH_TOKEN.trim() },
     zapier: { configured: zapierConfig().configured, inviteUrl: zapierConfig().settings.ZAPIER_INVITE_URL },
     credentials,
     halfConfigured: credentials.filter(isHalf).map((c) => c.provider),

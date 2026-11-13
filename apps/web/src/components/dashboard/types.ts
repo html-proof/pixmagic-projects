@@ -2,7 +2,7 @@
 import type { AdCoverage, AdProvider, AdSeriesDay, AdsenseReportLevel, AdsenseReportTotals, AdsenseSeriesDay, AdsenseTotals, AdSpendProvider, AdsVsSales, AdTotals, CampaignStatusGroup } from "@app/shared/ads";
 import type { AdPlatformSource, AdsFromShopify } from "@app/shared/adsFromShopify";
 import type { HistoryAccess } from "@app/shared/capabilities";
-import type { CompareMode } from "@app/shared/dates";
+import type { DatePreset } from "@app/shared/dates";
 import type { CustomCategory, ExpenseTotals } from "@app/shared/expenses";
 import type { ProfitCost } from "@app/shared/profit";
 import type { FunnelFilter, FunnelInsight, FunnelTransition, SegmentFunnel } from "@app/shared/funnel";
@@ -130,8 +130,8 @@ export interface SalesOverview {
     }
   >;
   /**
-   * The dates compared with (`Overview.previous`), day by day: the simple Home draws them as a line
-   * under the bars, day i beside day i of the range. Null when they weren't imported; `totalSales`
+   * The dates compared with (`Overview.previous`), day by day: the Sales page's Sales by day draws them as a
+   * line over the bars, day i beside day i of the range. Null when they weren't imported; `totalSales`
    * as `series`' (Team & Access); absent from answers of older releases.
    */
   previousSeries?: Array<{ day: string; netSales: number; totalSales?: number }> | null;
@@ -626,14 +626,15 @@ export interface Overview {
   store: OverviewStore;
   /** While the store is in error: why Shopify stopped the sync (see syncProblem in the API). */
   syncProblem?: "shop_unavailable" | "shop_gone" | "shop_locked" | "access" | "not_approved" | "other" | null;
+  /** The dates as they were asked for ("wtd", "custom"…): `range` is what they came to. */
+  preset?: DatePreset;
   range: { from: string; to: string };
   /**
-   * What the range is compared with (`Comparison` in @app/shared): `until` while the range is still
-   * running; `compare`, how it was chosen (the period before, the previous year or dates picked);
-   * `imported` false when the store's imported orders don't reach back to it, so the order figures
-   * aren't compared ("No earlier data").
+   * What the range is compared with, the period just before it (`Comparison` in @app/shared):
+   * `until` while the range is still running; `imported` false when the store's imported orders
+   * don't reach back to it, so the order figures aren't compared ("No earlier data").
    */
-  previous: { from: string; to: string; until?: string; compare?: CompareMode; imported?: boolean };
+  previous: { from: string; to: string; until?: string; imported?: boolean };
   /** The store's today (YYYY-MM-DD). */
   today: string;
   /**

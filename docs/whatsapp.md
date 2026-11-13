@@ -108,7 +108,25 @@ On-demand in Sydney, from AWS's price list (2026-10-25), before GST:
 | Logs (errors and warnings only), the DB-init function, SQS | cents |
 | **Total** | **~US$19** |
 
-**Production runs on Fargate Spot** since 2026-11-06 (the owner's yes, change 5 of
+**Production's service is on again since 2026-11-13**: the owner asked for it back the day after it
+went off, the variable below was deleted and the next Deploy to AWS started the task. The switch
+itself stays. **It was switched off on 2026-11-12** (the owner's cost recommendations of that
+day, item 5): the repository variable `AWS_WHATSAPP=off` makes every Deploy to AWS pass
+`-c whatsapp=off`, which leaves the ECS service with no task (the Fargate charge stops; the
+namespace, secrets, queue, tables and the `evolution` database with its saved sessions all stay).
+Checked first: no message had gone through the `whatsapp` queue since 2026-10-30 (27 on 29 and 30
+October, the tests after release 131), and WhatsApp isn't offered to App Store workspaces
+(`APP_STORE_MODULES`). While the variable is `off` the functions get no `EVOLUTION_API_URL`, so the page says
+"WhatsApp is switched off on bizinsights at the moment" above every tab (its status reads
+"Switched off"), connecting (QR or Cloud API) and every other button that needs the service
+answers the same (the API's 503 `provider_not_configured`, worded in
+`apps/web/src/components/whatsapp/waErrors.ts`: until 2026-11-13 those read as an outage, "We
+can't reach bizinsights right now. We'll keep trying."), the sweep skips the service, and the
+`whatsapp-service-*` alarms don't exist. **Back on:** delete the variable
+(`gh variable delete AWS_WHATSAPP`) and run Deploy to AWS on `main`; linked phones reconnect from
+the saved sessions.
+
+**When it runs, it runs on Fargate Spot** since 2026-11-06 (the owner's yes, change 5 of
 [aws-migration/AWS_MIGRATION_PLAN.md](aws-migration/AWS_MIGRATION_PLAN.md)): `whatsapp.spot: true` in
 `infra/cdk/lib/config.ts`. AWS doesn't publish Spot's rate in its price list (it states up to 70 %
 off); the bill shows the real figure about a week after the switch. When AWS reclaims the task (two
@@ -140,7 +158,7 @@ provider), so the running task moves at once.
 | Campaigns | `whatsapp/campaigns.ts` |
 | Settings, the test number, Pause all automation | `whatsapp/settings.ts` |
 | The 15-minute sweep, retention | `whatsapp/sweep.ts` |
-| Privacy (export, customers/redact, key rotation), erasing a store, the old tables | `whatsapp/privacy.ts`, `whatsapp/purge.ts`, `whatsapp/legacy.ts` |
+| Privacy (export, customers/redact, key rotation), erasing a store | `whatsapp/privacy.ts`, `whatsapp/purge.ts` |
 | Merchant API | `apps/api/src/routes/whatsapp.ts`; machine endpoints: `whatsappWebhook.ts` |
 | Jobs | `apps/worker/src/handlers/integrations.ts` (`runWhatsappJob`), `apps/worker/src/index.ts` (queue, sweep) |
 | Evolution's database (role, database, nightly prune) | `apps/aws/src/evolutionDb.ts`, the cron's `evolution-db` action |
@@ -454,6 +472,10 @@ now"); people with a role (admins, developers, testers) can connect their own bu
   A task that can't reach its database fails its migration at start: check the `evolution` database
   and role (re-run: invoke `insights-production-cron` with `{"action":"evolution-db"}`). Messages
   wait meanwhile; stores see "WhatsApp messages are waiting".
+- **`messaging-send-failures`**: the provider refused 25 or more WhatsApp messages in five minutes,
+  two periods in a row (the jobs function's `whatsapp send refused by the provider` line). The
+  provider, an account or a number has a problem; WhatsApp Automation's message history gives each
+  message's reason.
 - **A store logged out**: only its owner can link again (new QR code). Messages wait 48 hours.
 - **Upgrading Evolution**: test the new tag locally (`docker compose --profile whatsapp up -d
   evolution`, then the API tests' calls by hand), pin its digest in `whatsapp-stack.ts` and
@@ -481,17 +503,20 @@ now"); people with a role (admins, developers, testers) can connect their own bu
 
 ## The old tables
 
-Two earlier designs, both erase-only now (`whatsapp/legacy.ts`): customers/redact and shop/redact
-erase there, and a data request counts what they hold. No store connected through the 2026-10-25
-design, so it left no token at Nango, and erasing a store no longer asks Nango for one
-([ads-setup.md](ads-setup.md#leaving-nango), step (c)).
+**Dropped on 2026-11-12** (migration `20261112120000_drop_retired_tables`; the owner's yes that day,
+item 6 of the cost recommendations). They were the tables of two earlier designs, kept erase-only
+since 2026-10-26 so a rollback still found them:
 
-- 2026-10-10 to 2026-10-24: `whatsapp_*`, `order_trackings`, `order_tracking_events`,
+- 2026-10-10 to 2026-10-24: `whatsapp_*` (9 tables), `order_trackings`, `order_tracking_events`,
   `abandoned_checkouts`, `customer_reviews`.
-- 2026-10-25: `wa_*` (Meta Cloud API, the token at Nango).
+- 2026-10-25: `wa_*` (11 tables; Meta Cloud API, the token at Nango).
 
-**Next step, a follow-up pull request** once this release is the one a failed deploy rolls back to:
-drop both sets (after recording their row counts), remove their models and `legacy.ts`.
+Every one held 0 rows on production on 2026-10-29 and again on 2026-11-12 right before the drop
+(the cron's `counts` action), so no customer's or store's data went with them, and a manual
+snapshot of the database was taken first. With them went `whatsapp/legacy.ts` (customers/redact,
+shop/redact and the data request's count on those tables) and the page's note about a retired
+connection. WhatsApp Automation's own tables are `wapp_*`; the abandoned checkouts report is a
+dataset in `shopify_reports`, not the dropped table of that name.
 
 ## Testing
 

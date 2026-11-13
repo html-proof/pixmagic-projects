@@ -3,7 +3,7 @@ name: CI
 # GitHub-hosted minutes are limited (GitHub Free: 2,000 a month for private repositories), so CI runs
 # only what a change can affect:
 # - A push to main of only Markdown files or docs/ starts no run at all: nothing to test, and
-#   nothing for Deploy to AWS to ship (it starts only when a CI run on main succeeds).
+#   nothing for Deploy to iKorex to ship (it starts only when a CI run on main succeeds).
 # - A pull request of only those does start a run, because GitHub's merge block on main (branch
 #   protection: these three jobs must pass) waits for its checks to report. Its first job finds
 #   nothing to test and the other two skip, about a minute (tested job). The first job is required
@@ -61,7 +61,7 @@ env:
 # label list such as ["self-hosted","bizinsights-pc"] (the owner's Windows PC, while GitHub-hosted
 # jobs can't start). Pushes to main run on the PC's runner for main instead when SELF_HOSTED_MAIN_RUNNER
 # names it: its own account, which only main's code ever runs as, also runs the deploys
-# (aws-deploy.yml), and main never queues behind pull-request jobs (docs/aws-deployment.md).
+# (ikorex-deploy.yml), and main never queues behind pull-request jobs (docs/aws-deployment.md).
 # The PC has no Docker: Postgres and Mailpit run there as local processes on
 # free ports (5434 on that PC is the old deployment's database), and the runner ends them with the
 # job. Every `run:` is bash: on Windows, Git Bash (the first step of each job that runs commands
@@ -159,7 +159,7 @@ jobs:
             }
             let e2e = true;
             if (changed && !pr.labels.some((l) => l.name === "e2e")) {
-              const dirs = ["apps/web/", "apps/aws/", "packages/shared/", "infra/cognito-local/", "infra/postgres/"];
+              const dirs = ["apps/web/", "apps/aws/", "packages/shared/", "infra/postgres/"];
               const files = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "docker-compose.yml", ".github/workflows/ci.yml"];
               const hit = changed.find((p) => files.includes(p) || dirs.some((d) => p.startsWith(d)));
               e2e = hit !== undefined;
@@ -277,10 +277,13 @@ jobs:
       # What CI counts as code (its pass records), and the newer-push watcher started above.
       - name: Tests of the code key and the newer-push watcher
         run: node --test infra/runner/code-key.test.mjs infra/runner/stop-when-superseded.test.mjs
-      # The database copy to the iKorex server: its pinned host key and its checks (copy-db.sh itself
-      # runs against PostgreSQL in apps/aws/test/copyDb.test.ts).
-      - name: Tests of the iKorex database copy
-        run: node --test infra/ikorex/scripts/copy-db-lib.test.mjs
+      # The server's host key ship.sh pins (infra/ikorex/known_hosts) is the one in the
+      # administrator's guide.
+      - name: Test of the server's pinned host key
+        run: node --test infra/ikorex/scripts/host-key.test.mjs
+      # What the Uptime check workflow runs every 10 minutes (.github/workflows/uptime.yml).
+      - name: Tests of the uptime check
+        run: node --test infra/uptime/check.test.mjs
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -316,11 +319,6 @@ jobs:
         run: PGPASSWORD="${TEST_PG_PASSWORD:-app}" psql -h 127.0.0.1 -p "${TEST_PG_PORT:-5434}" -U app -d app -f infra/postgres/init.sql
       - run: pnpm typecheck
       - run: pnpm test
-      # The CDK app's tests (synthesizing every stack). Deploy to AWS runs them again before it deploys;
-      # here a pull request hears first that it breaks them (#275 merged green and its Deploy then
-      # failed on them, 2026-10-29: the functions' environment had outgrown its 4 KB).
-      - name: CDK unit tests
-        run: pnpm --filter @infra/cdk test
       # The integration tests and the migrations check after them (about 4 of this job's 7.5 minutes)
       # read only these: @app/api and @app/worker, the packages they build on (@app/core, @app/db,
       # @app/shared), the test setup, the role grants, the dependencies, the TypeScript base config,
@@ -400,8 +398,9 @@ jobs:
           script: |
             const sha = context.payload.pull_request?.head.sha ?? context.sha;
             await github.rest.repos.createCommitStatus({ ...context.repo, sha, state: "success", context: "ci/passed-integration", description: `key ${process.env.KEY}` });
-      # What Deploy to AWS ships: the UI (Next.js export) and the bundled function.
-      - name: Build the Lambda package (UI + function)
+      # What the server runs: the UI (Next.js export) and the bundled server (web, worker, admin),
+      # as `ship.sh pack` builds them.
+      - name: Build the server bundle (UI + server)
         run: pnpm --filter @app/aws build
       # For later runs on the same code (tested job): the key of the code this run tested (the pull
       # request merged into main), on the pull request's head. Failing to record only means a later
@@ -487,10 +486,26 @@ jobs:
           node-version: 24
           cache: ${{ vars.SELF_HOSTED_RUNNER == '' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
-      # The suite starts its own Cognito emulator and managed-login stand-in (playwright.config.ts).
+      # The suite starts its own stand-in for Google sign-in (playwright.config.ts).
+      # A Postgres whose first start fails is started again by Docker (restart: unless-stopped), and
+      # then skips the rest of its setup. `--wait` gives up if it looks between the two ("container
+      # ... is unhealthy" a second after "Started", with no reason given) and passes if it doesn't:
+      # main's runs for #379 and #380 (2026-11-12), where infra/postgres/init.sql failed on an empty
+      # database. So a restart fails this step every time, in the pull request that causes it, and
+      # any failure here prints the containers and their logs (no secrets: the development password).
       - name: Start dev stack (Postgres, Mailpit)
         if: vars.SELF_HOSTED_RUNNER == ''
-        run: docker compose up -d --wait postgres mailpit
+        run: |
+          status=0
+          docker compose up -d --wait postgres mailpit || status=$?
+          restarts=$(docker inspect --format '{{.RestartCount}}' "$(docker compose ps -aq postgres)" || echo unknown)
+          echo "docker compose up: exit $status. Postgres restarts: $restarts."
+          if [[ $status != 0 || $restarts != 0 ]]; then
+            docker compose ps -a || true
+            docker compose logs --timestamps postgres mailpit || true
+            echo "::error::Postgres did not start cleanly (docker compose up: exit $status, restarts: $restarts). Its log is above."
+            exit 1
+          fi
       # Without Docker: the same two as local processes, and every e2e port free (8789 and the
       # emulator ports may be a local demo on that PC).
       - name: Start dev stack without Docker (self-hosted runner)
@@ -498,7 +513,7 @@ jobs:
         run: |
           pgbin="${PG_BIN:-C:/Program Files/PostgreSQL/18/bin}"
           data="$(cygpath -m "$RUNNER_TEMP")/pg"
-          read -r pg mail app cognito login evo < <(node -e "const n=require('net');Promise.all([1,2,3,4,5,6].map(()=>new Promise(r=>{const s=n.createServer().listen(0,'127.0.0.1',()=>r(s))}))).then(ss=>{console.log(ss.map(s=>s.address().port).join(' '));ss.forEach(s=>s.close())})")
+          read -r pg mail app login evo < <(node -e "const n=require('net');Promise.all([1,2,3,4,5].map(()=>new Promise(r=>{const s=n.createServer().listen(0,'127.0.0.1',()=>r(s))}))).then(ss=>{console.log(ss.map(s=>s.address().port).join(' '));ss.forEach(s=>s.close())})")
           # A superuser password of its own and 127.0.0.1 only, as in the checks job (Throwaway Postgres).
           pw=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))")
           echo "::add-mask::$pw"
@@ -506,7 +521,7 @@ jobs:
           "$pgbin/initdb" -D "$data" -U app --pwfile="$RUNNER_TEMP/pgpw" --auth=scram-sha-256 -E UTF8 --locale=C --no-instructions >/dev/null
           "$pgbin/pg_ctl" -D "$data" -l "$data.log" -o "-p $pg -c listen_addresses=127.0.0.1 -c fsync=off" -w start >"$data.ctl.log" 2>&1 </dev/null
           node -e "require('child_process').spawn(process.execPath,['apps/web/e2e/mailpit-stub.mjs',process.argv[1]],{detached:true,stdio:'ignore',windowsHide:true}).unref()" "$mail"
-          { echo "TEST_PG_PORT=$pg"; echo "TEST_PG_PASSWORD=$pw"; echo "PGREQUIREAUTH=scram-sha-256"; echo "E2E_MAILPIT_URL=http://127.0.0.1:$mail"; echo "E2E_PORT=$app"; echo "E2E_COGNITO_PORT=$cognito"; echo "E2E_LOGIN_PORT=$login"; echo "E2E_EVOLUTION_PORT=$evo"; } >> "$GITHUB_ENV"
+          { echo "TEST_PG_PORT=$pg"; echo "TEST_PG_PASSWORD=$pw"; echo "PGREQUIREAUTH=scram-sha-256"; echo "E2E_MAILPIT_URL=http://127.0.0.1:$mail"; echo "E2E_PORT=$app"; echo "E2E_LOGIN_PORT=$login"; echo "E2E_EVOLUTION_PORT=$evo"; } >> "$GITHUB_ENV"
           # The runner uses browsers kept on the PC; the step below then only checks them, and
           # downloads only when Playwright moves to a new browser build (docs/aws-deployment.md).
           echo "PLAYWRIGHT_BROWSERS_PATH=${PW_BROWSERS:-C:\\ms-playwright}" >> "$GITHUB_ENV"

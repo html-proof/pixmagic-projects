@@ -1,13 +1,13 @@
 import { expect, test } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { createWorkspace, fullDashboard, insertStore, signUp, uniqueEmail } from "./helpers";
+import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Advertising with no ad account connected: the store's own Shopify orders stand in. The home card,
  * the Advertising overview and the Meta Ads page show the sales whose visit came from Facebook and
  * Instagram (Meta) or Google and YouTube (Google Ads), the tagged-ad part, the campaigns named in the
- * links and the change on the week before, each with the way to connect the platform for its spend.
+ * links, each with the way to connect the platform for its spend.
  * AdSense has nothing in the orders: its page still only offers to connect it.
  */
 
@@ -43,8 +43,6 @@ async function seedOrder(ws: string, storeId: string, id: string, on: string, pr
 }
 
 test("with no ad account connected, Advertising shows Meta's and Google's sales from the Shopify orders, and the way to connect each", async ({ page }) => {
-  // Its panels are the full dashboard's (lib/features.ts SIMPLE_HOME).
-  await fullDashboard(page);
   const email = uniqueEmail("ads-shopify");
   await signUp(page, email);
   const ws = await createWorkspace(page, "Ads From Shopify Co");
@@ -92,9 +90,9 @@ test("with no ad account connected, Advertising shows Meta's and Google's sales 
   await expect(page.getByTestId("advertising-not-connected").getByRole("link", { name: "Connect advertising accounts" })).toBeVisible();
   const meta = page.getByTestId("shopify-ads-meta");
   await expect(meta.getByTestId("ad-source-badge")).toHaveText("Shopify attribution");
-  // $140 against $70 the week before: up 100%. Of the store's $250, 56%.
+  // $140, of the store's $250: 56%. The week before had $70: no change on it is shown.
   await expect(meta.getByTestId("shopify-meta-sales-value")).toHaveText("$140.00");
-  await expect(meta.getByTestId("shopify-meta-sales")).toContainText("▲ 100%");
+  await expect(meta.getByTestId("shopify-meta-sales")).not.toContainText("100%");
   await expect(meta.getByTestId("shopify-meta-orders-value")).toHaveText("2");
   await expect(meta.getByTestId("shopify-meta-share-value")).toHaveText("56%");
   // The tagged-ad part, and the campaign its link named.

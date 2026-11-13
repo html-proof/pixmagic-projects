@@ -1,11 +1,6 @@
-// Email integrations and automation: the pure rules shared by the API and the UI (docs/email.md).
-// `@app/shared/email` (not re-exported from the root barrel, whose names it would collide with).
-export * from "./constants";
+// Email addresses as the app's own mail uses them (sign-in codes, invitations, alerts): validation,
+// normalization, masking, and text made safe for an HTML email. `@app/shared/email`.
 export * from "./address";
-export * from "./events";
-export * from "./conditions";
-export * from "./template";
-export * from "./sanitize";
-export * from "./dns";
-export * from "./network";
-export * from "./schemas";
+
+/** Text made safe to place in HTML (an email's body, an attribute value). */
+export const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");

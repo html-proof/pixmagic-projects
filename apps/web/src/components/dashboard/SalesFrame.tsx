@@ -14,12 +14,13 @@ import { closeView, openView, type Topic } from "./topics";
 // 2026-11-05): each of its entries opens its own tab, and the tabs move between them.
 //
 // Overview, Products, Customers and Orders & shipping are the dashboard's topics (?view=…), drawn
-// as pages of their own; Visitors, Ads, Profit & Loss and Profit sheet are the pages they always
-// were. A tab is shown to whoever the menu shows its page to, and moving between tabs keeps the
-// dates (the same URL parameters on every one of these pages).
+// as pages of their own; Visitors, Ads and Profit & Loss are the pages they always were (Profit &
+// Loss took the Profit sheet in, 13 Nov 2026, and draws its own sections' tabs instead of this row).
+// A tab is shown to whoever the menu shows its page to, and moving between tabs keeps the dates (the
+// same URL parameters on every one of these pages).
 // ---------------------------------------------------------------------------
 
-export type SalesTab = "overview" | "products" | "customers" | "orders" | "visitors" | "ads" | "profit" | "sheet";
+export type SalesTab = "overview" | "products" | "customers" | "orders" | "visitors" | "ads" | "profit";
 
 /** Which tab each dashboard topic sits under (stock isn't part of Sales: it has no tab). */
 const TAB_OF_TOPIC: Partial<Record<Topic, SalesTab>> = {
@@ -35,7 +36,7 @@ const TAB_OF_TOPIC: Partial<Record<Topic, SalesTab>> = {
 };
 export const salesTabOf = (t: Topic): SalesTab | null => TAB_OF_TOPIC[t] ?? null;
 
-/** The dates' parameters of the page shown (preset, from, to, compare…), without the open topic. */
+/** The dates' parameters of the page shown (preset, from, to), without the open topic. */
 function datesQuery(): string {
   const q = new URLSearchParams(window.location.search);
   q.delete("view");
@@ -56,8 +57,7 @@ export function useSalesTabs(): Tab[] {
     ...(sees("orders") ? [{ id: "orders" as const, label: "Orders & shipping", topic: "orders" as const }] : sees("shipping") ? [{ id: "orders" as const, label: "Orders & shipping", topic: "shipping" as const }] : []),
     ...(sees("shoppers") ? [{ id: "visitors" as const, label: "Visitors", href: "/funnel" }] : []),
     ...(sees("ads") ? [{ id: "ads" as const, label: "Ads", href: "/advertising" }] : []),
-    ...(sales && allowed("finance.breakdown") ? [{ id: "profit" as const, label: "Profit & Loss", href: "/profit" }] : []),
-    ...(sales ? [{ id: "sheet" as const, label: "Profit sheet", href: "/sheet" }] : []),
+    ...(sales ? [{ id: "profit" as const, label: "Profit & Loss", href: "/profit" }] : []),
   ];
 }
 

@@ -1,5 +1,5 @@
 "use client";
-import { ArrowUp, ChartColumn, Check, FileText, LayoutDashboard, Package, Settings, Users } from "lucide-react";
+import { ChartColumn, Check, FileText, LayoutDashboard, Package, Settings, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { BrandLogo, BrandMark } from "@/components/Brand";
 
@@ -18,8 +18,8 @@ const SLIDES: Array<{ headline: [string, string]; body: string }> = [
     body: "Total sales, orders, products and stock side by side, explained so anyone can act on them.",
   },
   {
-    headline: ["Compare any dates", "at a glance"],
-    body: "See each number next to the period before or the dates you pick, with the change worked out for you.",
+    headline: ["Any dates,", "at a glance"],
+    body: "Pick today, a week, a month or a whole year, and every figure on the page follows.",
   },
 ];
 
@@ -150,9 +150,9 @@ const NAV = [
 ];
 
 const STATS = [
-  { label: "Orders", value: "1,428", change: "8%" },
-  { label: "Products sold", value: "3,912", change: "11%" },
-  { label: "Avg. order", value: "$87.10", change: "4%" },
+  { label: "Orders", value: "1,428" },
+  { label: "Products sold", value: "3,912" },
+  { label: "Avg. order", value: "$87.10" },
 ];
 
 /**
@@ -187,21 +187,14 @@ function DashboardPreview() {
           <div className="flex min-w-0 flex-1 flex-col gap-3">
             <div className="auth-glass relative px-4 pt-3.5 pb-2">
               <p className="text-[12px] text-white/70">Total sales</p>
-              <p className="mt-1 flex items-baseline gap-2 text-[26px] font-semibold tracking-tight">
-                $124,380 <span className="text-[12px] font-medium text-[#7be3a8]">+ 12%</span>
-              </p>
+              <p className="mt-1 text-[26px] font-semibold tracking-tight">$124,380</p>
               <RevenueLine />
-              <span className="absolute -top-3.5 right-5 flex items-center gap-1 rounded-lg bg-[#24855a] px-2.5 py-1.5 text-[15px] font-semibold text-white shadow-[0_10px_24px_-8px_rgb(0_0_0/0.6)] ring-1 ring-white/15">
-                <ArrowUp size={15} strokeWidth={2.75} />
-                +12%
-              </span>
             </div>
             <div className="grid grid-cols-3 gap-3">
               {STATS.map((s) => (
                 <div key={s.label} className="auth-glass px-3 py-2.5">
                   <p className="text-[11px] text-white/70">{s.label}</p>
                   <p className="mt-0.5 text-[19px] font-semibold tracking-tight">{s.value}</p>
-                  <p className="text-[11px] text-[#7be3a8]">+ {s.change}</p>
                 </div>
               ))}
             </div>

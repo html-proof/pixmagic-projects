@@ -83,14 +83,14 @@ export default function GoogleAdsAnalyticsPage() {
   }
   const demo = !!a?.account.demo;
   const currency = a?.account.currency ?? store.currency;
-  const shown: Shown = a ? { range: a.range, previous: a.previous, timezone: a.account.timezone ?? store.timezone } : null;
+  const shown: Shown = a ? { range: a.range, timezone: a.account.timezone ?? store.timezone } : null;
   const types = [...new Set((a?.campaigns ?? []).map((c) => c.type).filter((t): t is string => !!t))];
   const statuses = [...new Set((a?.campaigns ?? []).map((c) => c.status).filter((s): s is string => !!s))];
   const manage = allowed("integrations.manage");
 
   return (
     <div className="space-y-4">
-      {/* The Advertising area's header: the dates and comparison, the account, a section's CSV, and Print or save as PDF. */}
+      {/* The Advertising area's header: the dates, the account, a section's CSV, and Print or save as PDF. */}
       <AdvertisingHeader
         title="Google Ads Analytics"
         icon={<GoogleIcon size={20} />}
@@ -114,7 +114,6 @@ export default function GoogleAdsAnalyticsPage() {
         }
         r={r}
         shown={shown}
-        current={!!a}
         actions={
           <>
             {choices.length > 1 && (
@@ -178,7 +177,7 @@ export default function GoogleAdsAnalyticsPage() {
                 : "Nothing has been stored for this account yet."}
             </Alert>
           )}
-          <OverviewSection current={a.overview.current} deltas={a.overview.deltas} previous={a.overview.previous} currency={currency} demo={demo} compared={a.overview.previous ? a.previous : null} />
+          <OverviewSection current={a.overview.current} currency={currency} demo={demo} />
           {a.campaigns ? (
             <CampaignsSection base={base} dates={`${dates}&connection=${encodeURIComponent(chosen!)}`} currency={currency} demo={demo} types={types} statuses={statuses} />
           ) : (

@@ -68,7 +68,7 @@ to the previous versions; an applied migration stays. To rerun the action (it is
 aws lambda invoke --function-name insights-production-cron:live --cli-binary-format raw-in-base64-out --cli-read-timeout 960 --payload '{"action":"migrate"}' out.json
 ```
 
-RDS keeps 14 days of point-in-time restore, so there is no separate backup step.
+RDS keeps 7 days of point-in-time restore, so there is no separate backup step.
 
 Still on an unmerged branch: `20261012000000_ads_completeness`; it ships with the merge that
 brings that code.

@@ -44,8 +44,8 @@ test("shows the shopping funnel, explains a stage, filters it and keeps the chec
   await page.goto(`/funnel?preset=custom&from=${DAY}&to=${DAY}`);
   await expect(page.getByRole("heading", { name: "Shopping Funnel", level: 1 })).toBeVisible();
   await expect(page.getByTestId("funnel-kpi-visited")).toContainText("from 6 browsers");
-  // 6 visits against 2: +200%.
-  await expect(page.getByTestId("funnel-kpi-visited")).toContainText("200%");
+  // The day before had 2 visits: no change on it is shown.
+  await expect(page.getByTestId("funnel-kpi-visited")).not.toContainText("200%");
   await expect(page.getByTestId("funnel-kpi-conversion")).toContainText("16.7%");
   // Visits per stage 6, 5, 3, 2, 1: product discovery → added to cart lost the most (2).
   await expect(page.getByTestId("funnel-transition-viewed_product")).toContainText("Largest drop-off");

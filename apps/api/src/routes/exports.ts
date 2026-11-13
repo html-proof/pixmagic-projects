@@ -83,7 +83,7 @@ export function exportRoutes(app: App, deps: Deps) {
     const q = querySchema.parse(c.req.query());
     const section = sectionOf(a.access, q);
     const { table, range, previous } = await sectionTable(ws, storeId, a.access, section, q);
-    return c.json({ section, label: EXPORT_SECTIONS[section].label, range, previous: { ...previous, compare: q.compare }, header: table.header, rows: table.rows });
+    return c.json({ section, label: EXPORT_SECTIONS[section].label, range, previous, header: table.header, rows: table.rows });
   });
 
   /**

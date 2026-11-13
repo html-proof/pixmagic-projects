@@ -12,7 +12,6 @@ import { normalizePhone } from "@app/shared";
 import { logger } from "../logger.js";
 import type { CustomersRedact } from "../shopifyPayloads.js";
 import { waDecrypt, waPhoneHash, waReencrypt, type WaSecretKind } from "./common.js";
-import { redactLegacyWhatsappCustomer } from "./legacy.js";
 
 const contactWhere = (storeId: string, by: { phoneHash?: string | null; customerId?: string | null }) => {
   const or = [...(by.phoneHash ? [{ phoneHash: by.phoneHash }] : []), ...(by.customerId ? [{ shopifyCustomerId: by.customerId }] : [])];
@@ -45,7 +44,6 @@ export async function redactWhatsappCustomer(store: Pick<Store, "id">, p: Custom
   // Automation runs name orders, not people: the orders Shopify asked to redact lose theirs too.
   const orders = (p.orders_to_redact ?? []).map((id) => `order:${id}`);
   if (orders.length) erased += (await systemDb.wappAutomationRun.deleteMany({ where: { storeId: store.id, subjectKey: { in: orders } } })).count;
-  erased += await redactLegacyWhatsappCustomer(store, p);
   return erased;
 }
 

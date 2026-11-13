@@ -25,7 +25,6 @@ import { api, fmtMoney, liveDataChanged } from "@/lib/api";
 import { checkPill } from "./ShopifyCheck";
 import { freshnessPill } from "./StoreHeader";
 import { fmtRange } from "./format";
-import { Change } from "./Narrative";
 import { Dot, Panel } from "./Primitives";
 import { salesLinesOf } from "./redacted";
 import type { Overview } from "./types";
@@ -119,7 +118,6 @@ function BreakdownCard({ ov, currency, saved }: { ov: Overview; currency: string
   const uid = useId();
   const s = ov.modules.sales_overview!;
   const now = salesLinesOf(s.current);
-  const before = salesLinesOf(s.previous);
   const [base, setBase] = useState<Draft>(() => draftOf(saved));
   const [draft, setDraft] = useState<Draft>(() => draftOf(saved));
   const [showDetails, setShowDetails] = useState(false);
@@ -136,11 +134,8 @@ function BreakdownCard({ ov, currency, saved }: { ov: Overview; currency: string
   const custom = customSales(now, selection);
   const official = now.totalSales;
   const difference = differenceFromShopify(now, selection);
-  const customBefore = before ? customSales(before, selection) : null;
-  const customDelta = customBefore === null || customBefore === 0 ? null : (custom - customBefore) / Math.abs(customBefore);
   const name = nameOf(draft);
   const standard = isStandard(selection);
-  const versus = ov.previous.imported === false ? null : `vs ${fmtRange(ov.previous.from, ov.previous.to)}`;
   const fresh = freshnessPill("live", ov.freshness, Date.now());
   const check = checkPill(ov.check, Date.now());
 
@@ -214,12 +209,8 @@ function BreakdownCard({ ov, currency, saved }: { ov: Overview; currency: string
       }
     >
       <div className="grid gap-3 sm:grid-cols-3">
-        <Figure testId="breakdown-shopify-total" label="Shopify total sales" badge={<span className={`${chip} bg-good/10 text-good`}>Shopify&apos;s figure</span>} value={money(official)}>
-          {versus ? <><Change value={s.deltas.totalSales ?? null} /> {versus}</> : "No earlier data to compare"}
-        </Figure>
-        <Figure testId="breakdown-custom" label="Custom sales" badge={<span className={`${chip} bg-accent/10 text-accent`} data-testid="breakdown-mode">{standard ? "Shopify standard" : name}</span>} value={money(custom)}>
-          {versus && customBefore !== null ? <><Change value={customDelta} /> {versus}</> : versus ? "—" : "No earlier data to compare"}
-        </Figure>
+        <Figure testId="breakdown-shopify-total" label="Shopify total sales" badge={<span className={`${chip} bg-good/10 text-good`}>Shopify&apos;s figure</span>} value={money(official)} />
+        <Figure testId="breakdown-custom" label="Custom sales" badge={<span className={`${chip} bg-accent/10 text-accent`} data-testid="breakdown-mode">{standard ? "Shopify standard" : name}</span>} value={money(custom)} />
         <Figure testId="breakdown-difference" label="Difference" value={money(difference)}>
           {difference === 0 ? "Custom sales is Shopify's total sales." : "Shopify's total sales less Custom sales: the lines turned off."}
         </Figure>

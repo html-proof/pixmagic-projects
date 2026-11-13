@@ -10,7 +10,6 @@ import { FOLD_DETAIL } from "@/lib/features";
 import { SECTION_LABEL, STEP_LABEL } from "./Funnel";
 import { fmtTimes, hourRange, plural, weekdayName } from "./format";
 import { Icon } from "./Icons";
-import { comparedOnWholeDays } from "./Narrative";
 import { Panel } from "./Primitives";
 import { asSalesDays } from "./redacted";
 import type { Topic } from "./topics";
@@ -26,12 +25,10 @@ type Terms = Array<[string, ReactNode]>;
 
 const TERMS: Record<Topic, Terms> = {
   overview: [
-    ["Needs attention", "Down 10% or more on the dates compared with, more than 10% of sales refunded or cancelled, something sold out, or an order waiting over 3 days to ship."],
-    ["Keep an eye on", "Down a little (less than 10%), refunds between 5% and 10% of sales, something running low, or orders waiting to ship."],
-    ["Looks good", "Up or level on the dates compared with, refunds at 5% of sales or less, nothing low or sold out, nothing waiting to ship."],
-    ["For your info", "Facts with no good or bad, like your best seller, or numbers with nothing earlier to compare with."],
-    ["What it's compared with", "You choose beside the dates. Previous period: the same number of days just before (last 30 days against the 30 days before that, last month against the whole month before). Previous year: the same dates a year earlier. Or pick dates of your own. The menu shows the dates compared with, as Shopify's comparison chip does: the changes match Shopify's only when both show the same dates. While the dates include today, the comparison is counted up to the same time of day, as Shopify does: today until 4 pm against yesterday until 4 pm."],
-    ["No earlier data", "Shown instead of a change when the dates compared with reach back before what bizinsights has: the orders Shopify shared (without access to all orders, only the 60 days before the first import), visits since the bizinsights pixel was added, and ad figures from 90 days before each ad account was connected. A change against earlier dates would read as a drop or a rise that never happened."],
+    ["Needs attention", "More than 10% of sales refunded or cancelled, something sold out, or an order waiting over 3 days to ship."],
+    ["Keep an eye on", "Refunds between 5% and 10% of sales, something running low, or orders waiting to ship."],
+    ["Looks good", "Refunds at 5% of sales or less, nothing low or sold out, nothing waiting to ship."],
+    ["For your info", "Facts with no good or bad, like your best seller."],
   ],
   sales: [
     ["Same as Shopify", "Every sales figure here is worked out from Shopify's own sales records, the way Shopify's reports do, so the same dates show the same numbers in both. Test orders aren't counted."],
@@ -46,9 +43,8 @@ const TERMS: Record<Topic, Terms> = {
     ["Average order value", "Sales after discounts divided by the number of orders: what a typical order is worth."],
     ["Items sold", "Items sold less items returned. Two mugs in one order count as two."],
     ["Shipping and taxes", "Collected on top of your prices and passed on or spent on postage: part of total sales, not of net sales."],
-    ["▲ ▼ and what they compare with", "Each number is compared with the dates chosen beside the dates picked (the period just before unless you change it); while the dates include today, only up to the same time of day, so a day still running isn't measured against a whole one. ▲ is up, ▼ is down, and “—” or “No earlier data” means there was nothing to compare with."],
     ["Day-by-day bars", "One bar per day. Darker bars are your stronger days: about 1.5 and 2 times your average day. The orange line underneath adds the days up as you go."],
-    ["Month-by-month bars", "One bar per month this year. The change above each compares it with the month before; this month is compared with the same days of last month."],
+    ["Month-by-month bars", "One bar per month this year."],
     ["Not imported", "Shopify shares only the last 60 days of orders with most apps, so earlier days are marked instead of shown as $0."],
     ["Checked against Shopify", "The same dates in Shopify's own sales report, next to ours, figure by figure. They should agree to the cent. “Catching up” means changes from Shopify are still being counted here, or Shopify's report hasn't included the newest orders yet."],
     ["Gross profit (Shopify)", "Shopify's figure: net sales less the cost of the goods sold, from the cost per item recorded with each sale. Sales with no cost recorded in Shopify count as if they cost nothing, so the card says how much that is. It isn't net profit: fees, postage, apps, staff and ads aren't taken off."],
@@ -65,7 +61,6 @@ const TERMS: Record<Topic, Terms> = {
     ["Ads as share of sales", "Ad spend divided by your store's own net sales for the same dates: what ads cost out of every dollar of net sales."],
     ["Unavailable", "Shown instead of a figure when an ad account has no figures for some of the dates: it's still being read for the first time, its updates stopped (for example, access ended), or its history doesn't reach back that far. A missing day is never counted as $0. A closed account spends nothing, so its days since it closed count as 0."],
     ["Up to (a date)", "While the only days missing are the newest ones, still running or not started yet in an ad account's own time zone, the figure covers the dates up to the last day every account has, and says so. The next update brings the rest."],
-    ["Compared with", "Changes compare whole days only: while the dates include today, both sides stop at yesterday, because today isn't over. Today on its own isn't compared."],
     ["Days", "Each ad account's own calendar day, in its time zone. They line up with your store's days when the time zones match; the cards say when they don't."],
     ["Updated", "Every hour, and the last 30 days are fetched again daily because the platforms keep counting purchases for a while after the click."],
   ],
@@ -164,9 +159,6 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
     case "sales": {
       const s = m.sales_overview;
       if (!s) break;
-      const d = s.deltas.netSales;
-      if (d !== null && d < 0) out.push(<>Sales are down {fmtPct(-d)}. Open <b>Shoppers</b>: if visits fell, fewer people came; if visits held but fewer bought, look at the store itself.</>);
-      if (d !== null && d > 0) out.push(<>Sales are up {fmtPct(d)}. <b>Best sellers</b> shows which products drove it; keep those in stock.</>);
       const r = m.refunds?.current;
       if (r?.refundRate && gradeRefundRate(r.refundRate) !== "good") out.push(<>Refunds are {fmtPct(r.refundRate)} of sales ({money(r.refunds)}). <b>Recent orders</b> links each order to Shopify to see why.</>);
       const b = dailyBreakdown(asSalesDays(s.series), ov.today, ov.data?.historyFrom ?? null);
@@ -217,7 +209,6 @@ function nextSteps(topic: Topic, ov: Overview, currency: string): ReactNode[] {
       if (!a?.current || a.current.pageViews === 0) break;
       const site = a.sites.length > 1 ? a.sites[0] : null;
       if (site && site.site && a.current.earnings > 0) out.push(<>{site.site} brings {fmtPct(site.earnings / a.current.earnings)} of your estimated ad earnings.</>);
-      if (a.deltas.pageRpm !== null && a.deltas.pageRpm < -0.2) out.push(<>Each 1,000 page views earned {fmtPct(Math.abs(a.deltas.pageRpm))} less than {comparedOnWholeDays(ov)}. Advertisers often pay less after a busy season; if it lasts, check AdSense for ad settings or blocked ad categories.</>);
       if (a.vsSales !== null && a.vsSales > 0) out.push(<>Ad earnings add {fmtPct(a.vsSales)} to your net sales. Ads on a store can also distract shoppers: if fewer visitors buy after adding them, they may cost more than they earn.</>);
       break;
     }

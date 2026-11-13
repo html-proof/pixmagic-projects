@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { createWorkspace, fullDashboard, insertStore, signUp, uniqueEmail } from "./helpers";
+import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Ad spend the store's marketing apps report to Shopify (ShopifyQL marketing_engagements, kept by the
@@ -28,8 +28,6 @@ async function report(ws: string, storeId: string, on: string, campaign: string,
 }
 
 test("with no ad account connected, Meta's spend comes from what its app reports to Shopify, and Google says it has none", async ({ page }) => {
-  // Its panels are the full dashboard's (lib/features.ts SIMPLE_HOME).
-  await fullDashboard(page);
   const email = uniqueEmail("ads-marketing");
   await signUp(page, email);
   const ws = await createWorkspace(page, "Shopify Marketing Co");

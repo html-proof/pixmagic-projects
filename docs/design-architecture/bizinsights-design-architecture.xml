@@ -60,7 +60,7 @@
       Dark full-bleed marketing theme in the Geist font, custom cursor, floating pill navbar (logo, "Log in", "Sign up"), about 12 long scroll-driven scenes.
     </frame>
     <frame id="auth-split" file="apps/web/src/components/auth/AuthSplitShell.tsx" usedBy="login signup forgot-password reset-password">
-      A centred rounded card with two columns. Left (desktop only): a green illustrated showcase (AuthShowcase) with three rotating slides ("Turn your data into decisions" / "Every number, in plain words" / "Compare any dates at a glance"), ticks "Sales, orders and stock", "Plain-language reports", "Read-only Shopify access", "Access anywhere", and a tilted sample dashboard tagged "Illustration with sample figures". Right: logo, a pill button to the other auth page, a 32-36px heading, subtitle, form. Under the card: "Support · Privacy".
+      A centred rounded card with two columns. Left (desktop only): a green illustrated showcase (AuthShowcase) with three rotating slides ("Turn your data into decisions" / "Every number, in plain words" / "Any dates, at a glance"), ticks "Sales, orders and stock", "Plain-language reports", "Read-only Shopify access", "Access anywhere", and a tilted sample dashboard tagged "Illustration with sample figures". Right: logo, a pill button to the other auth page, a 32-36px heading, subtitle, form. Under the card: "Support · Privacy".
     </frame>
     <frame id="auth-card" file="apps/web/src/components/auth/AuthCard.tsx" usedBy="verify-email auth-callback auth-error invite">
       One white card on a soft brand backdrop: logo, heading, subtitle, content, "Support · Privacy".
@@ -142,6 +142,7 @@
       </group>
       <footer>"Need help?" card ("Get support or reach out to our team.") with a green "Contact support" button → /support, then the account card (avatar, name, email) whose menu opens upwards.</footer>
       <counts total-items-owner="22" groups="4" note="An owner with every module sees 22 sidebar items, 9 of which open the same /dashboard page in a side panel. Two topics (Busiest times, Ad earnings) are not in the sidebar at all."/>
+      <changed date="2026-11-11" flag="SIMPLE_MENU" files="apps/web/src/lib/menu.ts; components/AppShell.tsx">The short menu: the same entries under the same names, but only the everyday ones are listed (Dashboard, Sales &amp; Orders, Products, Customers, Inventory or Stock, Advertising, Profit &amp; Loss). The rest fold into four groups that open with a click and stay open on the device: More reports (Business Overview, Profit sheet, Discounts, Shopping Funnel), Store (Orders, Shipping, Sales channels, Staff, My work), Marketing, Settings. An owner with every module reads 11 rows instead of 22. "Show every page" at the foot brings back the whole list above; a menu of fewer than ten entries doesn't fold. On a wide screen the sidebar also narrows to its icons. The help button gained "Show me around" (a skippable look around the frame), and the Home's and Sales Overview's figures an "i" saying what each measures. docs/architecture.md, "Finding your way".</changed>
     </sidebar>
     <mobile>
       Below lg the sidebar is hidden; "Open navigation" opens a 288px drawer with logo, close X, a "Workspace" select (phones, several workspaces) and the same sidebar content including the help card, but no account card (the avatar is in the top bar). The notifications panel goes full-width under the top bar.
@@ -350,17 +351,17 @@
       </redirect-only>
     </area>
     <area id="dashboard" name="Dashboard and its detail panels" order="2">
-      <summary>One page (/dashboard) plus 9 detail panels that slide over it (?view=…). Nine sidebar items point here. Shared controls on every analytics page: "Dates" (14 presets, calendar years, "Pick dates…") and "Compare with" (Previous period / Previous year / Custom), kept in the address bar.</summary>
+      <summary>One page (/dashboard) plus 9 detail panels that slide over it (?view=…). Nine sidebar items point here. Shared control on every analytics page: "Dates" (14 presets, calendar years, "Pick dates…"), kept in the address bar. No figure is shown against the period before.</summary>
 
       <page id="dashboard-home" route="/dashboard" file="apps/web/src/app/(app)/dashboard/page.tsx (components/dashboard/HomePanels.tsx, HomeCards.tsx, OverviewCharts.tsx, StoreHeader.tsx)" frame="app-shell" title="Welcome back, {first name}! 👋" access="signed in; any dashboard area"
             screenshot-desktop="screenshots/03-dashboard/dashboard-home--desktop.jpg" screenshot-mobile="screenshots/03-dashboard/dashboard-home--mobile.jpg">
         <purpose>See how the store sold in the chosen dates, what ads and product costs took from that, and open any area's details.</purpose>
-        <layout>One column. Header: heading, "Here's what's happening with your store {in the last 30 days}.", three status pills (store: Connected / Importing your data… / Sync problem / Disconnected; freshness: Updated {x ago} / Catching up / Some updates failed; Shopify check: Matches Shopify / Mostly matches / Differs from Shopify), the Dates and Compare pickers, and a history line "Showing {dates}, whole days in the store's time zone · store created {d}". Refreshes every 15 s.</layout>
+        <layout>One column. Header: heading, "Here's what's happening with your store {in the last 30 days}.", three status pills (store: Connected / Importing your data… / Sync problem / Disconnected; freshness: Updated {x ago} / Catching up / Some updates failed; Shopify check: Matches Shopify / Mostly matches / Differs from Shopify), the Dates picker, and a history line "Showing {dates}, whole days in the store's time zone · store created {d}". Refreshes every 15 s.</layout>
         <sections>
-          <section order="1" name="Headline numbers (4 tiles)">Total sales · Orders · Average order value · Total products sold — each with ▲▼% "vs previous 30 days" and a sparkline; click opens ?view=sales or ?view=products.</section>
+          <section order="1" name="Headline numbers (4 tiles)">Total sales · Orders · Average order value · Total products sold — each with a small bar chart (a bar a day, week or month of the dates); click opens ?view=sales or ?view=products.</section>
           <section order="2" name="Sales vs ad spend (2/3 width)">Net sales, Ad spend, "Ads cost, of net sales"; bars per day. "Connect ad accounts" when none.</section>
           <section order="3" name="Business profit overview (1/3)">Donut "After product costs and ads $x · x% margin": Net sales, Product costs, Ad spend, Left after these costs. "Not net profit: fees, shipping costs, apps and staff aren't taken off."</section>
-          <section order="4" name="Sales performance">Total sales, Orders, Average order with ▲▼; area chart; "View details →".</section>
+          <section order="4" name="Sales performance">Total sales, Orders, Average order; area chart; "View details →".</section>
           <section order="5" name="Advertising performance">Tabs per platform; Ad spend, Link clicks, ROAS; bars; "Connect Google Ads or Meta Ads…".</section>
           <section order="6" name="Top products">Top 5 by net revenue with image, amount and % of sales; "View all →".</section>
           <section order="7" name="Expenses breakdown">Donut "Costs we can see": Product costs, Ad spend.</section>
@@ -382,7 +383,7 @@
         <sections>
           <section name="In short">Sentence summary: net sales, orders, tracked visits, "{n} of {m} areas look good".</section>
           <section name="How each part of your business is doing">13 graded rows (Sales, Orders, Average order, Returns, Tracked visits that bought, Returning customers, Stock, Shipping, Ads, Ad earnings, Best seller, Top channel, Busiest time).</section>
-          <section name="Every key figure">22 rows × These dates / Before / Change (gross sales … returning customers), mixing Shopify, pixel and ad-platform sources.</section>
+          <section name="Every key figure">22 rows × These dates (gross sales … returning customers), mixing Shopify, pixel and ad-platform sources.</section>
           <section name="{year} so far · Your store · tips · glossary">Year stats; store facts (products, variants, units, stock value, orders imported…).</section>
         </sections>
         <complexity level="high">About 90 values. Sessions vs tracked visits, ROAS, gross profit side by side. Repeats the home tiles and Key insights.</complexity>
@@ -405,7 +406,7 @@
             screenshot-desktop="screenshots/03-dashboard/view-products--desktop.jpg">
         <purpose>Find the products that sell, grow or get returned.</purpose>
         <sections>
-          <section name="Top 100 products">Ranking (Top selling, Highest revenue, Trending, Fastest growing, Most returned, Lowest performing), search, "Export CSV", 10-column table with a "Details" drawer (trend score, variants).</section>
+          <section name="Top 100 products">Ranking (Top selling, Highest revenue, Most returned, Lowest performing), search, "Export CSV", 8-column table with a "Details" drawer (variants).</section>
           <section name="Catalog">Active / Draft / Archived bar and Top vendors.</section>
         </sections>
         <complexity level="medium">Two CSV buttons. The table is visibly unstyled next to the other panels. Sidebar calls it "Products", palette "Best sellers", home "Top products".</complexity>
@@ -462,12 +463,12 @@
       <page id="funnel" route="/funnel" file="apps/web/src/app/(app)/funnel/page.tsx (components/funnel/*)" frame="app-shell" title="Shopping Funnel" access="analytics.conversion"
             screenshot-desktop="screenshots/04-funnel/funnel--desktop.jpg" screenshot-mobile="screenshots/04-funnel/funnel--mobile.jpg">
         <purpose>See how tracked visitors move from arriving to buying, where they drop off, and what to check at each step.</purpose>
-        <layout>Header "Understand how visitors become customers and identify where you lose potential sales." with Refresh, Download CSV, Print; Dates and Compare; filter row Device / Visitors / Landed on / Country / Traffic source / Clear filters; freshness line. One long column; refreshes every 60 s.</layout>
+        <layout>Header "Understand how visitors become customers and identify where you lose potential sales." with Refresh, Download CSV, Print; Dates; filter row Device / Visitors / Landed on / Country / Traffic source / Clear filters; freshness line. One long column; refreshes every 60 s.</layout>
         <sections>
           <section order="1" name="Funnel summary (6 cards)">Store visits, Product views, Added to cart, Reached checkout, Completed purchases, Conversion rate — each with a plain question ("How many people visited your online store?").</section>
           <section order="2" name="Customer journey">5 horizontal bars with "x% went on to… · n visits didn't (x% drop-off)" and a "Largest drop-off" badge.</section>
           <section order="3" name="Shopping Funnel insights">Cards "Improvement / Needs attention / Observation" with "Why it might matter:" and "What to do:".</section>
-          <section order="4" name="Where you lose potential customers">Drop-off table (8 columns incl. "a clear change / within normal variation").</section>
+          <section order="4" name="Where you lose potential customers">Drop-off table (7 columns).</section>
           <section order="5" name="Funnel performance breakdown">Tabs Device / Country / Landing page / New vs returning / Traffic source; table + grouped bars.</section>
           <section order="6" name="Where shoppers go on your site">Pages table with exit rate; "Where visits started" / "Where shoppers left".</section>
           <section order="7" name="Funnel trend over time · Conversion rate trend">Two line charts.</section>
