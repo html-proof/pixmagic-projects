@@ -6,7 +6,7 @@ import { FUNNEL_STEPS, type FunnelStep, type SiteSection } from "@app/shared/jou
 import { SECTION_LABEL } from "@/components/dashboard/Funnel";
 import type { FunnelPageModule, Overview } from "@/components/dashboard/types";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
-import { filterable, fmtPts, segmentLabel, type SegmentDimension } from "./FunnelUi";
+import { filterable, segmentLabel, type SegmentDimension } from "./FunnelUi";
 import { FORMULAS, STAGES } from "./stageGuide";
 
 /** A panel over the page's right side, closed by its X, Escape or a click outside; keyboard focus stays inside while it's open. */
@@ -136,18 +136,10 @@ export function StageDetail({ step, f, ov, onClose, onFilter }: { step: FunnelSt
   const worst = largestDropOff(f.transitions);
   const currency = ov.store.currency;
   const sales = ov.modules.sales_overview;
-  const compared = f.previous.reached !== null && f.previous.reached !== undefined;
 
   // What is going well, and what may be a problem: only what a test on the numbers supports.
   const good: ReactNode[] = [];
   const bad: ReactNode[] = [];
-  if (k === 0) {
-    const v = f.insights.find((i) => i.kind === "visits");
-    if (v && v.kind === "visits") (v.tone === "positive" ? good : bad).push(`Tracked visits ${v.tone === "positive" ? "rose" : "fell"} from ${fmtNum(v.previous)} to ${fmtNum(v.current)} (${fmtPct(Math.abs(v.change))}), more than day-to-day variation would explain.`);
-  } else if (into?.previous && into.change !== null && into.significant) {
-    const text = `${fmtPct(into.progression)} of visits at the stage before ${g.wentOn}, against ${fmtPct(into.previous.progression)} in the dates compared with (${fmtPts(into.change)}). The difference is larger than chance would explain.`;
-    (into.change > 0 ? good : bad).push(text);
-  }
   if (k > 0) for (const d of segmentDifferences(f.segments, k)) (d.good ? good : bad).push(d.text);
   if (into && worst === k - 1) bad.push(`This is where most visits stop: ${fmtNum(into.lost)} of ${fmtNum(into.fromCount)} (${fmtPct(into.dropOff)}) didn't ${g.wentOn.replace(/^went on to /, "")}.`);
   if (step === "added_to_cart") {
@@ -229,7 +221,7 @@ export function StageDetail({ step, f, ov, onClose, onFilter }: { step: FunnelSt
             ))}
           </ul>
         ) : (
-          <p className="text-muted">{compared ? "Nothing here is clearly better than in the dates compared with, or for one kind of visit over the others." : "There's no earlier data to compare with yet, and no kind of visit does clearly better than the others."}</p>
+          <p className="text-muted">No kind of visit does clearly better than the others.</p>
         )}
       </Part>
       <Part n={6} title="Potential problems">
@@ -242,7 +234,7 @@ export function StageDetail({ step, f, ov, onClose, onFilter }: { step: FunnelSt
             ))}
           </ul>
         ) : (
-          <p className="text-muted">The numbers don&apos;t point to a clear problem at this stage{compared ? "" : " (there's no earlier data to compare with)"}.</p>
+          <p className="text-muted">The numbers don&apos;t point to a clear problem at this stage.</p>
         )}
         {g.dropReasons.length > 0 && (
           <>

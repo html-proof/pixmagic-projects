@@ -2,9 +2,8 @@
 import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtNum, fmtPct, useLiveApi } from "@/lib/api";
 import { collectionSalesParams } from "./collectionDates";
-import { comparisonHelp, versusWords } from "./DateRange";
 import { fmtRelative } from "./format";
-import { Delta, Panel } from "./Primitives";
+import { Panel } from "./Primitives";
 import type { Overview } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -81,20 +80,10 @@ export function useCollectionSales(ov: Overview, shown: boolean) {
 
 type Live = ReturnType<typeof useCollectionSales>;
 
-/** The change in net sales, or why there is none. */
-function Change({ c, baseline }: { c: CollectionFigures; baseline: boolean }) {
-  if (!baseline || !c.previous) return <span className="text-muted">—</span>;
-  if (c.deltas.netSales !== null) return <Delta value={c.deltas.netSales} label="" />;
-  // Nothing at all sold in the dates compared with: new, not an infinite rise.
-  const none = c.previous.netSales === 0 && c.previous.units === 0 && c.previous.orders === 0;
-  return <span className={none && c.orders > 0 ? "" : "text-muted"}>{none && c.orders > 0 ? "New" : "—"}</span>;
-}
-
 export function CollectionSales({ ov, currency, live, onPick }: { ov: Overview; currency: string; live: Live; onPick?: (c: CollectionChoice) => void }) {
   const { allowed } = useApp();
   const r = live.report;
   const money = (n: number) => fmtMoney(n, currency);
-  const versus = versusWords(ov);
   const read = fmtRelative(r?.membershipAsOf);
   const pinned: Array<{ key: string; label: string; note: string; f: CollectionFigures }> = [];
   if (r?.none) pinned.push({ key: "none", label: "Not in a collection", note: "Products in none of your collections.", f: r.none });
@@ -102,9 +91,9 @@ export function CollectionSales({ ov, currency, live, onPick }: { ov: Overview; 
   const rows = r?.items ?? [];
   const csv = () => {
     if (!allowed("reports.export") || !r) return;
-    const line = (id: string, name: string, f: CollectionFigures) => [id, name, f.netSales, f.grossSales, f.discounts, f.returns, f.units, f.orders, f.productsSold, f.share, f.previous?.netSales ?? null, f.deltas.netSales === null ? null : f.deltas.netSales * 100];
+    const line = (id: string, name: string, f: CollectionFigures) => [id, name, f.netSales, f.grossSales, f.discounts, f.returns, f.units, f.orders, f.productsSold, f.share];
     const values = [
-      ["Collection ID", "Collection", "Net sales", "Gross sales", "Discounts", "Returns and adjustments", "Net units", "Orders", "Products sold", "Share of product sales", "Net sales compared with", "Net sales change %"],
+      ["Collection ID", "Collection", "Net sales", "Gross sales", "Discounts", "Returns and adjustments", "Net units", "Orders", "Products sold", "Share of product sales"],
       ...rows.map((c) => line(c.collectionId, collectionName(c), c)),
       ...pinned.map((p) => line("", p.label, p.f)),
     ];
@@ -120,7 +109,7 @@ export function CollectionSales({ ov, currency, live, onPick }: { ov: Overview; 
     <Panel
       id="d-collection-sales"
       title="Sales by collection"
-      help={`Each Shopify collection's product sales in these dates: net sales before tax, after discounts and returns (returns and cancellations on the day they were made), and its products' units and orders, compared with ${comparisonHelp(ov.previous, ov.range)}. A product in several collections counts in each, so collections add up to more than your product sales and their shares to more than 100%. Sales are grouped by the collections products are in now, not when they sold, as Shopify's own reports group them.`}
+      help={`Each Shopify collection's product sales in these dates: net sales before tax, after discounts and returns (returns and cancellations on the day they were made), and its products' units and orders. A product in several collections counts in each, so collections add up to more than your product sales and their shares to more than 100%. Sales are grouped by the collections products are in now, not when they sold, as Shopify's own reports group them.`}
       aside={allowed("reports.export") && rows.length + pinned.length > 0 ? <button type="button" className="rounded border px-3 py-1" onClick={csv}>Export CSV</button> : null}
     >
       {live.error && !r && <p role="alert">Collection sales could not be loaded: {live.error.message}</p>}
@@ -132,7 +121,6 @@ export function CollectionSales({ ov, currency, live, onPick }: { ov: Overview; 
             : <>Collection sales are unavailable until all sales for these dates are imported and verified. Imported history starts {r.historyFrom ?? "after synchronization completes"}.</>}
         </p>
       )}
-      {r?.complete && !r.baseline && <p className="mb-3 text-sm text-muted">The sales of the dates compared with aren&apos;t all imported and verified: changes are unavailable.</p>}
       {!r ? (
         !live.error && <div aria-label="Loading collection sales" className="h-48 animate-pulse rounded bg-border" />
       ) : !r.complete ? null : rows.length + pinned.length === 0 ? (
@@ -142,7 +130,7 @@ export function CollectionSales({ ov, currency, live, onPick }: { ov: Overview; 
           <table className="w-full whitespace-nowrap text-left text-sm">
             <thead className="sticky top-0 bg-surface">
               <tr>
-                {["Collection", "Net sales", `Change ${versus}`, "Net units", "Orders", "Products sold", "Share of product sales"].map((h) => (
+                {["Collection", "Net sales", "Net units", "Orders", "Products sold", "Share of product sales"].map((h) => (
                   <th key={h} className="p-3" scope="col">{h}</th>
                 ))}
               </tr>
@@ -160,7 +148,6 @@ export function CollectionSales({ ov, currency, live, onPick }: { ov: Overview; 
                     )}
                   </th>
                   <td className="p-3">{money(c.netSales)}</td>
-                  <td className="p-3"><Change c={c} baseline={r.baseline} /></td>
                   <td className="p-3">{fmtNum(c.units)}</td>
                   <td className="p-3">{fmtNum(c.orders)}</td>
                   <td className="p-3">{fmtNum(c.productsSold)}</td>
@@ -174,7 +161,6 @@ export function CollectionSales({ ov, currency, live, onPick }: { ov: Overview; 
                     <small className="block">{p.note}</small>
                   </th>
                   <td className="p-3">{money(p.f.netSales)}</td>
-                  <td className="p-3"><Change c={p.f} baseline={r.baseline} /></td>
                   <td className="p-3">{fmtNum(p.f.units)}</td>
                   <td className="p-3">{fmtNum(p.f.orders)}</td>
                   <td className="p-3">{fmtNum(p.f.productsSold)}</td>

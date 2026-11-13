@@ -91,7 +91,7 @@ export function useStatement() {
   const live = useLiveApi<StatementAnswer>(path, LIVE_EVERY_MS);
   const costs = useApi<CostsAnswer>(base && sees ? `${base}/expenses` : null);
   const data = live.data;
-  const shown: Shown = data && { range: data.range, previous: data.previous, timezone: data.timezone };
+  const shown: Shown = data && { range: data.range, timezone: data.timezone };
   const { reload } = costs;
 
   /** After a change: the statement and the costs list asked for again. */

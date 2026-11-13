@@ -395,7 +395,7 @@ describe("exports and sensitive fields (scenarios 15-16)", () => {
     ok(await setAccess(b, memberId, "custom", ["marketing.ads", "marketing.campaigns"]));
     const table = await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/export/table?${qs}`, guest.headers);
     expect(table.statusCode).toBe(200);
-    expect(table.json()).toMatchObject({ section: "ads_campaigns", label: "Ad campaigns", rows: [["Meta Ads", "act_1", "Spring", null, null, null, null, null, null, 12, 100, 4, 2, 0, 0, null, null, null, 0, null, null, null, "yes"]] });
+    expect(table.json()).toMatchObject({ section: "ads_campaigns", label: "Ad campaigns", rows: [["Meta Ads", "act_1", "Spring", null, null, null, null, null, null, 12, 100, 4, 2, 0, 0, null, null, null, "yes"]] });
     // On screen isn't a download: nothing in the audit log, and the download itself still needs the export permission.
     expect(await systemDb.auditLog.count({ where: { workspaceId: b.ws, action: "report.exported" } })).toBe(0);
     expect((await call("GET", `/workspaces/${b.ws}/stores/${b.store.id}/export?${qs}`, guest.headers)).statusCode).toBe(403);

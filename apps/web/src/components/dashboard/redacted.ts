@@ -2,9 +2,6 @@ import { MONTH_LINES, type MonthLine, type SalesMonth } from "@app/shared/sales"
 import { calculationName, customApplied, customSales, type SalesLines } from "@app/shared/salesCalculation";
 import type { SalesOverview, YearMonth } from "./types";
 
-/** Change on the period compared with; null without one, as the API's deltas. */
-const delta = (now: number, before: number) => (before === 0 ? null : (now - before) / Math.abs(before));
-
 // The dashboard's answer leaves out what a member may not see (Team & Access, `redactOverview` in
 // @app/shared/access). These read the fields that can be missing, so a page never does arithmetic
 // on a figure that isn't there or shows a zero for one it may not know.
@@ -55,14 +52,9 @@ export function appliedCustom(s: SalesOverview | undefined) {
   const calc = s.calculation!;
   const now = salesLinesOf(s.current);
   if (!now) return null;
-  const before = salesLinesOf(s.previous);
-  const current = customSales(now, calc.components);
-  const previous = before ? customSales(before, calc.components) : null;
   return {
     name: calculationName(calc),
     components: calc.components,
-    current,
-    previous,
-    delta: previous === null ? null : delta(current, previous),
+    current: customSales(now, calc.components),
   };
 }

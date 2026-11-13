@@ -5,10 +5,9 @@ import { ArrowUpRight, ChevronRight, CircleCheck } from "lucide-react";
 import type { AlertView } from "@app/shared/alerts";
 import type { Health } from "@app/shared/health";
 import { HelpTip } from "@/components/PageKit";
-import { fmtMoney, fmtPct, useApi } from "@/lib/api";
+import { fmtMoney, useApi } from "@/lib/api";
 import { SIMPLE_HOME } from "@/lib/features";
 import { HOME_LAYOUT_KEY, readLocal, writeLocal } from "@/lib/storage";
-import { versusWords } from "./DateRange";
 import { fmtDay, fmtLongDay, fmtSpan } from "./format";
 import type { Need, NeedAction, NeedTone } from "./homeNeeds";
 import { businessHealth } from "./Overview";
@@ -115,35 +114,13 @@ export function NeedsYou({ needs, onOpen }: { needs: Need[]; onOpen: (t: Topic) 
 // ---- The four numbers ---------------------------------------------------------------------------
 
 /**
- * A change on the dates compared with, as the design writes it under a number: "+12.7%", green
- * when up, red when down. The date chip says what it is compared with, so the words "vs previous
- * 30 days" are for screen readers (and the tooltip names the dates).
- */
-function Delta({ value, versus, compared }: { value: number | null | undefined; versus?: string; compared?: string }) {
-  if (value === null || value === undefined) return <span title={compared}>No earlier data</span>;
-  const tone = value > 0 ? "text-good" : value < 0 ? "text-danger" : "text-muted";
-  return (
-    <span className={`font-medium tabular-nums ${tone}`} title={compared}>
-      <span className="sr-only">{value > 0 ? "up " : value < 0 ? "down " : "unchanged, "}</span>
-      <span aria-hidden>{value > 0 ? "+" : value < 0 ? "−" : ""}</span>
-      {fmtPct(Math.abs(value))}
-      {versus && <span className="sr-only"> {versus}</span>}
-    </span>
-  );
-}
-
-/**
- * One of the four numbers: what it is, the figure, and its change on the dates compared with (or
- * `sub` in its place, for a figure with no earlier one). On a phone the change sits beside the
- * name, as the design's phone Home has it. The test id is the full dashboard's (`metric-<title>`),
- * so a figure reads the same whichever Home is shown. Opens its details.
+ * One of the four numbers: what it is, the figure, and a line under it (`sub`) when it has one.
+ * The test id is the full dashboard's (`metric-<title>`), so a figure reads the same whichever
+ * Home is shown. Opens its details.
  */
 export function NumberTile({
   title,
   value,
-  delta,
-  versus,
-  compared,
   sub,
   extra,
   help,
@@ -152,9 +129,6 @@ export function NumberTile({
 }: {
   title: string;
   value: ReactNode;
-  delta?: number | null;
-  versus?: string;
-  compared?: string;
   sub?: ReactNode;
   extra?: ReactNode;
   /** What the figure measures, in plain words: behind the small "i" in the tile's corner (PageKit's HelpTip). */
@@ -162,7 +136,6 @@ export function NumberTile({
   i?: number;
   onClick: () => void;
 }) {
-  const change = sub === undefined && <Delta value={delta} versus={versus} compared={compared} />;
   return (
     // The "i" sits over the tile's corner, beside it in the page: a button can't hold another.
     <div className="relative flex min-w-0">
@@ -175,10 +148,9 @@ export function NumberTile({
       >
         <span className={`flex items-baseline justify-between gap-2 text-xs font-medium text-muted ${help ? "pr-6" : ""}`}>
           <span className="truncate">{title}</span>
-          {change && <span className="shrink-0 sm:hidden">{change}</span>}
         </span>
         <span className="mt-2 block truncate text-2xl leading-8 font-semibold tracking-[-0.02em] tabular-nums sm:mt-3 sm:text-[28px]">{value}</span>
-        {sub !== undefined ? <span className="mt-1 block min-w-0 text-xs text-muted">{sub}</span> : <span className="mt-1 hidden text-xs sm:block">{change}</span>}
+        {sub !== undefined && <span className="mt-1 block min-w-0 text-xs text-muted">{sub}</span>}
         {extra && <span className="mt-1 block min-w-0 text-xs text-muted">{extra}</span>}
         <span className="sr-only"> – open details</span>
       </button>
@@ -206,39 +178,32 @@ export function tickDays(n: number): number[] {
 }
 
 /**
- * The design's bars: a dark green column per day, today's paler with "today so far" over it, and
- * the dates compared with as a dotted line, day i over day i. No axis: the tooltip, the arrow keys
- * and the table for screen readers give each day's figures.
+ * The design's bars: a dark green column per day, today's paler with "today so far" over it. No
+ * axis: the tooltip, the arrow keys and the table for screen readers give each day's figure.
  */
 function DayBars({
   days,
   values,
-  before,
   today,
   label,
-  beforeLabel,
   money,
 }: {
   days: string[];
   values: number[];
-  before: number[] | null;
   today: string;
   label: string;
-  beforeLabel: string;
   money: (n: number) => string;
 }) {
   const n = days.length;
   const [hover, setAt] = useState<number | null>(null);
   // The dates can change under a held hover (a shorter range): never read past the new end.
   const at = hover !== null && hover < n ? hover : null;
-  const prev = before ? before.slice(0, n) : null;
-  const top = Math.max(0, ...values, ...(prev ?? [])) || 1;
+  const top = Math.max(0, ...values) || 1;
   const pct = (v: number) => (Math.max(0, v) / top) * 100;
   const gap = n > 90 ? "gap-0" : n > 45 ? "gap-px" : "gap-1 sm:gap-1.5";
-  const line = prev && prev.length > 1 ? prev.map((v, i) => `${i ? "L" : "M"} ${i + 0.5} ${100 - pct(v)}`).join(" ") : null;
   const todayAt = days.indexOf(today);
   const name = (i: number) => `${fmtLongDay(days[i]!)}${i === todayAt ? " · today so far" : ""}`;
-  const describe = (i: number) => `${name(i)}: ${label} ${money(values[i]!)}${prev?.[i] !== undefined ? `, ${beforeLabel} ${money(prev[i]!)}` : ""}.`;
+  const describe = (i: number) => `${name(i)}: ${label} ${money(values[i]!)}.`;
   // A label or tag over day i: from its column's left in the left half, from its right in the right half, so it never leaves the chart.
   const anchor = (i: number) => (i < n / 2 ? { left: `${(i / n) * 100}%` } : { right: `${((n - 1 - i) / n) * 100}%` });
 
@@ -275,29 +240,18 @@ function DayBars({
               </div>
             ))}
           </div>
-          {line && (
-            <svg aria-hidden className="pointer-events-none absolute inset-0 h-full w-full overflow-visible" viewBox={`0 0 ${n} 100`} preserveAspectRatio="none" data-testid="day-bars-before">
-              <path d={line} fill="none" stroke="var(--home-prev)" strokeWidth={2} strokeDasharray="3 3" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-            </svg>
-          )}
           {todayAt >= 0 && at === null && (
             <span aria-hidden className="pointer-events-none absolute rounded bg-home-tag px-1 py-0.5 text-[11px] leading-none whitespace-nowrap" style={{ ...anchor(todayAt), bottom: `calc(${pct(values[todayAt]!)}% + 6px)` }}>
               today so far
             </span>
           )}
           {at !== null && (
-            <div aria-hidden className="pointer-events-none absolute z-10 rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs whitespace-nowrap shadow-[var(--shadow)]" style={{ ...anchor(at), bottom: `calc(${Math.max(pct(values[at]!), prev?.[at] !== undefined ? pct(prev[at]!) : 0)}% + 8px)` }}>
+            <div aria-hidden className="pointer-events-none absolute z-10 rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs whitespace-nowrap shadow-[var(--shadow)]" style={{ ...anchor(at), bottom: `calc(${pct(values[at]!)}% + 8px)` }}>
               <p className="font-medium">{name(at)}</p>
               <p className="mt-0.5 flex items-center gap-1.5">
                 <span className="h-2.5 w-2.5 rounded-[2px] bg-accent" />
                 {label} <span className="font-semibold tabular-nums">{money(values[at]!)}</span>
               </p>
-              {prev?.[at] !== undefined && (
-                <p className="mt-0.5 flex items-center gap-1.5 text-muted">
-                  <span className="h-0.5 w-2.5 bg-home-prev" />
-                  {beforeLabel} <span className="tabular-nums">{money(prev[at]!)}</span>
-                </p>
-              )}
             </div>
           )}
         </div>
@@ -330,7 +284,6 @@ function DayBars({
             <tr>
               <th scope="col">Day</th>
               <th scope="col">{label}</th>
-              {prev && <th scope="col">{beforeLabel}</th>}
             </tr>
           </thead>
           <tbody>
@@ -338,7 +291,6 @@ function DayBars({
               <tr key={d}>
                 <th scope="row">{name(i)}</th>
                 <td>{money(values[i]!)}</td>
-                {prev && <td>{prev[i] !== undefined ? money(prev[i]!) : "No data"}</td>}
               </tr>
             ))}
           </tbody>
@@ -348,19 +300,12 @@ function DayBars({
   );
 }
 
-/**
- * One chart: total sales (net sales for a member not shown tax and shipping) each day of the dates,
- * with the dates compared with as a dotted line when they were imported (`previousSeries`).
- */
+/** One chart: total sales (net sales for a member not shown tax and shipping) each day of the dates. */
 export function SalesByDay({ ov, currency, className = "" }: { ov: Overview; currency: string; className?: string }) {
   const s = ov.modules.sales_overview!;
   const total = s.current.totalSales !== undefined;
   const pick = (d: { netSales: number; totalSales?: number }) => (total ? (d.totalSales ?? d.netSales) : d.netSales);
   const what = total ? "Total sales" : "Net sales";
-  const before = s.previousSeries?.map(pick) ?? null;
-  // "Previous 30 days", "Same dates last year", "14 Mar 2026": the chip's comparison, as a name.
-  const vs = versusWords(ov).replace(/^vs /, "");
-  const beforeLabel = vs.charAt(0).toUpperCase() + vs.slice(1);
   return (
     <section id="sales-by-day" aria-labelledby="sales-by-day-h" data-testid="home-sales-by-day" className={`home-card animate-rise flex min-w-0 flex-col p-5 sm:p-6 ${className}`}>
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -370,16 +315,10 @@ export function SalesByDay({ ov, currency, className = "" }: { ov: Overview; cur
             <span aria-hidden className="h-3 w-3 rounded-[2px] bg-accent" />
             {fmtSpan(ov.range.from, ov.range.to)}
           </span>
-          {before && (
-            <span className="inline-flex items-center gap-1.5 text-muted">
-              <span aria-hidden className="h-0.5 w-3 bg-muted" />
-              {beforeLabel}
-            </span>
-          )}
         </div>
       </div>
       <div className="mt-2 flex-1">
-        <DayBars days={s.series.map((d) => d.day)} values={s.series.map(pick)} before={before} today={ov.today} label={what} beforeLabel={beforeLabel} money={(n) => fmtMoney(n, currency)} />
+        <DayBars days={s.series.map((d) => d.day)} values={s.series.map(pick)} today={ov.today} label={what} money={(n) => fmtMoney(n, currency)} />
       </div>
     </section>
   );

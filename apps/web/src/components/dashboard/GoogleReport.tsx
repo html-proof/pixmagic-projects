@@ -21,10 +21,9 @@ import { actionError, api, ApiError, fmtMoney, fmtNum, fmtPct } from "@/lib/api"
 import { saveApiFile } from "@/lib/download";
 import { DemoChip } from "./Advertising";
 import { Definitions } from "./AdsCommon";
-import { fmtRange, fmtSpan } from "./format";
+import { fmtRange } from "./format";
 import { Badge, Panel, type Tone } from "./Primitives";
 import { DrillCrumbs, OpenRow, useDrillFocus, useReportDrill } from "./ReportDrill";
-import { ReportChange, reportChange } from "./ReportCompare";
 import { CsvButton } from "./ReportDownload";
 import type { AdsModule, Overview } from "./types";
 
@@ -32,9 +31,7 @@ import type { AdsModule, Overview } from "./types";
 // The Google Ads report: campaigns (with Google's delivery status and why, type and budget), ad
 // groups, devices and countries for the dates picked, asked of Google for exactly those dates (GET
 // .../ads/google/report).
-// Read-only: there is nothing here that changes a campaign. When the answer carries the dates
-// compared with (`comparison`), each row shows its change; the dates picked must have ended, so
-// a day still running is never set against whole days. A campaign opens to its ad groups (a
+// Read-only: there is nothing here that changes a campaign. A campaign opens to its ad groups (a
 // Performance Max campaign to its asset groups), an ad group to its ads (?campaign=&adgroup=,
 // ReportDrill), with those rows added up on top. Keywords and search terms, for the account or
 // opened from a campaign or ad group, are asked of Google only when their tab is pressed (each read
@@ -49,8 +46,6 @@ interface Report {
   totals: GoogleReportMetrics;
   rows: GoogleReportRow[];
   truncated: boolean;
-  /** The dates compared with, when asked for and given: their totals and each row's figures (by id). */
-  comparison?: { since: string; until: string; totals: GoogleReportMetrics; rows: Array<{ id: string } & Partial<GoogleReportMetrics>> };
 }
 interface Answer {
   account: { id: string; accountId: string; name: string | null; currency: string | null; timezone: string | null };
@@ -199,10 +194,6 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
   const [error, setError] = useState<{ message: string; reconnect: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const { from, to } = ov.range;
-  // Changes only for dates that are over: a day still running against whole days reads as a drop.
-  const ended = to < ov.today;
-  const cfrom = ended ? ov.previous.from : null;
-  const cto = ended ? ov.previous.to : null;
   const chosen = google.find((a) => a.id === connection) ?? google[0];
   const drill = useReportDrill("adgroup", isGoogleId, chosen?.id);
   // Each campaign's type (Performance Max has asset groups, not ad groups), from its row: a campaign
@@ -230,7 +221,7 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
   const drillKey = `${asked.campaign ?? "-"}:${asked.adGroup ?? "-"}`;
   useDrillFocus(drill, "d-google-report", !!error || (!lookingUp && answer?.drill === drillKey));
   // The question asked of the API: the page's read, and its download (format=csv) of the same answer.
-  const path = chosen ? `/workspaces/${workspace.id}/stores/${ov.store.id}/ads/google/report?${new URLSearchParams({ connection: chosen.id, ...asked, from, to, ...(cfrom && cto ? { cfrom, cto } : {}) })}` : null;
+  const path = chosen ? `/workspaces/${workspace.id}/stores/${ov.store.id}/ads/google/report?${new URLSearchParams({ connection: chosen.id, ...asked, from, to })}` : null;
   const asking = useRef(path);
   useEffect(() => {
     asking.current = path;
@@ -293,8 +284,6 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
   const currency = shown?.account.currency ?? chosen.currency ?? "USD";
   const money = (n: number | null) => (n === null ? NA : fmtMoney(n, currency));
   const includesToday = !!shown && to >= shown.today;
-  const cmp = r?.comparison;
-  const before = new Map((cmp?.rows ?? []).map((row) => [row.id, row]));
   // What was opened, by the name the row clicked gave, else as Google names it on the rows under it.
   const campaignName = drill.campaign ? (drill.nameOf(drill.campaign) ?? r?.rows.find((row) => row.campaignId === drill.campaign)?.campaignName ?? `Campaign ${drill.campaign}`) : null;
   const adGroupName = drill.child ? (drill.nameOf(drill.child) ?? r?.rows.find((row) => row.adGroupId === drill.child)?.adGroupName ?? `Ad group ${drill.child}`) : null;
@@ -417,8 +406,6 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                       {h}
                     </th>
                   ))}
-                  {cmp && <th className="px-2 pb-2 text-right font-normal">Spend vs before</th>}
-                  {cmp && <th className="px-2 pb-2 text-right font-normal">Conversions vs before</th>}
                 </tr>
               </thead>
               <tbody>
@@ -426,17 +413,7 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                   {/* Down from a campaign or an ad group: its rows added up, not Google's own row for it (keywords and search terms: its own row). */}
                   <td className="px-2 py-2">{topRow}</td>
                   <Cells m={r.totals} money={money} />
-                  {cmp && <ReportChange value={reportChange(r.totals.spend, cmp.totals.spend)} neutral />}
-                  {cmp && <ReportChange value={reportChange(r.totals.conversions, cmp.totals.conversions)} />}
                 </tr>
-                {cmp && (
-                  <tr className="border-t border-border text-muted" data-testid="google-report-before">
-                    <td className="px-2 py-2">Before ({fmtSpan(cmp.since, cmp.until)})</td>
-                    <Cells m={cmp.totals} money={money} />
-                    <td />
-                    <td />
-                  </tr>
-                )}
                 {r.rows.map((row) => {
                   const { badge: s, why } = deliveryOf(row);
                   // An ad named by Google says its type in its name already (googleAdName); one with its own name, beside it.
@@ -454,7 +431,6 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                     googleMatchTypeLabel(row.matchType),
                     row.qualityScore != null ? `Quality Score ${row.qualityScore}/10` : null,
                   ].filter(Boolean);
-                  const was = before.get(row.id);
                   const open = opens(row);
                   return (
                     <tr key={row.id} className="border-t border-border" data-testid="google-report-row">
@@ -478,8 +454,6 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
                         )}
                       </td>
                       <Cells m={row} money={money} />
-                      {cmp && <ReportChange value={reportChange(row.spend, was?.spend)} neutral />}
-                      {cmp && <ReportChange value={reportChange(row.conversions, was?.conversions)} />}
                     </tr>
                   );
                 })}
@@ -554,17 +528,11 @@ export function GoogleReportPanel({ ov, accounts }: { ov: Overview; accounts: Ad
             {r.level === "ad" && <li>An ad without a name of its own at Google (most kinds, responsive search ads among them) is named by its type and Google&apos;s id for it.</li>}
             {r.level === "keyword" && <li>Quality Score is Google&apos;s rating of a keyword now (1 to 10), not for the dates picked; none shows where Google has too little data to give one.</li>}
             {r.level === "search_term" && <li>Search terms are what people typed before your ad showed, by campaign: Search, Shopping and Performance Max campaigns alike.</li>}
-            {detail && cmp && <li>A {r.level === "keyword" ? "keyword" : "term"} that wasn&apos;t among the 200 that spent most before shows — for its change: not a rise from nothing.</li>}
             <li>
               Conversions and their value are Google&apos;s own count of every conversion action it&apos;s set to count (purchases, and also leads, sign-ups or calls),
               using each action&apos;s attribution settings. They are not your Shopify orders, they can overlap with what Meta claims, and they aren&apos;t added into your
               store&apos;s sales.
             </li>
-            {cmp ? (
-              <li>Changes compare with {fmtSpan(cmp.since, cmp.until)}, as Google reports those dates now.</li>
-            ) : !ended ? (
-              <li>Changes show once the dates picked are over: today is still running, so it isn&apos;t set against whole days.</li>
-            ) : null}
             {r.level === "ad_group" && !drill.open && r.rows.length > 0 && <li>Performance Max campaigns have no ad groups, so their spend shows on the Campaigns tab but not here.</li>}
             {r.level === "country" && <li>Countries are where the people who saw your ads were, not the places your campaigns target.</li>}
             {shown &&

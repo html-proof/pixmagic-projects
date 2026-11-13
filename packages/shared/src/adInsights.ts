@@ -2,7 +2,7 @@ import { claimsAddUp, type AdSpendProvider } from "./ads";
 
 /**
  * The Advertising overview's "Key insights": a few plain sentences drawn from figures the API already
- * worked out (the ad module's totals and changes, each platform's own, Shopify's margin on the sales it
+ * worked out (the ad module's totals, each platform's own, Shopify's margin on the sales it
  * has a cost for). Nothing is estimated beyond what the sentence says: a figure not known leaves its
  * insight out, never a guess. Purchases, purchase value and ROAS are each platform's own claim and are
  * worded so; the store's sales are Shopify's. With Meta and Google both counted their claims are never
@@ -12,7 +12,7 @@ import { claimsAddUp, type AdSpendProvider } from "./ads";
 export type AdInsightTone = "good" | "bad" | "warn" | "info";
 
 export interface AdInsight {
-  id: "value_change" | "spend_outpaces" | "best_roas" | "below_one" | "share" | "no_purchases" | "break_even" | "roas_meaning";
+  id: "best_roas" | "below_one" | "share" | "no_purchases" | "break_even" | "roas_meaning";
   tone: AdInsightTone;
   text: string;
   /** The one platform the sentence is about, when there can be one per platform. */
@@ -27,25 +27,18 @@ export interface AdInsightPlatform {
   purchases: number | null;
   purchaseValue: number | null;
   roas: number | null;
-  /** Its own changes, as `AdInsightInput.deltas`, on the dates in `versus`; absent or null with nothing compared. */
-  deltas?: { spend: number | null; purchases: number | null; purchaseValue: number | null } | null;
-  versus?: string | null;
 }
 
 export interface AdInsightInput {
   platforms: readonly AdInsightPlatform[];
   /** Every platform together; null when not known. */
   totals: { spend: number; purchases: number | null; purchaseValue: number | null; roas: number | null } | null;
-  /** The changes on the dates compared with, as fractions (0.1 = 10%); null with nothing compared. */
-  deltas: { spend: number | null; purchases: number | null; purchaseValue: number | null } | null;
-  /** "vs 1 – 7 Oct": what the changes are on. */
-  versus: string | null;
   /** Shopify's gross margin on the sales it has a cost recorded for (0–1); null when not known. */
   margin: number | null;
   /** Simulated figures (the Google Ads demo) are among the platforms: nothing is set against the store. */
   demo?: boolean;
   /**
-   * The ads module's `claimsAddUp`: the purchases, purchase value and ROAS of `totals` and `deltas` are
+   * The ads module's `claimsAddUp`: the purchases, purchase value and ROAS of `totals` are
    * one platform's. False: they add up the claims of more than one, so only each platform's own are
    * used. Absent: worked out from `platforms`.
    */
@@ -63,8 +56,6 @@ export interface AdInsightFormat {
 }
 
 const NAME: Record<AdSpendProvider, string> = { meta: "Meta Ads", google: "Google Ads" };
-/** Changes smaller than this either way aren't news. */
-const NOTABLE = 0.05;
 
 /** "Meta Ads and Google Ads". */
 const names = (list: readonly AdInsightPlatform[]) => list.map((p) => NAME[p.provider]).join(" and ");
@@ -72,7 +63,7 @@ const names = (list: readonly AdInsightPlatform[]) => list.map((p) => NAME[p.pro
 /** At most `limit` insights, the most telling first. */
 export function advertisingInsights(input: AdInsightInput, f: AdInsightFormat, limit = 4): AdInsight[] {
   const out: AdInsight[] = [];
-  const { totals, deltas, versus } = input;
+  const { totals } = input;
   const spending = input.platforms.filter((p) => p.spend > 0);
   // More than one platform's claims in the totals: each platform's own only, never their sum.
   const apart = !(input.claimsAddUp ?? claimsAddUp(input.platforms.map((p) => p.provider)));
@@ -94,26 +85,6 @@ export function advertisingInsights(input: AdInsightInput, f: AdInsightFormat, l
     if (p.purchases !== null && p.purchases > 0 && p.roas !== null && p.roas < 1) {
       out.push({ id: "below_one", tone: "bad", provider: p.provider, text: `${NAME[p.provider]} credits less in purchases than it cost: a ROAS of ${f.times(p.roas)}, by its own count.` });
     }
-  }
-
-  // Spend up while purchases fell; otherwise the purchase value's change. Each platform's own when
-  // their claims don't add up.
-  if (apart) {
-    for (const p of spending) {
-      const d = p.deltas;
-      if (!d || !p.versus) continue;
-      if (d.spend !== null && d.purchases !== null && d.spend >= NOTABLE && d.purchases < 0) {
-        out.push({ id: "spend_outpaces", tone: "warn", provider: p.provider, text: `${NAME[p.provider]} spend is up ${f.pct(d.spend)} ${p.versus} while it counted ${f.pct(-d.purchases)} fewer purchases.` });
-      } else if (d.purchaseValue !== null && Math.abs(d.purchaseValue) >= NOTABLE) {
-        const up = d.purchaseValue > 0;
-        out.push({ id: "value_change", tone: up ? "good" : "bad", provider: p.provider, text: `The purchase value ${NAME[p.provider]} credits to its ads is ${up ? "up" : "down"} ${f.pct(Math.abs(d.purchaseValue))} ${p.versus}.` });
-      }
-    }
-  } else if (deltas && versus && deltas.spend !== null && deltas.purchases !== null && deltas.spend >= NOTABLE && deltas.purchases < 0) {
-    out.push({ id: "spend_outpaces", tone: "warn", text: `Ad spend is up ${f.pct(deltas.spend)} ${versus} while the platforms counted ${f.pct(-deltas.purchases)} fewer purchases.` });
-  } else if (deltas && versus && deltas.purchaseValue !== null && Math.abs(deltas.purchaseValue) >= NOTABLE) {
-    const up = deltas.purchaseValue > 0;
-    out.push({ id: "value_change", tone: up ? "good" : "bad", text: `The purchase value your platforms credit to their ads is ${up ? "up" : "down"} ${f.pct(Math.abs(deltas.purchaseValue))} ${versus}.` });
   }
 
   // Which platform returned more per unit of spend, by each one's own count.

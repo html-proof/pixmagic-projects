@@ -3,15 +3,15 @@ import type { ReactNode } from "react";
 import { Coins, Percent, ShoppingCart, Wallet } from "lucide-react";
 import { HelpTip } from "@/components/PageKit";
 import { fmtMoney, fmtPct } from "@/lib/api";
-import { Change, IconTile, MISSING, PointsChange } from "./PlKit";
+import { IconTile, MISSING } from "./PlKit";
 import { toneOf, TONE_TEXT } from "./profitUi";
 import type { StatementAnswer } from "./useStatement";
 
 // ---------------------------------------------------------------------------
 // The four figures at the top of Profit & Loss (the owner's design, 13 Nov 2026): what came in, what
-// went out, what is left and what share of the revenue that is, each with its change from the dates
-// compared with and what it means behind the "i". Every figure is the server's (@app/shared/profit);
-// "Missing data" wherever an input isn't known, never a 0.
+// went out, what is left and what share of the revenue that is, each with what it means behind the
+// "i". Every figure is the server's (@app/shared/profit); "Missing data" wherever an input isn't
+// known, never a 0.
 // ---------------------------------------------------------------------------
 
 function Kpi({
@@ -21,8 +21,6 @@ function Kpi({
   help,
   value,
   valueTone,
-  change,
-  versus,
   note,
   testid,
 }: {
@@ -32,8 +30,6 @@ function Kpi({
   help: ReactNode;
   value: string | null;
   valueTone?: string;
-  change?: ReactNode;
-  versus: string;
   note?: ReactNode;
   testid: string;
 }) {
@@ -56,19 +52,14 @@ function Kpi({
         <p className={`mt-1 truncate text-2xl leading-8 font-semibold tracking-[-0.02em] tabular-nums ${valueTone ?? ""}`} title={value ?? MISSING} data-testid={`${testid}-value`}>
           {value ?? <span className="text-base font-medium text-warn">{MISSING}</span>}
         </p>
-        <p className="mt-1 flex min-h-5 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted">
-          {change}
-          {value !== null && <span>{versus}</span>}
-        </p>
         {note && <p className="mt-1 text-xs text-muted">{note}</p>}
       </div>
     </div>
   );
 }
 
-export function KpiCards({ a, versus }: { a: StatementAnswer; /** "vs previous 30 days" */ versus: string }) {
+export function KpiCards({ a }: { a: StatementAnswer }) {
   const t = a.total;
-  const c = a.compare;
   const money = (n: number | null) => (n === null ? null : fmtMoney(n, a.currency));
   const profitTone = toneOf(t.netProfit);
   return (
@@ -79,8 +70,6 @@ export function KpiCards({ a, versus }: { a: StatementAnswer; /** "vs previous 3
         label="Revenue (Tax Incl.)"
         help="Everything your customers paid in these dates, with tax and duties included: Shopify's total sales."
         value={money(t.totalSales)}
-        change={<Change now={t.totalSales} before={c.totalSales} />}
-        versus={versus}
         note={
           t.revenue !== null && (
             <>
@@ -99,8 +88,6 @@ export function KpiCards({ a, versus }: { a: StatementAnswer; /** "vs previous 3
         label="Total Expenses"
         help="Every cost of these dates added up: product costs, advertising, your other variable costs, fixed costs, and interest, tax and the like. Each is counted once."
         value={money(t.totalExpenses)}
-        change={<Change now={t.totalExpenses} before={c.totalExpenses} cost />}
-        versus={versus}
         note={t.totalExpenses === null ? "A cost isn't known for these dates yet: the Expenses tab says which." : undefined}
         testid="pl-card-expenses"
       />
@@ -111,8 +98,6 @@ export function KpiCards({ a, versus }: { a: StatementAnswer; /** "vs previous 3
         help="What is left for the business: revenue before tax, less total expenses. The sales tax you collected (GST or VAT) is taken out first, because it is passed on to the government."
         value={money(t.netProfit)}
         valueTone={profitTone ? TONE_TEXT[profitTone] : undefined}
-        change={<Change now={t.netProfit} before={c.netProfit} />}
-        versus={versus}
         note={t.netProfit === null && t.afterKnownCosts !== null ? `Left after the costs known: ${fmtMoney(t.afterKnownCosts, a.currency)}. Not called profit yet.` : undefined}
         testid="pl-card-profit"
       />
@@ -123,8 +108,6 @@ export function KpiCards({ a, versus }: { a: StatementAnswer; /** "vs previous 3
         help="Profit as a share of revenue before tax: of every 100 you keep from sales, how much is profit."
         value={t.netMargin === null ? null : fmtPct(t.netMargin)}
         valueTone={profitTone ? TONE_TEXT[profitTone] : undefined}
-        change={<PointsChange now={t.netMargin} before={c.netMargin} />}
-        versus={versus}
         testid="pl-card-margin"
       />
     </section>

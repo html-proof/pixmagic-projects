@@ -9,7 +9,7 @@ import { useQueryParam } from "@/components/advertising/useAdvertising";
 import { canManage as canManageStores, StoresPending, useApp } from "@/components/AppContext";
 import { Skeleton, useAction } from "@/components/AppUi";
 import { blankCost } from "@/components/costs/CostForm";
-import { CustomDates, DateRangeSelect, versusWords } from "@/components/dashboard/DateRange";
+import { CustomDates, DateRangeSelect } from "@/components/dashboard/DateRange";
 import { fmtDay, fmtRange } from "@/components/dashboard/format";
 import { LoadError } from "@/components/LoadError";
 import { CategoriesDialog, ExpenseDialog, type Editing } from "@/components/profit/ExpenseDialog";
@@ -41,8 +41,8 @@ const isTab = (v: string): v is Tab => TABS.some((t) => t.id === v);
 /**
  * Profit & Loss (docs/kpis.md "Profit & Loss page"): whether the store made money in any dates, in one
  * place (the owner's design, 13 Nov 2026). Four figures at the top (revenue, expenses, profit, margin),
- * then five sections: Overview (the trend, what stands out, where the money went, the statement
- * against the dates compared with), Revenue, Expenses (the store's own costs, managed here: added,
+ * then five sections: Overview (the trend, what stands out, where the money went, the statement),
+ * Revenue, Expenses (the store's own costs, managed here: added,
  * changed, copied and removed, in categories of the store's own, paid once or every period),
  * Profit Analysis, and the Detailed Table: the statement period by period and the day-by-day sheet
  * with the team's business events (the Profit sheet page, /sheet, until this design folded it in).
@@ -123,7 +123,7 @@ function ProfitView() {
               <Skeleton lines={8} />
             </div>
           )}
-          {data && <KpiCards a={data} versus={versusWords(s.shown)} />}
+          {data && <KpiCards a={data} />}
 
           <Tabs
             tab={tab}
@@ -148,8 +148,8 @@ function ProfitView() {
 
           <div role="tabpanel" id="pl-panel" aria-labelledby={`pl-tab-${tab}`} className="space-y-4" data-testid={`pl-panel-${tab}`}>
             {data && tab !== "revenue" && tab !== "table" && <Completeness s={s} />}
-            {data && tab === "overview" && <OverviewTab a={data} s={s} events={events.data ? events.data.events.length : null} onAddEvent={canAddEvent ? addEvent : null} onDownload={download} onDetails={() => goTo(setTab, "table")} />}
-            {data && tab === "revenue" && <RevenueTab a={data} s={s} />}
+            {data && tab === "overview" && <OverviewTab a={data} events={events.data ? events.data.events.length : null} onAddEvent={canAddEvent ? addEvent : null} onDownload={download} onDetails={() => goTo(setTab, "table")} />}
+            {data && tab === "revenue" && <RevenueTab a={data} />}
             {tab === "expenses" && (
               <>
                 {data && (
@@ -162,7 +162,7 @@ function ProfitView() {
                 {data && <OperatingDays a={data} s={s} />}
               </>
             )}
-            {data && tab === "analysis" && <AnalysisTab a={data} s={s} />}
+            {data && tab === "analysis" && <AnalysisTab a={data} />}
             {tab === "table" && (
               <>
                 {data && <Statement a={data} onDownload={download} />}

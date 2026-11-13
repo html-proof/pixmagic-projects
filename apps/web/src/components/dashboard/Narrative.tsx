@@ -12,28 +12,6 @@ import { Icon } from "./Icons";
 /** A figure in a sentence, in bold. */
 export const B = ({ children }: { children: ReactNode }) => <strong className="font-semibold">{children}</strong>;
 
-/**
- * A change on the period before, to end a sentence: ", up 12% on the period before"; `same`
- * when nothing changed (each page has its own words for it); "" with nothing to compare with.
- * `on` names what it is compared with, when a page knows better ("yesterday at the same time").
- */
-export const changeWords = (d: number | null, same: string, on = "the period before") =>
-  d === null ? "" : d === 0 ? same : `, ${d > 0 ? "up" : "down"} ${fmtPct(Math.abs(d))} on ${on}`;
-
-/**
- * What the dashboard's numbers are compared with, for the end of a sentence: "yesterday at the
- * same time" for today (Shopify's like-for-like), "the period before" otherwise.
- */
-export function comparedOn(ov: { range: { from: string; to: string }; previous: { from: string; to: string; until?: string } }): string {
-  return ov.range.from === ov.range.to && ov.previous.until ? "yesterday at the same time" : "the period before";
-}
-
-/** The same for the ad platforms' figures, which are whole days, never cut at a time of day. */
-export const comparedOnWholeDays = (ov: Parameters<typeof comparedOn>[0]) => comparedOn({ range: ov.range, previous: { ...ov.previous, until: undefined } });
-
-/** "up 12%" or "down 3%" ("up 0%" when nothing changed), or null with nothing to compare with. */
-export const upDown = (d: number | null) => (d === null ? null : d >= 0 ? `up ${fmtPct(d)}` : `down ${fmtPct(-d)}`);
-
 /** A change as an arrow and a percentage, colored by whether it's good news ("—" with nothing to compare with). */
 export function Change({ value, invert = false }: { value: number | null | undefined; invert?: boolean }) {
   if (value === null || value === undefined) return <span className="text-muted">—</span>;

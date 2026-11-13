@@ -6,13 +6,13 @@ import { SITE_SECTIONS } from "@app/shared/journey";
 import { hasFullAccess } from "@app/shared/access";
 import { TRAFFIC_LABEL, TRAFFIC_SOURCES } from "@app/shared/traffic";
 import { useApp } from "@/components/AppContext";
-import { CustomDates, DateRangeSelect, comparedWith } from "@/components/dashboard/DateRange";
+import { CustomDates, DateRangeSelect } from "@/components/dashboard/DateRange";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { SECTION_LABEL } from "@/components/dashboard/Funnel";
 import { countryName } from "./FunnelUi";
 import type { FunnelFilterKey, FunnelState } from "./useFunnel";
 
-/** The page's title and its question: the store, the dates and what they're compared with, the filter; how current it is; refresh and download. */
+/** The page's title and its question: the store, the dates, the filter; how current it is; refresh and download. */
 export function FunnelHeader({ s }: { s: FunnelState }) {
   const { stores, store, setStoreId, allowed, access } = useApp();
   const [now, setNow] = useState(() => Date.now());
@@ -23,7 +23,6 @@ export function FunnelHeader({ s }: { s: FunnelState }) {
   const f = s.funnel;
   const canExport = allowed("reports.export");
   const canPrint = canExport || hasFullAccess(access.role);
-  const compared = comparedWith(s.shown);
   const lastVisit = fmtRelative(f?.lastEventAt, now);
   const ordersAsOf = fmtRelative(s.ov?.freshness?.asOf, now);
   const checked = s.checkedAt ? fmtRelative(new Date(s.checkedAt).toISOString(), now) : null;
@@ -61,7 +60,6 @@ export function FunnelHeader({ s }: { s: FunnelState }) {
           {s.shown && (
             <p className="mt-1 hidden text-sm print:block">
               {store?.name ?? store?.shopDomain} · {fmtRange(s.shown.range.from, s.shown.range.to)}
-              {compared ? ` · ${compared}` : ""}
             </p>
           )}
         </div>

@@ -1,21 +1,21 @@
 "use client";
 import Link from "next/link";
 import { LineChart, type LineSeries } from "@/components/dashboard/LineChart";
-import { Empty, NeutralDelta, Panel, Stat } from "@/components/dashboard/Primitives";
+import { Empty, Panel, Stat } from "@/components/dashboard/Primitives";
 import { asOfWords } from "@/components/dashboard/ShopifyReports";
 import { fmtDay } from "@/components/dashboard/format";
 import { fmtMoney, fmtNum, fmtPct, friendlyError } from "@/lib/api";
 import { count } from "./FunnelUi";
-import type { AbandonedCheckoutsModule, CheckoutFigures, CheckoutsStatus } from "./useAbandonedCheckouts";
+import type { CheckoutFigures, CheckoutsStatus } from "./useAbandonedCheckouts";
 import { useAbandonedCheckouts } from "./useAbandonedCheckouts";
 
 /**
  * Shopify's own abandoned checkouts for the dates (docs/kpis.md "Abandoned checkouts (Shopify)"):
- * how many there were, their value, and how many were recovered, against the comparison. Every
+ * how many there were, their value, and how many were recovered. Every
  * figure is Shopify's; a gap says why in words, never as 0. Not the pixel's "left at checkout"
  * (tracked visits) and not Shopify's "sessions that reached checkout": the help line says so.
  */
-export function AbandonedCheckoutsCard({ qs, currency, versus }: { qs: string | null; currency: string; versus?: string }) {
+export function AbandonedCheckoutsCard({ qs, currency }: { qs: string | null; currency: string }) {
   const s = useAbandonedCheckouts(qs);
   if (!s.shown) return null;
   // Never the dates asked before under the new ones: until their answer arrives, it says it's asking.
@@ -48,7 +48,7 @@ export function AbandonedCheckoutsCard({ qs, currency, versus }: { qs: string | 
       ) : !m.current ? (
         <Empty>{statusNote(m.status, m.visibleFrom)}</Empty>
       ) : (
-        <Figures m={m} c={m.current} currency={m.current.currency ?? currency} versus={versus} />
+        <Figures c={m.current} currency={m.current.currency ?? currency} />
       )}
     </Panel>
   );
@@ -78,7 +78,7 @@ const VALUE_GAP: Record<NonNullable<CheckoutFigures["valueGap"]>, string> = {
 
 const COLORS = { abandoned: "var(--viz-cat-1)", recovered: "var(--viz-cat-2)" };
 
-function Figures({ m, c, currency, versus }: { m: AbandonedCheckoutsModule; c: CheckoutFigures; currency: string; versus?: string }) {
+function Figures({ c, currency }: { c: CheckoutFigures; currency: string }) {
   const money = (n: number | null) => (n === null ? "Not added up" : fmtMoney(n, currency));
   const days = c.days ?? null;
   const series: LineSeries[] = days
@@ -90,34 +90,14 @@ function Figures({ m, c, currency, versus }: { m: AbandonedCheckoutsModule; c: C
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Abandoned checkouts" value={`${fmtNum(c.abandoned)}${c.abandonedExact ? "" : "+"}`} note={<NeutralDelta value={m.deltas.abandoned} label={versus} />} />
-        <Stat label="Abandoned checkout value" value={money(c.value)} note={<NeutralDelta value={m.deltas.value} label={versus} />} />
-        <Stat
-          label="Recovered so far"
-          value={`${fmtNum(c.recovered)}${c.recoveredExact ? "" : "+"}`}
-          tone="good"
-          note={
-            // Not toned good or bad: the dates compared with have had longer for their checkouts to be
-            // recovered, so a fall is often only timing (docs/kpis.md).
-            <>
-              {c.recoveredRate !== null ? `${fmtPct(c.recoveredRate)} of them · ` : ""}
-              <NeutralDelta value={m.deltas.recoveredRate} label={versus} />
-              {m.deltas.recoveredRate !== null && (
-                <span className="mt-1 block text-xs text-muted">Recent checkouts can still be recovered, so the newer dates&apos; rate can still rise.</span>
-              )}
-            </>
-          }
-        />
+        <Stat label="Abandoned checkouts" value={`${fmtNum(c.abandoned)}${c.abandonedExact ? "" : "+"}`} />
+        <Stat label="Abandoned checkout value" value={money(c.value)} />
+        <Stat label="Recovered so far" value={`${fmtNum(c.recovered)}${c.recoveredExact ? "" : "+"}`} tone="good" note={c.recoveredRate !== null ? `${fmtPct(c.recoveredRate)} of them` : undefined} />
         <Stat label="Recovered value" value={money(c.recoveredValue)} note="Checkouts completed later" />
       </div>
       {c.valueGap && (
         <p className="alert alert-warn text-sm" data-testid="abandoned-value-gap">
           {VALUE_GAP[c.valueGap]}
-        </p>
-      )}
-      {m.previousStatus === "beyond_history" && (
-        <p className="text-xs text-muted" data-testid="abandoned-previous-beyond">
-          The dates compared with are older than the 60 days of checkouts Shopify shares, so there is nothing to compare with.
         </p>
       )}
       {days && days.length > 1 && (

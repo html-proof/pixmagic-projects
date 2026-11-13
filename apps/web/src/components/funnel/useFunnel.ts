@@ -57,7 +57,7 @@ export function useFunnel() {
   const live = useLiveApi<Overview>(path, LIVE_EVERY_MS);
   // Never one store's figures under another store's name while switching.
   const ov = live.data && store && live.data.store.id === store.id ? live.data : null;
-  const shown: Shown = ov && { range: ov.range, previous: ov.previous, timezone: ov.store.timezone };
+  const shown: Shown = ov && { range: ov.range, timezone: ov.store.timezone };
   return {
     dates,
     filter,

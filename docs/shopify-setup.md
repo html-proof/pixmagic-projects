@@ -177,7 +177,7 @@ back), in this order:
 3. The merchant opens the app from their Shopify admin and accepts the new permission (Shopify
    asks once, under managed installation). `app/scopes_update` then queues a full orders import
    (`scopeFollowUpKinds`), which reads every order with no date filter and records the history as
-   complete, so "No earlier data" goes away for any comparison.
+   complete, so no dates show as "Not imported" any more.
 
 Or, once approved, declare it in `optional_scopes` instead (every toml and
 `SHOPIFY_OPTIONAL_SCOPES`, as in 3e): installs keep working for merchants who never want it, and the
@@ -317,7 +317,7 @@ Both then queue the same follow-up import, because **granting a scope does not b
 
 - `read_customers` changes what the orders query asks for, so every order already imported carries no customer hash → a **full** orders re-import, not a recent-days one. Without it "New vs returning" reads as 100% new, which is worse than the module staying locked.
 - `write_pixels` only grants permission to create the web pixel → `install_pixel`. Until it exists the storefront sends no events.
-- `read_all_orders` (granted however it was asked for) → the same **full** orders import, which now reads the orders older than 60 days. Until then a comparison with older dates still says "No earlier data".
+- `read_all_orders` (granted however it was asked for) → the same **full** orders import, which now reads the orders older than 60 days. Until then older dates still show as "Not imported".
 
 ### Giving a scope back
 
