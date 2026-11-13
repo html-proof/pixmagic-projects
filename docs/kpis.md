@@ -342,55 +342,13 @@ measure net sales only.
 
 **Not imported.** Days and months before the store's imported history (`historyFrom`, see Conventions: the first whole day of Shopify's 60-day window, not the first order) are drawn hatched and labelled, never as $0. Shopify shares only the last 60 days of orders without `read_all_orders`; with it nothing is "not imported". A month that is only partly imported is drawn lighter, and no change is calculated for it or against it.
 
-## The simple Home (2026-11-05)
-
-What /dashboard shows first (`SIMPLE_HOME` in apps/web/src/lib/features.ts), drawn as the owner's
-approved Stitch design draws it (prototype v2, project 4270728427536011606: screen 01, 03 for a store
-without automations, 04 on a phone): `apps/web/src/components/dashboard/SimpleHome.tsx` and
-`homeNeeds.ts`. Plain white panels with a small radius and a faint shadow, soft tinted rows and
-buttons (globals.css `home-card`, `home-btn`, `--home-*`). The header is the greeting, "Updated 3 min
-ago · Matches Shopify" (the full dashboard's status pills in words, `StatusWords`) and one date card
-(`DateChip`: the dates over "vs" the dates compared with, the same two menus as the full dashboard's
-pills). How far back the orders go moves to the foot ("Shopify shares your last 60 days of orders ·
-Allow full history", `HistoryFoot`), with About this data under it. "Show the full dashboard" under
-the greeting brings back every panel below ("Dashboard home") on that device (localStorage
-`home-layout`), and "Back to the simple Home" returns. Every figure is the full dashboard's, worked
-out by the same code:
-
-- **Needs you** (`needsOf`), worst first: the bell's open problems (warnings and critical alerts, for
-  this store or the whole workspace; not its notes, nor a sync that stopped, which is explained above
-  the numbers), orders waiting to ship ("Open in Shopify": bizinsights doesn't ship), stock running
-  out (the first of `inventory.lowStockItems` and how many more need stock, graded as the health
-  check grades stock; "See stock" opens Inventory → Low stock where the member has it) and sales with
-  no cost per item in Shopify ("Add in Shopify", for a member shown product costs). Nothing to do
-  says so.
-- **Four numbers**: Total sales (Net sales without `finance.breakdown`, with the same Refunds and
-  Custom sales lines), Orders, then **Left over** once some cost is known: Business profit
-  overview's figure (`leftOverOf` in profitFigures.ts), "Net profit" only when it is one, otherwise
-  "41¢ of every $1, after product costs, ads and your costs" (a share of net sales in other
-  currencies) and, on hover and for screen readers, "Not profit". Without a cost known, Average order
-  value instead. Last, **Visits that bought** (the funnel's conversion rate, of the visits the pixel
-  tracked) where there are tracked visits, otherwise Average order value (or Total products sold).
-  Each change is "+12.7%" under the number (beside its name on a phone); the date card says what
-  it is compared with. The "i" in a tile's corner says what the figure measures, in the words of
-  `components/dashboard/figureHelp.ts` (the Sales Overview's figures use the same): keep them in
-  step with "Formulas" above.
-- **Sales by day**: total sales (net without the breakdown) each day of the dates as dark green
-  bars, today's paler with "today so far" over it, and the dates compared with as a dotted line, day
-  i over day i (`sales_overview.previousSeries`: each day's net and total sales, null when those
-  dates weren't imported). No axis: hovering, the arrow keys and a table for screen readers give
-  each day's figures.
-- **What changed**: the first three checks of the business health check, each opening its details.
-- **Working for you**: the Automations hub's own answer (GET …/automations), as "Order confirmation
-  (SMS), On, 381 sent in 30 days" (handed to the provider: sent, delivered or undelivered), busiest
-  first, and one that's off with "Turn on" (the Automations page, which asks to confirm). Only where
-  the menu shows Automations; elsewhere (App Store stores) What changed sits beside the chart.
-- **More insights you can unlock** (owners and admins, when Shopify access is missing): one quiet
-  list under the panels, the same rows and buttons as the full dashboard's cards.
-
 ## The Sales pages (2026-11-06)
 
-The dashboard's topics as pages of their own, in the Stitch design's layouts (screens 05–08:
+The dashboard's topics as pages of their own, in the owner's approved Stitch design (prototype v2,
+project 4270728427536011606): plain white panels with a small radius and a faint shadow, soft tinted
+rows and buttons (globals.css `home-card`, `home-btn`, `--home-*`), "Updated 3 min ago · Matches
+Shopify" in words (`StatusWords`) and one date card (`DateChip`: the dates over "vs" the dates
+compared with). The layouts are the design's screens 05–08:
 `apps/web/src/components/dashboard/SalesViews.tsx`, frame and tabs in `SalesFrame.tsx`). Each reads
 the same overview answer as the Home (GET …/overview for the dates picked), so a figure is the same
 wherever it shows. Under the Overview's layout, "More detail" keeps the earlier panels (Total sales
@@ -402,12 +360,17 @@ by month).
     compared with, orders and items sold.
   - **Four numbers**: Total sales (or Net sales), Orders, Average order (net sales ÷ orders, as
     "Formulas"), and Visits that bought (the funnel's conversion rate of tracked visits) or, with no
-    tracked visits, Items sold.
+    tracked visits, Items sold. The "i" beside a figure's name says what it measures, in the words
+    of `components/dashboard/figureHelp.ts`: keep them in step with "Formulas" above.
   - **How your sales add up**: Gross sales − Discounts − Returns = Net sales, + Shipping (+ Duties,
     + Additional fees when there were any) + Taxes = Total sales, the lines of Shopify's total sales
     breakdown. Only for a member shown every line. Returns is `returns` from the API, or gross −
     discounts − net where an older answer lacks it.
-  - **Sales by day**, as on the simple Home. Under it:
+  - **Sales by day** (`SalesByDay.tsx`): total sales (net without the breakdown) each day of the
+    dates as dark green bars, today's paler with "today so far" over it, and the dates compared with
+    as a dotted line, day i over day i (`sales_overview.previousSeries`: each day's net and total
+    sales, null when those dates weren't imported). No axis: hovering, the arrow keys and a table
+    for screen readers give each day's figures. Under it:
     - **Best day**: the day with the highest total sales (net without the breakdown).
     - **Best weekday**: the weekday whose days add up to the most, in the store's time zone.
     - **Average day**: the dates' total ÷ their days, today included (so far).
@@ -433,8 +396,8 @@ by month).
   and returning, so new + returning can be more than customers.
 - **Orders & shipping**:
   - **Orders at a glance**: completed, awaiting payment and unsuccessful (cancelled, payment failed,
-    refunded in full) add up to the orders placed in the dates, as "Orders at a glance" on the full
-    dashboard (`order_outcomes`), with shoppers left at checkout where the pixel counted them.
+    refunded in full) add up to the orders placed in the dates, as "Orders at a glance" on the Home
+    (`order_outcomes`), with shoppers left at checkout where the pixel counted them.
   - **Shipping**: waiting to ship (open orders from any date), average time to ship and the share
     shipped of the dates' orders (`fulfillment`).
   - **Orders**: every order placed in the dates (GET …/orders), searchable by order number and
@@ -444,7 +407,8 @@ by month).
 
 ## Dashboard home (the owner's design)
 
-The full dashboard, one click from the simple Home. Reference implementation: `apps/web/src/components/dashboard/HomePanels.tsx` (and the tiles in
+What /dashboard shows. (A simpler Home, with a switch between the two, was live from 2026-11-05 and
+removed by the owner on 2026-11-13.) Reference implementation: `apps/web/src/components/dashboard/HomePanels.tsx` (and the tiles in
 `HomeCards.tsx`), from the owner's mock of 2026-10-24. Every figure is one the overview already
 carries; nothing is estimated.
 

@@ -521,7 +521,7 @@ function compareChoice(r: DateRangeState, shown: Shown, current: boolean) {
 }
 
 /**
- * The simple Home's dates (the Stitch design): one card, the dates on top ("Last 30 days (7 Oct –
+ * A topic page's dates (the Stitch design): one card, the dates on top ("Last 30 days (7 Oct –
  * 5 Nov)") and what they are compared with under them ("vs 7 Sep – 6 Oct"). Each line is the page's
  * own menu laid over it (ids `date-range` and `compare-with`), so it opens the same choices as the
  * full dashboard's two pills.

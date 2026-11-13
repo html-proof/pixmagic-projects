@@ -9,7 +9,7 @@ import { EmptyState, Alert } from "@/components/ui";
 import { AboutThisData, EmptyStoreNote, StatusWords, StoreStatus, type LiveState } from "@/components/dashboard/StoreHeader";
 import { CompareDates, comparedWith, CompareSelect, CustomDates, DateChip, DateRangeSelect, periodWords, useDateRange, versusWords, type Shown } from "@/components/dashboard/DateRange";
 import { SalesActions, SalesCrumbs, SalesHeader, SalesTabs, salesTabOf, StatusPill } from "@/components/dashboard/SalesFrame";
-import { HistoryFoot, HistoryLine } from "@/components/dashboard/HistoryLine";
+import { HistoryLine } from "@/components/dashboard/HistoryLine";
 import { topicInfo, useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
 import { KpiCard, RefundsLine } from "@/components/dashboard/HomeCards";
@@ -17,15 +17,10 @@ import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, O
 import { OverviewCharts } from "@/components/dashboard/OverviewCharts";
 import { appliedCustom } from "@/components/dashboard/redacted";
 import { AnimatedNumber } from "@/components/dashboard/Motion";
-import { costsOf, leftOverOf, leftOverWords, type LeftOver } from "@/components/dashboard/profitFigures";
-import { needsOf } from "@/components/dashboard/homeNeeds";
-import { greeting, NeedsYou, NumberTile, SalesByDay, useHomeAlerts, useHomeLayout, WhatChanged, WorkingForYou } from "@/components/dashboard/SimpleHome";
 import { TourOffer } from "@/components/Tour";
-import { FIGURE_HELP, visitsThatBoughtHelp } from "@/components/dashboard/figureHelp";
 import type { Capability, Overview } from "@/components/dashboard/types";
 import { signInFinished } from "@/lib/adSignIn";
-import { api, ApiError, apiHref, fmtMoney, fmtNum, fmtPct, friendlyError, isTransient, useLiveApi } from "@/lib/api";
-import { AUTOMATIONS_HUB, SIMPLE_HOME } from "@/lib/features";
+import { api, ApiError, apiHref, fmtMoney, fmtNum, friendlyError, isTransient, useLiveApi } from "@/lib/api";
 import { scopeList } from "@app/shared/capabilities";
 import { ALL_HISTORY } from "@app/shared/dates";
 import { hasFullAccess, ROLE_INFO, seesModule } from "@app/shared/access";
@@ -70,7 +65,7 @@ const AWAITING_GRANT_KEY = "insights:awaiting-scope-grant";
  * A missing *pixel* with the scopes already granted is none of these: a background job creates
  * it, so it resolves itself and the card just says so.
  */
-function LockedModule({ c, onRequest, pending, row = false }: { c: Capability; onRequest: (c: Capability) => void; pending: boolean; row?: boolean }) {
+function LockedModule({ c, onRequest, pending }: { c: Capability; onRequest: (c: Capability) => void; pending: boolean }) {
   const { workspace, store } = useApp();
   const reconnect = c.reconnectableScopes.length > 0;
   const requestable = !reconnect && c.missingScopes.length > 0 && c.requestableScopes.length === c.missingScopes.length;
@@ -86,25 +81,12 @@ function LockedModule({ c, onRequest, pending, row = false }: { c: Capability; o
           : `Needs access to ${scopeList(c.missingScopes)}. We're waiting on Shopify to approve our access to that data — it isn't something you can turn on.`;
   const action =
     reconnect && canManage(workspace.role) && store ? (
-      <Link className={row ? "home-btn" : "btn-primary mt-2 inline-block"} href={reconnectHref(workspace.id, store.shopDomain)}>Reconnect</Link>
+      <Link className="btn-primary mt-2 inline-block" href={reconnectHref(workspace.id, store.shopDomain)}>Reconnect</Link>
     ) : requestable && canManage(workspace.role) ? (
-      <button type="button" className={row ? "home-btn" : "btn-primary mt-2"} onClick={() => onRequest(c)} disabled={pending}>
+      <button type="button" className="btn-primary mt-2" onClick={() => onRequest(c)} disabled={pending}>
         {pending ? "Opening Shopify…" : "Enable"}
       </button>
     ) : null;
-  // The simple Home: a row of one quiet list, as its Needs you (the Stitch design has no cards here).
-  if (row) {
-    return (
-      <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-3 sm:flex-nowrap sm:px-6" data-testid={`locked-${c.id}`}>
-        <div className="min-w-0 text-sm">
-          <p className="font-medium">{c.title}</p>
-          <p className="text-muted">{c.description}</p>
-          <p className="mt-0.5 text-xs text-muted">{why}</p>
-        </div>
-        {action && <span className="shrink-0">{action}</span>}
-      </li>
-    );
-  }
   return (
     <li className="card lift border-dashed text-sm" data-testid={`locked-${c.id}`}>
       <p className="font-medium">{c.title}</p>
@@ -113,21 +95,6 @@ function LockedModule({ c, onRequest, pending, row = false }: { c: Capability; o
       {action}
     </li>
   );
-}
-
-/** Currencies whose hundredth is a cent and whose unit a dollar: "41¢ of every $1" reads right for them. */
-const DOLLARS = new Set(["USD", "AUD", "CAD", "NZD"]);
-
-/**
- * Under Left over, as the design words it: "41¢ of every $1, after product costs and your costs".
- * A loss, or nothing sold, says only what was taken off.
- */
-function leftOverSub(l: LeftOver, currency: string): string {
-  const words = leftOverWords(l);
-  if (l.base <= 0 || l.value < 0) return words;
-  const r = l.value / l.base;
-  const share = DOLLARS.has(currency) ? `${Math.round(r * 100)}¢ of every $1` : `${fmtPct(r)} of ${l.isNet ? "revenue" : "net sales"}`;
-  return l.isNet ? `${share}${DOLLARS.has(currency) ? " of revenue" : ""}` : `${share}, ${words.charAt(0).toLowerCase()}${words.slice(1)}`;
 }
 
 /**
@@ -240,11 +207,6 @@ export default function DashboardPage() {
   const { me, workspace, stores, storesStatus, store, access, allowed, offers } = useApp();
   // Team & Access: a member with nothing shared yet asks for no numbers at all.
   const sharesData = hasDashboardAccess(access);
-  // The simple Home or the full dashboard, as chosen on this device (lib/features.ts SIMPLE_HOME).
-  const [layout, setLayout] = useHomeLayout();
-  const simple = layout === "simple";
-  // The bell's open problems, for the simple Home's Needs you list.
-  const alerts = useHomeAlerts(simple && sharesData ? workspace.id : null);
   const adsNotice = useAdsConnectedNotice();
   const [taken, dismissTaken] = useStoreTakenNotice();
   // Where the store's dates begin, from the store list (the API checks the same limits).
@@ -420,9 +382,8 @@ export default function DashboardPage() {
   const compared = comparedWith(shown);
   const versus = versusWords(shown);
   const name = firstName(me.user.displayName);
-  const money = (n: number) => fmtMoney(n, cur);
 
-  // Under Total sales on either Home: what refunds took off it (it is already after them), for a
+  // Under Total sales: what refunds took off it (it is already after them), for a
   // member who may see refunds; then the store's own calculation, when it shows it: under Shopify's
   // figure, named, never instead of it.
   const salesExtra =
@@ -438,111 +399,7 @@ export default function DashboardPage() {
       </>
     ) : undefined;
 
-  // ---- The simple Home (components/dashboard/SimpleHome.tsx) ----
-  // Left over: Business profit overview's figure, worked out by the same code (profitFigures.ts).
-  const costs = ov && s ? costsOf(ov, cur, adsOn) : null;
-  const leftOver = ov && costs ? leftOverOf(ov, costs, cur, { offered: offers("ads"), shown: adsOn }, costsOn) : null;
-  // Only once some cost was taken off: net sales again under another name says nothing.
-  const showLeftOver = !!leftOver && (leftOver.isNet || leftOver.taken > 0);
-  // The menu's own rule for the Automations hub (AppShell.tsx).
-  const automationsOn = AUTOMATIONS_HUB && ((offers("sms") && allowed("marketing.campaigns")) || (offers("email") && allowed("integrations.status")));
-  const needs = ov && simple ? needsOf({ ov, alerts, costs: costsOn ? costs : null, money, stockHref: offers("inventory") && allowed("inventory.view") ? "/inventory/low-stock" : null }) : [];
-  const funnel = m?.funnel && m.funnel.visits > 0 ? m.funnel : null;
-  // What each of the four numbers measures is behind its "i" (components/dashboard/figureHelp.ts).
-  const aovTile = (i: number) =>
-    s && (
-      <NumberTile
-        i={i}
-        title="Average order value"
-        value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={money} />)}
-        delta={s.deltas.averageOrderValue}
-        compared={compared}
-        versus={versus}
-        help={FIGURE_HELP.averageOrder}
-        onClick={() => detail.open("sales")}
-      />
-    );
-  const simpleTiles = s && (
-    <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4" data-tour="numbers">
-      {s.current.totalSales !== undefined ? (
-        <NumberTile
-          i={0}
-          title="Total sales"
-          value={figure(<AnimatedNumber value={s.current.totalSales} format={money} />)}
-          delta={s.deltas.totalSales ?? null}
-          compared={compared}
-          versus={versus}
-          extra={salesExtra}
-          help={FIGURE_HELP.totalSales}
-          onClick={() => detail.open("sales")}
-        />
-      ) : (
-        <NumberTile
-          i={0}
-          title="Net sales"
-          value={figure(<AnimatedNumber value={s.current.netSales} format={money} />)}
-          delta={s.deltas.netSales}
-          compared={compared}
-          versus={versus}
-          help={FIGURE_HELP.netSales}
-          onClick={() => detail.open("sales")}
-        />
-      )}
-      <NumberTile
-        i={1}
-        title="Orders"
-        value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)}
-        delta={s.deltas.orders}
-        compared={compared}
-        versus={versus}
-        help={FIGURE_HELP.orders}
-        onClick={() => detail.open("sales")}
-      />
-      {showLeftOver && leftOver ? (
-        <NumberTile
-          i={2}
-          title={leftOver.isNet ? "Net profit" : "Left over"}
-          value={figure(<span className={leftOver.value < 0 ? "text-danger" : undefined}>{money(leftOver.value)}</span>)}
-          sub={
-            <span data-testid="left-over-what">
-              {leftOverSub(leftOver, cur)}
-              {!leftOver.isNet && <span className="sr-only">. Not profit: bizinsights may not have every cost.</span>}
-            </span>
-          }
-          help={leftOver.isNet ? FIGURE_HELP.netProfit : FIGURE_HELP.leftOver}
-          onClick={() => (allowed("analytics.sales") ? router.push("/sheet") : detail.open("sales"))}
-        />
-      ) : (
-        aovTile(2)
-      )}
-      {funnel ? (
-        <NumberTile
-          i={3}
-          title="Visits that bought"
-          value={figure(fmtPct(funnel.conversionRate))}
-          delta={funnel.previous.imported === false ? null : funnel.deltas.conversionRate}
-          compared={compared}
-          versus={versus}
-          help={visitsThatBoughtHelp(funnel.visits)}
-          onClick={() => detail.open("shoppers")}
-        />
-      ) : showLeftOver ? (
-        aovTile(3)
-      ) : (
-        <NumberTile
-          i={3}
-          title="Total products sold"
-          value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)}
-          delta={s.deltas.units}
-          compared={compared}
-          versus={versus}
-          help={FIGURE_HELP.itemsSold}
-          onClick={() => detail.open("products")}
-        />
-      )}
-    </section>
-  );
-  // While the store's dates are custom, their pickers under the header (either Home).
+  // While the store's dates are custom, their pickers under the header.
   const customPickers = (
     <>
       {dates.preset === "custom" && (
@@ -557,13 +414,6 @@ export default function DashboardPage() {
       )}
     </>
   );
-  // Every panel of the full dashboard, or back: kept on this device (SimpleHome.tsx useHomeLayout).
-  const layoutSwitch = SIMPLE_HOME && (
-    <button type="button" className="font-medium whitespace-nowrap text-accent hover:underline" onClick={() => setLayout(simple ? "full" : "simple")} data-testid="home-layout-switch">
-      {simple ? "Show the full dashboard" : "Back to the simple Home"}
-    </button>
-  );
-
   // How the store's sync stands, when something is wrong (the Home and every topic page say it alike).
   const storeAlerts = (
     <>
@@ -691,28 +541,6 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {simple ? (
-        // The Stitch design's header: the greeting, how current the numbers are, and the dates on one card.
-        <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-          <div className="min-w-0">
-            <h1 className="page-title">
-              {greeting(new Date().getHours())}
-              {name ? `, ${name}` : ""}
-            </h1>
-            <p className="mt-1 text-sm text-muted">
-              {headerStore && (
-                <>
-                  <StatusWords key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />
-                  {" · "}
-                </>
-              )}
-              {layoutSwitch}
-            </p>
-          </div>
-          <DateChip r={dates} shown={shown} current={!olderAnswer} />
-          {customPickers}
-        </header>
-      ) : (
       <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
         <div className="min-w-0">
           <h1 className="page-title">
@@ -720,18 +548,19 @@ export default function DashboardPage() {
           </h1>
           <p className="mt-1 text-sm text-muted sm:text-base">
             Here&apos;s what&apos;s happening with {hasFullAccess(access.role) ? "your store" : workspace.name} {periodWords(dates, shown)}.
-            {layoutSwitch && <> {layoutSwitch}</>}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
           {headerStore && <StoreStatus key={headerStore.id} store={headerStore} live={live} freshness={ov?.freshness} check={ov?.store.id === headerStore.id ? ov?.check : undefined} now={now} />}
-          <DateRangeSelect r={dates} shown={shown} id="date-range" label="Dates" />
-          {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
-          <CompareSelect r={dates} shown={shown} current={!olderAnswer} id="compare-with" label="Compare with" />
+          {/* The dates and what they are compared with: one part of the page for the look around (lib/tour.ts). */}
+          <div className="flex flex-wrap items-center gap-2.5" data-tour="dates">
+            <DateRangeSelect r={dates} shown={shown} id="date-range" label="Dates" />
+            {/* What the ▲ ▼ changes are on, as Shopify Analytics' second date chip. */}
+            <CompareSelect r={dates} shown={shown} current={!olderAnswer} id="compare-with" label="Compare with" />
+          </div>
         </div>
         {customPickers}
       </header>
-      )}
 
       {adsNotice && <Alert kind="success">{adsNotice}</Alert>}
       {takenNotice}
@@ -744,7 +573,6 @@ export default function DashboardPage() {
           reconnectHref={reconnectHref(workspace.id, ov.store.shopDomain)}
           onImportHistory={() => void askShopify("order_history", { scopes: ["read_all_orders"] })}
           importing={pendingScope === "order_history"}
-          brief={simple}
         />
       )}
       {scopeError && pendingScope === null && disabled.length === 0 && <Alert>{scopeError}</Alert>}
@@ -772,129 +600,93 @@ export default function DashboardPage() {
 
       {ov && <EmptyStoreNote store={ov.store} data={ov.data} />}
 
-      {/* The simple Home (the owner's approved Stitch design, 2026-11-05): what needs you, four
-          numbers, sales by day, then what changed beside the automations working; with no
-          automations offered (an App Store store), what changed beside the chart instead
-          (components/dashboard/SimpleHome.tsx). */}
-      {simple && ov && <TourOffer />}
-      {simple && ov && <NeedsYou needs={needs} onOpen={detail.open} />}
-      {simple && simpleTiles}
-      {simple &&
-        ov &&
-        (automationsOn ? (
-          <>
-            {s && <SalesByDay ov={ov} currency={cur} />}
-            <div className="grid gap-6 lg:grid-cols-2">
-              <WhatChanged ov={ov} currency={cur} onOpen={detail.open} />
-              <WorkingForYou />
-            </div>
-          </>
-        ) : (
-          <div className={`grid gap-6 ${s ? "lg:grid-cols-3" : ""}`}>
-            {s && <SalesByDay ov={ov} currency={cur} className="lg:col-span-2" />}
-            <WhatChanged ov={ov} currency={cur} onOpen={detail.open} stacked={!!s} />
-          </div>
-        ))}
+      {/* The look around, offered once on a new device (components/Tour.tsx). */}
+      {ov && <TourOffer />}
 
-      {!simple && (
-        <>
-        {/* The owner's design (2026-10-24): four numbers on tinted tiles, sales against ad spend and
-            what's left after the costs we can see, then sales, advertising and best sellers, then
-            costs, recent orders and key insights (components/dashboard/HomePanels.tsx); sales day by
-            day and month by month against the years before (OverviewCharts.tsx); and the
-            integrations strip. Every number and panel opens the full details, a Sales page of its
-            own (components/dashboard/SalesFrame.tsx). */}
-        {s && (
-          <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-            {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
-                holds tax and shipping, so a member who may not see those (Team & Access) gets net sales. */}
-            {s.current.totalSales !== undefined ? (
-              <KpiCard
-                i={0}
-                icon={CircleDollarSign}
-                tint="green"
-                title="Total sales"
-                value={figure(<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />)}
-                delta={s.deltas.totalSales ?? null}
-                compared={compared}
-                versus={versus}
-                spark={s.series.map((d) => d.totalSales ?? d.netSales)}
-                extra={salesExtra}
-                onClick={() => detail.open("sales")}
-              />
-            ) : (
-              <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.netSales} compared={compared} versus={versus} spark={s.series.map((d) => d.netSales)} onClick={() => detail.open("sales")} />
-            )}
-            <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} delta={s.deltas.orders} compared={compared} versus={versus} spark={s.series.map((d) => d.orders)} onClick={() => detail.open("sales")} />
-            <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} spark={s.series.map((d) => d.averageOrderValue)} onClick={() => detail.open("sales")} />
-            <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} delta={s.deltas.units} compared={compared} versus={versus} spark={s.series.map((d) => d.units ?? null)} onClick={() => detail.open("products")} />
-          </section>
-        )}
-
-        {/* How the dates' orders went (the owner, 2026-10-30): completed, awaiting payment and
-            unsuccessful, checkouts left, and what was sent. Not for dates before the imported orders. */}
-        {ov && m?.order_outcomes && !notImported && <OrdersAtAGlance ov={ov} period={periodWords(dates, shown)} onOpen={detail.open} />}
-
-        {ov && s && (
-          <div className="grid gap-4 xl:grid-cols-3">
-            <SalesVsAdSpend ov={ov} currency={cur} adsOn={adsOn} manage={manage} />
-            <ProfitOverview ov={ov} currency={cur} adsOn={adsOn} adsOffered={offers("ads")} costsOn={costsOn} manageCosts={canManage(workspace.role)} />
-          </div>
-        )}
-
-        {/* Whichever of these this store and this member have; the grid closes up around the rest. */}
-        {ov && (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {s && <SalesPerformance ov={ov} currency={cur} onOpen={detail.open} />}
-            {/* Not in a workspace that leaves advertising out (lib/features.ts), nor for a member not shown it. */}
-            {adsOn && <AdvertisingPerformance ov={ov} manage={manage} />}
-            {/* Paid vs organic: Shopify's own record of each order's visit, so it shows with or without ad accounts. */}
-            {m?.traffic?.split && <PaidVsOrganic ov={ov} currency={cur} onOpen={detail.open} />}
-            {m?.top_products && <TopProductsHome ov={ov} currency={cur} onOpen={detail.open} />}
-            {s && <ExpensesBreakdown ov={ov} currency={cur} adsOn={adsOn} costsOn={costsOn} manage={manage} manageCosts={canManage(workspace.role)} />}
-            {m?.recent_orders && <RecentOrdersHome ov={ov} currency={cur} onOpen={detail.open} />}
-            <KeyInsights ov={ov} currency={cur} onOpen={detail.open} report={seesTopic(access, "overview", offers)} />
-          </div>
-        )}
-
-        {ov && s && <OverviewCharts ov={ov} currency={cur} />}
-
-        {ov && manage && <GrowBusiness ov={ov} adsOn={adsOn} />}
-        </>
+      {/* The owner's design (2026-10-24): four numbers on tinted tiles, sales against ad spend and
+          what's left after the costs we can see, then sales, advertising and best sellers, then
+          costs, recent orders and key insights (components/dashboard/HomePanels.tsx); sales day by
+          day and month by month against the years before (OverviewCharts.tsx); and the
+          integrations strip. Every number and panel opens the full details, a Sales page of its
+          own (components/dashboard/SalesFrame.tsx). */}
+      {s && (
+        <section aria-label="Headline numbers" className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4" data-tour="numbers">
+          {/* Total sales, as Shopify's home page headlines it: the same figure for the same dates. It
+              holds tax and shipping, so a member who may not see those (Team & Access) gets net sales. */}
+          {s.current.totalSales !== undefined ? (
+            <KpiCard
+              i={0}
+              icon={CircleDollarSign}
+              tint="green"
+              title="Total sales"
+              value={figure(<AnimatedNumber value={s.current.totalSales} format={(n) => fmtMoney(n, cur)} />)}
+              delta={s.deltas.totalSales ?? null}
+              compared={compared}
+              versus={versus}
+              spark={s.series.map((d) => d.totalSales ?? d.netSales)}
+              extra={salesExtra}
+              onClick={() => detail.open("sales")}
+            />
+          ) : (
+            <KpiCard i={0} icon={CircleDollarSign} tint="green" title="Net sales" value={figure(<AnimatedNumber value={s.current.netSales} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.netSales} compared={compared} versus={versus} spark={s.series.map((d) => d.netSales)} onClick={() => detail.open("sales")} />
+          )}
+          <KpiCard i={1} icon={ShoppingCart} tint="blue" title="Orders" value={figure(<AnimatedNumber value={s.current.orders} format={fmtNum} />)} delta={s.deltas.orders} compared={compared} versus={versus} spark={s.series.map((d) => d.orders)} onClick={() => detail.open("sales")} />
+          <KpiCard i={2} icon={Gem} tint="violet" title="Average order value" value={figure(<AnimatedNumber value={s.current.averageOrderValue} format={(n) => fmtMoney(n, cur)} />)} delta={s.deltas.averageOrderValue} compared={compared} versus={versus} spark={s.series.map((d) => d.averageOrderValue)} onClick={() => detail.open("sales")} />
+          <KpiCard i={3} icon={Package} tint="amber" title="Total products sold" value={figure(<AnimatedNumber value={s.current.units} format={fmtNum} />)} delta={s.deltas.units} compared={compared} versus={versus} spark={s.series.map((d) => d.units ?? null)} onClick={() => detail.open("products")} />
+        </section>
       )}
 
+      {/* How the dates' orders went (the owner, 2026-10-30): completed, awaiting payment and
+          unsuccessful, checkouts left, and what was sent. Not for dates before the imported orders. */}
+      {ov && m?.order_outcomes && !notImported && <OrdersAtAGlance ov={ov} period={periodWords(dates, shown)} onOpen={detail.open} />}
+
+      {ov && s && (
+        <div className="grid gap-4 xl:grid-cols-3">
+          <SalesVsAdSpend ov={ov} currency={cur} adsOn={adsOn} manage={manage} />
+          <ProfitOverview ov={ov} currency={cur} adsOn={adsOn} adsOffered={offers("ads")} costsOn={costsOn} manageCosts={canManage(workspace.role)} />
+        </div>
+      )}
+
+      {/* Whichever of these this store and this member have; the grid closes up around the rest. */}
+      {ov && (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {s && <SalesPerformance ov={ov} currency={cur} onOpen={detail.open} />}
+          {/* Not in a workspace that leaves advertising out (lib/features.ts), nor for a member not shown it. */}
+          {adsOn && <AdvertisingPerformance ov={ov} manage={manage} />}
+          {/* Paid vs organic: Shopify's own record of each order's visit, so it shows with or without ad accounts. */}
+          {m?.traffic?.split && <PaidVsOrganic ov={ov} currency={cur} onOpen={detail.open} />}
+          {m?.top_products && <TopProductsHome ov={ov} currency={cur} onOpen={detail.open} />}
+          {s && <ExpensesBreakdown ov={ov} currency={cur} adsOn={adsOn} costsOn={costsOn} manage={manage} manageCosts={canManage(workspace.role)} />}
+          {m?.recent_orders && <RecentOrdersHome ov={ov} currency={cur} onOpen={detail.open} />}
+          <KeyInsights ov={ov} currency={cur} onOpen={detail.open} report={seesTopic(access, "overview", offers)} />
+        </div>
+      )}
+
+      {ov && s && <OverviewCharts ov={ov} currency={cur} />}
+
+      {ov && manage && <GrowBusiness ov={ov} adsOn={adsOn} />}
+
       {disabled.length > 0 && (
-        <section aria-labelledby="more-h" className={simple ? "home-card overflow-hidden" : undefined}>
-          <h2 id="more-h" className={simple ? "home-h2 px-5 py-4 sm:px-6" : "mb-2 text-sm font-semibold text-muted"}>More insights you can unlock</h2>
-          {scopeError && <div className={simple ? "px-5 pb-3 sm:px-6" : "mb-2"}><Alert>{scopeError}</Alert></div>}
+        <section aria-labelledby="more-h">
+          <h2 id="more-h" className="mb-2 text-sm font-semibold text-muted">More insights you can unlock</h2>
+          {scopeError && <div className="mb-2"><Alert>{scopeError}</Alert></div>}
           {justGranted.length > 0 && (
-            <div className={simple ? "px-5 pb-3 sm:px-6" : "mb-2"}>
+            <div className="mb-2">
               <Alert kind="success">
                 Thanks — Shopify granted access to {scopeList(justGranted)}. We&apos;re importing the data behind it now; this page will fill in by itself.
               </Alert>
             </div>
           )}
-          <ul className={simple ? "divide-y divide-home-line border-t border-home-line" : "grid gap-3 sm:grid-cols-2"}>
+          <ul className="grid gap-3 sm:grid-cols-2">
             {disabled.map((c) => (
-              <LockedModule key={c.id} c={c} onRequest={requestScopes} pending={pendingScope === c.id} row={simple} />
+              <LockedModule key={c.id} c={c} onRequest={requestScopes} pending={pendingScope === c.id} />
             ))}
           </ul>
         </section>
       )}
 
-      {/* The design's foot: how far back the orders go, and what to do about it. */}
-      {simple && ov && (
-        <HistoryFoot
-          ov={ov}
-          canManage={canManage(workspace.role)}
-          reconnectHref={reconnectHref(workspace.id, ov.store.shopDomain)}
-          onImportHistory={() => void askShopify("order_history", { scopes: ["read_all_orders"] })}
-          importing={pendingScope === "order_history"}
-        />
-      )}
       {ov && (
         <AboutThisData
-          brief={simple}
           store={ov.store}
           data={ov.data}
           freshness={ov.freshness}

@@ -6,8 +6,8 @@ import { readLocal, TOUR_SEEN_KEY, writeLocal } from "@/lib/storage";
 import { placeCard, startTour, TOUR_STEPS, type Box, type TourStep } from "@/lib/tour";
 
 // ---------------------------------------------------------------------------
-// The look around: a few steps over the page itself, each lighting up one part of the frame (what
-// needs you, the numbers, the dates, the menu, search, the bell, help) with a card beside it that
+// The look around: a few steps over the page itself, each lighting up one part of the frame (the
+// numbers, the dates, the menu, search, the bell, help) with a card beside it that
 // says what it is for. It is only ever offered (the Home's card for a new device, the help button),
 // can be left at any step with Skip or Escape, and changes nothing on the page. Steps whose part
 // isn't on this page (the Home's, on another page) are left out.

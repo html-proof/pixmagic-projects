@@ -334,7 +334,7 @@ export function SalesVsAdSpend({ ov, currency, adsOn, manage }: { ov: Overview; 
 export function ProfitOverview({ ov, currency, adsOn, adsOffered, costsOn, manageCosts }: { ov: Overview; currency: string; adsOn: boolean; adsOffered: boolean; costsOn: boolean; manageCosts: boolean }) {
   const net = ov.modules.sales_overview!.current.netSales;
   const k = costsOf(ov, currency, adsOn);
-  // Net profit is out of revenue; what is left without it, out of net sales (`leftOverOf`, as the simple Home's Left over).
+  // Net profit is out of revenue; what is left without it, out of net sales (`leftOverOf`).
   const lo = leftOverOf(ov, k, currency, { offered: adsOffered, shown: adsOn }, costsOn);
   const { profit, isNet, base, taken, value: left } = lo;
   const money = (n: number) => fmtMoney(n, currency);

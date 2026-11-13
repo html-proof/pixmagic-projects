@@ -80,15 +80,6 @@ test("the owner keeps the store's costs, and the dashboard counts them without c
   // can't run here, so they are the items sold at their cost per item. The custom item has none, so
   // it isn't net profit.
   await page.goto("/dashboard?preset=mtd");
-  // The simple Home's Left over is the same figure, and says it isn't profit.
-  const leftOver = page.getByTestId("metric-Left over");
-  await expect(leftOver).toContainText("$290.00");
-  // As the design words it: "29¢ of every $1, after product costs and your costs".
-  await expect(leftOver.getByTestId("left-over-what")).toContainText("¢ of every $1, after product costs and your costs");
-  await expect(leftOver).toContainText("Not profit");
-  // Sales with no cost per item: Needs you sends the owner to add it in Shopify.
-  await expect(page.getByTestId("need-costs")).toContainText("$200.00 of sales had no cost per item in Shopify");
-  await page.getByTestId("home-layout-switch").click();
   const profit = page.getByTestId("home-profit");
   await expect(page.getByTestId("profit-what")).toContainText("product costs and your costs");
   await expect(page.getByTestId("profit-left")).toHaveText("$290.00");

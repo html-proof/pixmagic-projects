@@ -25,7 +25,7 @@ import { fmtDateTime, fmtDuration, fmtLongDay, fmtRange, fmtSpan, hourRange, plu
 import { CatalogCard, FulfillmentBadge, OrderName, PaymentBadge } from "./Modules";
 import { comparedOn, upDown } from "./Narrative";
 import { breakdownOf, salesLinesOf } from "./redacted";
-import { SalesByDay } from "./SimpleHome";
+import { SalesByDay } from "./SalesByDay";
 import { TopProducts } from "./TopProducts";
 import type { Topic } from "./topics";
 import type { Overview, RecentOrder } from "./types";

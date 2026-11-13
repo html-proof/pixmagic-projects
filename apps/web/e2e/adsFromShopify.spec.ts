@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import pg from "pg";
 import { E2E_ENV } from "../playwright.config";
-import { createWorkspace, fullDashboard, insertStore, signUp, uniqueEmail } from "./helpers";
+import { createWorkspace, insertStore, signUp, uniqueEmail } from "./helpers";
 
 /**
  * Advertising with no ad account connected: the store's own Shopify orders stand in. The home card,
@@ -43,8 +43,6 @@ async function seedOrder(ws: string, storeId: string, id: string, on: string, pr
 }
 
 test("with no ad account connected, Advertising shows Meta's and Google's sales from the Shopify orders, and the way to connect each", async ({ page }) => {
-  // Its panels are the full dashboard's (lib/features.ts SIMPLE_HOME).
-  await fullDashboard(page);
   const email = uniqueEmail("ads-shopify");
   await signUp(page, email);
   const ws = await createWorkspace(page, "Ads From Shopify Co");
