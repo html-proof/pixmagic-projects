@@ -180,10 +180,21 @@ and at no charge:
 | Seven secrets `insights/production/*`, deleted with Secrets Manager's recovery window | 2026-12-13, then gone for good |
 | The KMS key of Cognito's email function, scheduled for deletion | 2026-11-20 |
 
+A second sweep the same day (all 18 regions and the account-wide services, on the owner's "stop the
+complete aws service") found the same, and two free leftovers the first read had passed over, now
+deleted: the EC2 key pair `Aby` and the SMS sender ID `BIZTEST`.
+
 Outside AWS, two loose ends of it:
 
-- **The DNS record `auth.bizinsights.io`** at Cloudflare points at Cognito's deleted domain. It is
-  removed in the Cloudflare dashboard, with the owner.
+- **Cloudflare's DNS zone no longer names AWS** (the owner: "end all from the cloudflare, all the
+  requests to the iKorex server"; done in the dashboard the same day). Seven dead records are
+  deleted: `auth` (→ Cognito's deleted CloudFront domain), the three `acm-validations.aws` records
+  of the deleted certificates (`_629bb…`, `_66e52….www`, `_eab66….auth`) and the three
+  `<token>._domainkey` → `dkim.amazonses.com` records of the deleted SES identity. 15 records are
+  left: the apex, `www` and `server-test` on the tunnel `bizinsights`, Cloudflare Email Routing
+  (three MX, SPF, `cf2024-1._domainkey`), Resend (`resend._domainkey`, `rsend`, `send`), `_dmarc`,
+  Google's site verification and `_domainconnect`. No Worker route, redirect rule or origin rule
+  exists in the zone; its one rule is the cache bypass for `/api/`.
 - **The last bill** arrives the month after: about US$66.52 had run up by 2026-11-13, before GST.
 
 ## What parts 2 and 3 deleted (2026-11-13)
