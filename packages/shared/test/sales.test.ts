@@ -178,6 +178,20 @@ describe("daily breakdown", () => {
     expect(monthly.periods.map((p) => p.key)).toEqual(["2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"]);
     expect(monthly.periods.map((p) => p.days.length)).toEqual([16, 30, 31, 31, 28, 31, 30, 31, 30, 31, 31, 30, 15]);
     expect(monthly.periods.map((p) => p.status)).toEqual([...Array<string>(12).fill("complete"), "partial"]);
+    // Only the period today is in is still growing.
+    expect(monthly.periods.map((p) => p.running)).toEqual([...Array<boolean>(12).fill(false), true]);
+    expect(weekly.periods.map((p) => p.running)).toEqual([false, false, false, false, false, false, true]);
+
+    // A series holding only the days that have a figure (an ad platform read from 5 Oct, not the 8th):
+    // the days it lacks are left out, their weeks not whole, a week with none has nothing.
+    const read = eachDay("2026-10-05", "2026-10-14").filter((d) => d !== "2026-10-08").map((d) => day(d, 10));
+    const ads = trendPeriods(read, range, "2026-10-15", null);
+    expect(ads.periods.slice(-3).map((p) => [p.from, p.status, p.days.length, p.running])).toEqual([
+      ["2026-09-28", "not_imported", 0, false],
+      ["2026-10-05", "partial", 6, false],
+      // Today's own figure isn't there yet: three days of four, and not growing as far as it knows.
+      ["2026-10-12", "partial", 3, false],
+    ]);
   });
 
   it("names the months it covers whole, but not the one still running or one not fully imported", () => {

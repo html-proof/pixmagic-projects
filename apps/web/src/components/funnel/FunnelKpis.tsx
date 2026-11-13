@@ -2,7 +2,7 @@
 import type { ReactNode } from "react";
 import { Eye, Percent, ShoppingBag, ShoppingCart, Store, Wallet, type LucideIcon } from "lucide-react";
 import { FUNNEL_STEPS, type FunnelStep } from "@app/shared/journey";
-import { Sparkline } from "@/components/dashboard/HomeCards";
+import { sumDays, TileBars, tileTrendOf, type TileTrend } from "@/components/dashboard/TileBars";
 import type { FunnelPageModule, Overview } from "@/components/dashboard/types";
 import { fmtNum, fmtPct } from "@/lib/api";
 import { InfoTip } from "./FunnelUi";
@@ -16,7 +16,7 @@ function Kpi({
   question,
   measure,
   tip,
-  spark,
+  trend,
   onOpen,
   testId,
 }: {
@@ -26,7 +26,8 @@ function Kpi({
   question: string;
   measure: ReactNode;
   tip: ReactNode;
-  spark?: Array<number | null>;
+  /** The figure over the dates as a small bar chart (`tileTrendOf`). */
+  trend?: TileTrend;
   onOpen: () => void;
   testId: string;
 }) {
@@ -43,10 +44,13 @@ function Kpi({
         </span>
         <span className="mt-2 text-2xl font-bold tabular-nums tracking-tight">{value}</span>
         <span className="mt-2 text-xs text-muted">{measure}</span>
-        <span className="mt-auto flex items-end justify-between gap-2 pt-2">
-          <span className="text-xs text-text/80">{question}</span>
-          {spark && <Sparkline values={spark} className="hidden h-8 w-16 shrink-0 text-accent min-[420px]:block" />}
-        </span>
+        <span className="mt-2 text-xs text-text/80">{question}</span>
+        {/* Pushed to the tile's foot, so the bars line up along a row whatever the questions' lengths. */}
+        {trend && (
+          <span className="mt-auto block w-full">
+            <TileBars trend={trend} ink="text-accent" className="mt-3" />
+          </span>
+        )}
         <span className="sr-only"> – open the stage&apos;s details</span>
       </button>
     </div>
@@ -70,7 +74,12 @@ const TITLE: Record<FunnelStep, string> = { visited: "Store visitors", viewed_pr
  */
 export function FunnelKpis({ f, ov, onOpen }: { f: FunnelPageModule; ov: Overview; onOpen: (step: FunnelStep) => void }) {
   const orders = ov.modules.sales_overview?.current.orders;
-  const sparkOf = (k: number) => f.daily.map((d) => d.reached?.[k] ?? null);
+  // Visits over the dates as bars: each adds up the days visits were counted on (a day before
+  // that adds nothing, and a week or month with none is a gap).
+  type Day = FunnelPageModule["daily"][number];
+  const counted = (d: Day) => d.reached !== null;
+  const reached = (days: Day[], k: number) => sumDays(days, (d) => d.reached?.[k] ?? 0);
+  const bars = (value: (days: Day[]) => number | null, format: (n: number) => string) => tileTrendOf(f.daily, ov.range, ov.today, counted, value, format);
   return (
     <section aria-label="Funnel summary" className="grid grid-cols-1 gap-3 min-[480px]:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
       {FUNNEL_STEPS.map((step, k) => {
@@ -84,7 +93,7 @@ export function FunnelKpis({ f, ov, onOpen }: { f: FunnelPageModule; ov: Overvie
             icon={ICON[step]}
             value={fmtNum(s.reached)}
             question={QUESTION[step]}
-            spark={sparkOf(k)}
+            trend={bars((days) => reached(days, k), fmtNum)}
             onOpen={() => onOpen(step)}
             measure={
               k === 0 ? (
@@ -118,7 +127,8 @@ export function FunnelKpis({ f, ov, onOpen }: { f: FunnelPageModule; ov: Overvie
         icon={Percent}
         value={fmtPct(f.conversionRate)}
         question="What share of visits ended in a purchase?"
-        spark={f.daily.map((d) => (d.reached && d.reached[0]! > 0 ? d.reached[4]! / d.reached[0]! : null))}
+        // Of a bar's visits, the share that bought: never an average of the days' own rates. No visits, no bar.
+        trend={bars((days) => (reached(days, 0) > 0 ? reached(days, 4) / reached(days, 0) : null), (n) => fmtPct(n))}
         onOpen={() => onOpen("purchased")}
         measure={<>{fmtNum(f.purchases)} of {fmtNum(f.visits)} visits bought</>}
         tip={

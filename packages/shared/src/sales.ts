@@ -251,13 +251,16 @@ export interface TrendPeriod<D extends { day: string }> {
   days: D[];
   /** As `BreakdownPeriod`: `partial` holds today or days not imported, `not_imported` has none imported. */
   status: "complete" | "partial" | "not_imported";
+  /** It holds today: its figure is still growing. */
+  running: boolean;
 }
 
 /**
  * The dates picked as the bars of a headline tile's small chart (`trendGranularity`), every period
  * present and in order. A day before the imported history adds nothing and is left out of its
  * period's `days`, so a period is never a lower figure passed off as whole, nor a zero for days
- * nobody knows about.
+ * nobody knows about. A day missing from `series` is left out the same way: give it only the days
+ * that have the figure (an ad platform's days not read yet, visits before they were counted).
  */
 export function trendPeriods<D extends { day: string }>(
   series: D[],
@@ -272,8 +275,9 @@ export function trendPeriods<D extends { day: string }>(
       .filter((day) => historyFrom === null || day >= historyFrom)
       .map((day) => byDay.get(day))
       .filter((d): d is D => d !== undefined);
-    const status = days.length === 0 ? "not_imported" : days.length < daysBetweenInclusive(p.from, p.to) || days.some((d) => d.day === today) ? "partial" : "complete";
-    return { key: p.key, from: p.from, to: p.to, days, status };
+    const running = days.some((d) => d.day === today);
+    const status = days.length === 0 ? "not_imported" : days.length < daysBetweenInclusive(p.from, p.to) || running ? "partial" : "complete";
+    return { key: p.key, from: p.from, to: p.to, days, status, running };
   });
   return { by, periods };
 }

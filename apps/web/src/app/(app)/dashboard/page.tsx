@@ -12,7 +12,8 @@ import { SalesActions, SalesCrumbs, SalesHeader, SalesTabs, salesTabOf, StatusPi
 import { HistoryLine } from "@/components/dashboard/HistoryLine";
 import { topicInfo, useDetailView } from "@/components/dashboard/topics";
 import { fmtRange, fmtRelative } from "@/components/dashboard/format";
-import { KpiCard, RefundsLine, tileTrend } from "@/components/dashboard/HomeCards";
+import { KpiCard, RefundsLine } from "@/components/dashboard/HomeCards";
+import { sumDays as sum, tileTrend } from "@/components/dashboard/TileBars";
 import { AdvertisingPerformance, ExpensesBreakdown, GrowBusiness, KeyInsights, OrdersAtAGlance, PaidVsOrganic, ProfitOverview, RecentOrdersHome, SalesPerformance, SalesVsAdSpend, TopProductsHome } from "@/components/dashboard/HomePanels";
 import { OverviewCharts } from "@/components/dashboard/OverviewCharts";
 import { appliedCustom } from "@/components/dashboard/redacted";
@@ -29,9 +30,6 @@ import { NoAccessAssigned } from "@/components/team/AccessStates";
 import { hasDashboardAccess, seesTopic, showsDashboardHome, TOPIC_EXPORT, TOPIC_PAGE } from "@/lib/access";
 
 type SeriesDay = SalesOverview["series"][number];
-
-/** A figure added up over the days of one bar of a headline tile, to the cent. */
-const sum = (days: SeriesDay[], of: (d: SeriesDay) => number) => Math.round(days.reduce((a, d) => a + of(d), 0) * 100) / 100;
 
 /**
  * Average order value over the days of one bar: what their orders sold for over how many there

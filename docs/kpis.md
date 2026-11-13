@@ -202,7 +202,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   forgets the window. Stores imported before the record existed were given 60 days before their last
   successful orders sweep (a start they surely hold), and their next window import makes it exact.
   `oldestOrderDay`/`newestOrderDay` stay the orders actually held ("Orders from … to …").
-- **Daily series** (the sales chart and sparklines) has one point per day of the range; days without orders or sales are 0, days before the imported history are "not imported" (null in the breakdown, drawn hatched).
+- **Daily series** (the sales chart and the tiles' small bar charts) has one point per day of the range; days without orders or sales are 0, days before the imported history are "not imported" (null in the breakdown, drawn hatched).
 - **Every section follows the dates picked**, in the store's time zone: the tiles, both sales panels'
   daily view, the sales, product, customer, channel, discount and fulfillment details, recent orders
   (the latest 10 placed in the dates, and how many orders were cancelled in them, counted on the day of
