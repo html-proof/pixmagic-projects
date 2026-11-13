@@ -40,7 +40,7 @@ The owner wants every finished change live there. The road:
   its database was put on the server (`~/bizinsights-archive/rds-final-20261113/`). Production
   uses nothing in that account any more. **Sign-in** is the app's own (`AUTH_MODE=local` on the
   server since 2026-11-13, Google through the app's own Google client); what is left of Cognito
-  there is the owner's to have deleted. **The backups** left the account's bucket the same day
+  there goes on the owner's word, in the session they gave it to: don't delete it from another. **The backups** left the account's bucket the same day
   (below); the bucket, the IAM user `bizinsights-backups` and the parameter
   `/bizinsights/ikorex/backup-cipher-pass` are no longer read or written by the server.
 - **The backups are on the server's own disk, and nowhere else** (the owner's choice,

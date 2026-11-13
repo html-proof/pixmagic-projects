@@ -27,10 +27,10 @@ Accounts and keys (owner, in each provider's console):
 | A tunnel named `bizinsights` | Cloudflare → Zero Trust → Networks → Tunnels → Docker | `env/cloudflared.env` `TUNNEL_TOKEN` |
 | Public hostname `staging.bizinsights.io` → `http://web:8080` (staging project), behind a Cloudflare Access policy (owner's email) | the tunnel's Public Hostnames; Zero Trust → Access → Applications | — |
 | Public hostname `grafana.bizinsights.io` → `http://grafana:3000`, behind Access | same | — |
-| An R2 bucket `bizinsights-backups` and an API token (Object Read & Write, this bucket only) | Cloudflare → R2 | `env/postgres.env` `PGBACKREST_REPO1_*` |
+| An R2 bucket `bizinsights-backups` and an API token (Object Read & Write, this bucket only). **Not made: production keeps its backups on the server's own disk ([Backups](#backups))** | Cloudflare → R2 | `env/postgres.env` `PGBACKREST_REPO1_*` |
 | A backup passphrase (`openssl rand -base64 48`), also in the owner's password manager | — | `env/postgres.env` `PGBACKREST_REPO1_CIPHER_PASS` |
 | Two checks: the nightly backup ping, and `https://bizinsights.io/api/readyz` every 5 minutes | healthchecks.io / UptimeRobot (free tiers) | `env/postgres.env` `BACKUP_PING_URL` |
-| An IAM user `bizinsights-ikorex`, until stage F, with only: Cognito's password check and admin actions on the pool (`AUTH_MODE=migrating`) | AWS IAM | `env/app.env` `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
+| An IAM user `bizinsights-ikorex` with only: Cognito's password check and admin actions on the pool, for `AUTH_MODE=migrating`. **Not needed since 2026-11-13: the server runs `AUTH_MODE=local`** | AWS IAM | `env/app.env` `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
 
 ### Backups
 
