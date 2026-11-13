@@ -9,13 +9,13 @@ import { AD_STATE, syncRunning } from "@/lib/adConnections";
 import { upToWords } from "./adFigures";
 import { fmtDay, fmtMoneyWhole, fmtRelative, fmtSpan, fmtWeekday } from "./format";
 import type { Column } from "./ColumnsWithTotal";
-import { Badge, Delta, NeutralDelta } from "./Primitives";
-import type { AdAccount, AdFigures, Overview } from "./types";
+import { Badge } from "./Primitives";
+import type { AdAccount, AdFigures } from "./types";
 
 // ---------------------------------------------------------------------------
 // What the Advertising section, the Ads panel (money spent) and the Ad earnings panel (money
 // earned) show the same way: the day-by-day chart's columns, the state of each connected account,
-// why a figure is unavailable, what a change compares, and what each measure means.
+// why a figure is unavailable, and what each measure means.
 //
 // A figure exists only for days every account it adds up has stored (packages/core/src/reports/ads.ts):
 // a day an account lacks is never shown as 0, and the page says which account lacks it and why.
@@ -282,57 +282,6 @@ export function AdStatusNotes({ accounts, manage }: { accounts: AdAccount[]; man
       )}
     </div>
   );
-}
-
-/**
- * Why dates of running days only aren't compared: today isn't over, or (yesterday picked) the day
- * is still running in an ad account's own time zone.
- */
-export const runningWords = (ov: Pick<Overview, "today" | "range">) => (ov.range.to >= ov.today ? "today so far" : "still running in an ad account's time zone");
-
-/** What a change is against: "vs before", or "through yesterday" when the running day was left out of both sides. */
-export function throughLabel(fig: Pick<AdFigures<unknown>, "compared">, ov: Pick<Overview, "today">): string {
-  const c = fig.compared;
-  if (!c || c.trimmed === 0) return "vs before";
-  return c.current.to === addDays(ov.today, -1) ? "through yesterday" : `through ${fmtDay(c.current.to, { year: false })}`;
-}
-
-/**
- * The change under a figure, against what was compared (whole days only). With nothing compared, the
- * reason in neutral words: today isn't over, no earlier data, or days missing.
- */
-export function ChangeNote({
-  fig,
-  value,
-  ov,
-  neutral = false,
-  invert = false,
-}: {
-  fig: Pick<AdFigures<unknown>, "compared" | "notCompared">;
-  value: number | null;
-  ov: Pick<Overview, "today" | "range">;
-  neutral?: boolean;
-  invert?: boolean;
-}) {
-  if (fig.notCompared === "running") return <span className="text-xs text-muted">{runningWords(ov)}: nothing to compare yet</span>;
-  if (fig.notCompared === "no_history") return <span className="text-xs text-muted">no earlier data to compare</span>;
-  if (fig.notCompared === "incomplete" || !fig.compared) return <span className="text-xs text-muted">not compared: some days are missing</span>;
-  if (value === null) return <span className="text-xs text-muted">nothing to compare with</span>;
-  const label = throughLabel(fig, ov);
-  return neutral ? <NeutralDelta value={value} label={label} /> : <Delta value={value} invert={invert} label={label} />;
-}
-
-/**
- * The figures a change compares, so they can be checked: "Before (6–11 Oct): $60", or while today
- * was left out of both sides, "13–18 Oct: $62 · before (6–11 Oct): $60".
- */
-export function ComparedLine<T>({ fig, show, what }: { fig: Pick<AdFigures<T>, "compared">; show: (t: T) => string; what?: string }) {
-  const c = fig.compared;
-  if (!c) return null;
-  const before = `before (${fmtSpan(c.previous.from, c.previous.to)}): ${show(c.previous.totals)}`;
-  const line = c.trimmed === 0 ? before : `${fmtSpan(c.current.from, c.current.to)}: ${show(c.current.totals)} · ${before}`;
-  const said = what ? `${what} ${line}` : line;
-  return <>{said[0]!.toUpperCase() + said.slice(1)}</>;
 }
 
 /** "Unavailable" with why, and what is known of the dates when some of them are. */

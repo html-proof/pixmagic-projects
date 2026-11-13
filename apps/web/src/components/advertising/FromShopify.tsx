@@ -3,9 +3,8 @@ import type { ReactNode } from "react";
 import type { AdSpendProvider } from "@app/shared/ads";
 import type { AdsFromShopify, ShopifyAdPlatform } from "@app/shared/adsFromShopify";
 import { BarRow } from "@/components/dashboard/Charts";
-import { fmtDay, fmtMoneyCompact, fmtSpan, plural } from "@/components/dashboard/format";
+import { fmtDay, fmtMoneyCompact, plural } from "@/components/dashboard/format";
 import { LineChart } from "@/components/dashboard/LineChart";
-import { Delta } from "@/components/dashboard/Primitives";
 import type { Overview } from "@/components/dashboard/types";
 import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { PLATFORM } from "./AdvertisingUi";
@@ -40,7 +39,6 @@ function Tile({ label, value, children, testid }: { label: string; value: string
 function Platform({ p, m, ov }: { p: ShopifyAdPlatform; m: AdsFromShopify; ov: Overview }) {
   const P = PLATFORM[p.provider];
   const money = (n: number) => fmtMoney(n, m.currency);
-  const vs = m.compared ? `vs ${fmtSpan(m.compared.from, m.compared.to)}` : undefined;
   const tagged = p.paidSales !== undefined;
   const none = p.orders === 0 && p.sales === 0;
   const known = p.daily.filter((d) => d.sales !== null);
@@ -78,18 +76,8 @@ function Platform({ p, m, ov }: { p: ShopifyAdPlatform; m: AdsFromShopify; ov: O
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            <Tile label={`Sales from ${SITES[p.provider]}`} value={money(p.sales)} testid={`shopify-${p.provider}-sales`}>
-              <p>
-                <Delta value={p.deltas.sales} label={vs} />
-              </p>
-              {p.previous && <p>Before: {money(p.previous.sales)}</p>}
-            </Tile>
-            <Tile label="Orders" value={fmtNum(p.orders)} testid={`shopify-${p.provider}-orders`}>
-              <p>
-                <Delta value={p.deltas.orders} label={vs} />
-              </p>
-              {p.previous && <p>Before: {fmtNum(p.previous.orders)}</p>}
-            </Tile>
+            <Tile label={`Sales from ${SITES[p.provider]}`} value={money(p.sales)} testid={`shopify-${p.provider}-sales`} />
+            <Tile label="Orders" value={fmtNum(p.orders)} testid={`shopify-${p.provider}-orders`} />
             <Tile label="Share of your sales" value={fmtPct(p.share)} testid={`shopify-${p.provider}-share`}>
               <p>Of {money(m.storeSales)} in sales from every source.</p>
               {p.visits !== undefined && p.visits !== null && (
@@ -102,11 +90,6 @@ function Platform({ p, m, ov }: { p: ShopifyAdPlatform; m: AdsFromShopify; ov: O
             {tagged && (
               <Tile label="From links tagged as ads" value={money(p.paidSales ?? 0)} testid={`shopify-${p.provider}-tagged`}>
                 <p>{plural(p.paidOrders ?? 0, "order")} through a link with an ad tag (utm_medium cpc or paid, a Google click id).</p>
-                {p.deltas.paidSales !== undefined && (
-                  <p>
-                    <Delta value={p.deltas.paidSales} label={vs} />
-                  </p>
-                )}
               </Tile>
             )}
           </div>
@@ -200,7 +183,6 @@ export function FromShopify({ ov, platforms, sold = false }: { ov: Overview; pla
         <span className="font-medium text-text">How these are counted.</span> Each order counts for the site its last visit came from, as Shopify recorded it
         (the last click), and its sales are net sales: after discounts and returns, before tax and shipping. An ad whose links carry no tags counts as a visit
         from that site, not as an ad. Meta and Google count their own way, so once connected, what they credit to their ads won&apos;t match these.
-        {!m.compared && " Changes show once your orders for the dates compared with are imported."}
       </p>
     </div>
   );

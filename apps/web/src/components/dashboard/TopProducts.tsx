@@ -33,16 +33,16 @@ export function TopProducts({ ov, currency, collection = null, collections = [],
     if (!allowed("reports.export")) return;
     // Narrowed to a collection: every row and the file's name say so, so it is never read as the whole store's ranking.
     const narrowed = collection ? [`${collection.title} (${collection.id})`] : [];
-    const values = [["Rank", "Product ID", "Product", "SKU", "Net units", "Gross units", "Returned units", "Gross sales", "Discounts", "Returns and adjustments", "Net revenue", "Orders", "Growth %", "Trend", "Last sold", ...(collection ? ["Only products now in collection"] : [])],
-      ...items.map(p => [p.rank, p.productId, p.title, p.sku, p.units, p.grossUnits, p.returnedUnits, p.grossSales, p.discounts, p.returns, p.revenue, p.orders, p.growth, p.trend, p.lastSold, ...narrowed])];
+    const values = [["Rank", "Product ID", "Product", "SKU", "Net units", "Gross units", "Returned units", "Gross sales", "Discounts", "Returns and adjustments", "Net revenue", "Orders", "Last sold", ...(collection ? ["Only products now in collection"] : [])],
+      ...items.map(p => [p.rank, p.productId, p.title, p.sku, p.units, p.grossUnits, p.returnedUnits, p.grossSales, p.discounts, p.returns, p.revenue, p.orders, p.lastSold, ...narrowed])];
     const text = values.map(row => row.map(v => `"${(typeof v === "string" && /^\s*[=+\-@\t\r]/.test(v) ? "'" + v : String(v ?? "")).replaceAll('"', '""')}"`).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob(["\ufeff", text], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a"); a.href = url; a.download = `top-products-${collection ? `collection-${collection.id.replace(/[^\w-]/g, "-")}-` : ""}${ov.range.from}-${ov.range.to}.csv`; a.click(); URL.revokeObjectURL(url);
   };
-  return <Panel id="d-top-products" title="Top 100 products" help="Net units sold by default, with net revenue breaking ties. Returns and cancellations count on the date of their sales reversal. Growth compares the immediately preceding period, with the same elapsed time for a running day.">
+  return <Panel id="d-top-products" title="Top 100 products" help="Net units sold by default, with net revenue breaking ties. Returns and cancellations count on the date of their sales reversal.">
     <div className="mb-4 flex flex-wrap gap-3">
       <label>Ranking <select className="rounded border bg-surface p-2" aria-label="Ranking" value={sort} onChange={e => { setSort(e.target.value); setDirection(e.target.value === "lowest" ? "asc" : "desc"); setPage(1); }}>
-        <option value="units">Top selling by units</option><option value="revenue">Highest revenue</option><option value="trending">Trending</option><option value="growth">Fastest growing</option><option value="returned">Most returned</option><option value="lowest">Lowest performing</option>
+        <option value="units">Top selling by units</option><option value="revenue">Highest revenue</option><option value="returned">Most returned</option><option value="lowest">Lowest performing</option>
       </select></label>
       <label>Order <select aria-label="Order" value={direction} onChange={e => { setDirection(e.target.value); setPage(1); }}><option value="desc">Highest first</option><option value="asc">Lowest first</option></select></label>
       <label>Search <input className="rounded border bg-surface p-2" aria-label="Search" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} placeholder="Product, SKU or ID" /></label>
@@ -55,18 +55,17 @@ export function TopProducts({ ov, currency, collection = null, collections = [],
     {error && <p role="alert">Product sales could not be loaded: {error.message}</p>}
     {failing && report && <p role="status">Refresh is delayed. Showing the last successful response.</p>}
     {report && !report.complete && <p role="status" className="mb-3 text-sm">{report.unknownIdentitySales ? "Some historical sales no longer have a recoverable product ID. Rankings are withheld because those sales cannot be grouped reliably; historical records are needed to repair them." : <>Rankings are unavailable until all sales for this period are imported and verified. Imported history starts {report.historyFrom ?? "after synchronization completes"}. A longer range may require approved historical order access.</>}</p>}
-    {report && !report.baseline && <p className="mb-3 text-sm text-muted">No complete previous period: growth and trending scores are unavailable.</p>}
     {ov.freshness && (ov.freshness.waiting > 0 || ov.freshness.failed > 0) && <p role="status">Sales updates are pending or failed. Figures may be behind Shopify.</p>}
     {loading && !report ? <div aria-label="Loading product sales" className="h-48 animate-pulse rounded bg-border" /> : !error && items.length === 0 ? report?.complete && <p>No product sales match these dates and filters.</p> : <div className="max-h-[620px] overflow-auto">
       <table className="w-full whitespace-nowrap text-left text-sm">
-        <thead className="sticky top-0 bg-surface"><tr>{["Rank", "Product", "SKU", "Net units", "Net revenue", "Orders", "Growth", "Trend", "Last sold", "Action"].map(h => {
-          const mode = h === "Net units" ? "units" : h === "Net revenue" ? "revenue" : h === "Growth" ? "growth" : h === "Trend" ? "trending" : null;
+        <thead className="sticky top-0 bg-surface"><tr>{["Rank", "Product", "SKU", "Net units", "Net revenue", "Orders", "Last sold", "Action"].map(h => {
+          const mode = h === "Net units" ? "units" : h === "Net revenue" ? "revenue" : null;
           return <th key={h} className="p-3" scope="col" aria-sort={mode === sort ? direction === "desc" ? "descending" : "ascending" : undefined}>{mode ? <button onClick={() => { setSort(mode); setDirection(mode === sort && direction === "desc" ? "asc" : "desc"); setPage(1); }}>{h}</button> : h}</th>;
         })}</tr></thead>
         <tbody>{items.slice((currentPage - 1) * size, currentPage * size).map(p => <tr className="border-t" key={p.key}>
           <td className="p-3">{p.rank}</td><td className="p-3"><div className="flex items-center gap-2">{p.imageUrl && <img src={p.imageUrl} alt="" width={32} height={32} loading="lazy" />}<span>{p.title}<small className="block text-muted">{p.productId ?? "Historical item · product ID unavailable"}</small></span></div></td>
           <td className="p-3">{p.sku ?? (p.variants.length > 1 ? "Multiple variants" : "—")}</td><td className="p-3">{p.units}</td><td className="p-3">{money(p.revenue)}</td><td className="p-3">{p.orders}</td>
-          <td className="p-3">{p.growth === null ? p.trend === "New" ? "New" : "No baseline" : `${p.growth > 0 ? "+" : ""}${p.growth.toFixed(1)}%`}</td><td className="p-3">{p.trend}</td><td className="p-3">{p.lastSold ? new Date(p.lastSold).toLocaleString(undefined, { timeZone: ov.store.timezone }) : "—"}</td>
+          <td className="p-3">{p.lastSold ? new Date(p.lastSold).toLocaleString(undefined, { timeZone: ov.store.timezone }) : "—"}</td>
           <td className="p-3"><button className="underline" onClick={() => setSelected(p.key)} aria-label={`View ${p.title}`}>Details</button></td>
         </tr>)}</tbody>
       </table></div>}
@@ -79,7 +78,6 @@ export function TopProducts({ ov, currency, collection = null, collections = [],
       <button className="float-right underline" onClick={() => setSelected(null)}>Close details</button><h3 className="font-semibold">{detail.title}</h3>
       <p>Gross units: {detail.grossUnits} · Returned units: {detail.returnedUnits} · Net units: {detail.units}</p>
       <p>Gross sales: {money(detail.grossSales)} · Discounts: {money(detail.discounts)} · Returns and adjustments: {money(detail.returns)} · Net revenue: {money(detail.revenue)}</p>
-      <p>Trend score: {detail.trendScore?.toFixed(1) ?? "No baseline"}. Minimum five net units; weights: units 30%, unit growth 20%, revenue growth 15%, orders 15%, recent velocity 10%, sales consistency 10%.</p>
       <ul>{detail.variants.map((v,i) => <li key={v.variantId ?? i}>{v.sku ?? "No SKU"} · Variant {v.variantId ?? "unavailable"}: {v.units} units · {money(v.revenue)}</li>)}</ul>
     </aside>}
   </Panel>;

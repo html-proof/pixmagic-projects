@@ -109,20 +109,19 @@ test("sales by collection lists each collection's sales, pins the rest, and narr
   await page.goto(`/dashboard?preset=custom&from=${day}&to=${day}&view=products`);
   const collections = page.getByTestId("module-d-collection-sales");
   await expect(collections.getByRole("heading", { name: "Sales by collection" })).toBeVisible({ timeout: 20_000 });
-  await expect(collections.getByRole("columnheader")).toHaveText(["Collection", "Net sales", /^Change vs /, "Net units", "Orders", "Products sold", "Share of product sales"], { timeout: 15_000 });
+  await expect(collections.getByRole("columnheader")).toHaveText(["Collection", "Net sales", "Net units", "Orders", "Products sold", "Share of product sales"], { timeout: 15_000 });
   // Best-selling first, then the two pinned rows.
   await expect(collections.locator("tbody tr th")).toHaveText(["Sale", "Summer", "Home", /^Not in a collection/, /^Collections not known/]);
   const row = (title: string) => collections.locator("tbody tr").filter({ has: page.getByRole("button", { name: `Show ${title} in Top products`, exact: true }) });
   // Of $180 of product sales: Sale = 3 tees ($90) + the hat ($20) in all three orders; Summer = the tees only.
-  // Nothing sold the day before: "New", not an infinite rise.
-  await expect(row("Sale").getByRole("cell")).toHaveText(["$110.00", "New", "4", "3", "2", "61.1%"]);
-  await expect(row("Summer").getByRole("cell")).toHaveText(["$90.00", "New", "3", "2", "1", "50%"]);
-  await expect(row("Home").getByRole("cell")).toHaveText(["$25.00", "New", "1", "1", "1", "13.9%"]);
+  await expect(row("Sale").getByRole("cell")).toHaveText(["$110.00", "4", "3", "2", "61.1%"]);
+  await expect(row("Summer").getByRole("cell")).toHaveText(["$90.00", "3", "2", "1", "50%"]);
+  await expect(row("Home").getByRole("cell")).toHaveText(["$25.00", "1", "1", "1", "13.9%"]);
   const pinned = (label: string) => collections.locator("tbody tr").filter({ hasText: label });
   await expect(pinned("Not in a collection")).toContainText("Products in none of your collections.");
-  await expect(pinned("Not in a collection").getByRole("cell")).toHaveText(["$5.00", "New", "1", "1", "1", "2.8%"]);
+  await expect(pinned("Not in a collection").getByRole("cell")).toHaveText(["$5.00", "1", "1", "1", "2.8%"]);
   await expect(pinned("Collections not known")).toContainText("Products added since your catalog was last read, or no longer in it.");
-  await expect(pinned("Collections not known").getByRole("cell")).toHaveText(["$40.00", "New", "1", "1", "1", "22.2%"]);
+  await expect(pinned("Collections not known").getByRole("cell")).toHaveText(["$40.00", "1", "1", "1", "22.2%"]);
   // Each sale once: the tee is counted in two collections above, here once.
   await expect(collections).toContainText("All product sales, each once: $180.00 · 7 units · 3 orders.");
   await expect(collections).toContainText("Your catalog's collections haven't been read from Shopify yet.");
@@ -229,7 +228,7 @@ test("the Shopping Funnel shows Shopify's abandoned checkouts, and says when Sho
       [ws, store, window, values === null ? null : JSON.stringify(values), error],
     );
   // Finished days inside Shopify's 60 days, so nothing kept is stale and nothing is asked of
-  // Shopify (a range running to today would be re-asked every 5 minutes): a week, against the week before.
+  // Shopify (a range running to today would be re-asked every 5 minutes): a week, with the week before kept too.
   const [from, to, cfrom, cto] = [utcDay(-14), utcDay(-8), utcDay(-21), utcDay(-15)];
   const abandoned = [4, 6, 5, 7, 8, 4, 6];
   const recovered = [1, 2, 1, 2, 2, 1, 1];
@@ -249,18 +248,14 @@ test("the Shopping Funnel shows Shopify's abandoned checkouts, and says when Sho
   await page.goto(`/funnel?preset=custom&from=${from}&to=${to}`);
   const card = page.getByTestId("module-abandoned");
   await expect(card.getByRole("heading", { name: "Abandoned checkouts (Shopify)" })).toBeVisible({ timeout: 20_000 });
-  // 40 against 50 (down 20%), $2,000 against $2,500; 10 of the 40 recovered (25%), against 40% then.
+  // 40 checkouts worth $2,000, 10 of them recovered (25%). The week before had 50: no change on it is shown.
   await expect(statValue(card, "Abandoned checkouts")).toHaveText("40", { timeout: 15_000 });
-  await expect(stat(card, "Abandoned checkouts")).toContainText("▼ 20%");
   await expect(statValue(card, "Abandoned checkout value")).toHaveText("$2,000.00");
-  await expect(stat(card, "Abandoned checkout value")).toContainText("▼ 20%");
   await expect(statValue(card, "Recovered so far")).toHaveText("10");
   await expect(stat(card, "Recovered so far")).toContainText("25% of them");
-  await expect(stat(card, "Recovered so far")).toContainText("▼ 37.5%");
-  await expect(stat(card, "Recovered so far")).toContainText("Recent checkouts can still be recovered, so the newer dates' rate can still rise.");
   await expect(statValue(card, "Recovered value")).toHaveText("$400.00");
+  await expect(card).not.toContainText("▼");
   await expect(card.getByTestId("abandoned-value-gap")).toHaveCount(0);
-  await expect(card.getByTestId("abandoned-previous-beyond")).toHaveCount(0);
 
   // Shopify refused (no approval for customer data yet): said in words, never 0.
   const denied = utcDay(-5);

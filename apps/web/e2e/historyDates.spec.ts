@@ -55,11 +55,8 @@ test("any calendar year of the store, 12 months at a time, with where its orders
   // The chart and the tiles say so too: no figures, never $0.
   await expect(page.getByTestId("trend-sales").getByRole("paragraph").filter({ hasText: "Not imported" })).toBeVisible();
   await expect(page.getByTestId("metric-Orders").getByTestId("figure-not-imported")).toBeVisible();
-  // 2024 against 2023 as a whole year, not the 366 days before it (which start in 2022): the dates'
-  // tooltip says what they are compared with, and there is no menu to choose it.
-  const compared = page.locator("div[title]", { has: page.locator("#date-range") });
-  await expect(compared).toHaveAttribute("title", /Compared with [^.]*2023/);
-  await expect(compared).not.toHaveAttribute("title", /2022/);
+  // The year stands alone: no menu to compare it with other dates, and nothing saying it is.
+  await expect(page.locator("div[title]", { has: page.locator("#date-range") })).not.toHaveAttribute("title", /Compared with/);
   await expect(page.getByLabel("Compare with")).toHaveCount(0);
 
   await page.getByRole("button", { name: "A year earlier" }).click();

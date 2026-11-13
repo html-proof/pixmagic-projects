@@ -48,25 +48,20 @@ Currency is always the store's (shop money), days the store's time zone, as in S
 
 ### Matching a Shopify screen
 
-A figure and its change match Shopify's only when both screens ask the same question. Before
+A figure matches Shopify's only when both screens ask the same question. Before
 reading a difference as a bug, check in this order:
 
 1. **The dates**: the same days (both in the store's time zone).
-2. **The comparison**: Shopify's second date chip shows the dates it compares with. bizinsights
-   always compares with the period just before the dates (the dates' tooltip and each tile name
-   it), so set Shopify's chip to "Previous period": they must be the same dates. A custom
-   comparison stays chosen in Shopify: PixMagic's Shopify screen compared with 14 Mar 2026 on both
-   17 and 18 Oct 2026. On 18 Oct that gave ↓25% orders (3 against 4) and ↓48% net sales (A$792.73
-   against about A$1,525), while bizinsights compared with 17 Oct (6 orders, A$1,794.58: ↓50% and
-   ↓55.8%). The day's own figures matched to the cent.
-3. **How far back the orders go**: a comparison before `historyFrom` (Shopify shares 60 days
-   without `read_all_orders`) says "No earlier data"; getting the scope is in docs/shopify-setup.md
-   ("Protected customer data").
+2. **The comparison**: Shopify's second date chip shows the dates it compares with, and its ↑↓
+   are changes on those dates. bizinsights shows no change to match: compare the day's own
+   figures, which match to the cent.
+3. **How far back the orders go**: dates before `historyFrom` (Shopify shares 60 days
+   without `read_all_orders`) show as "Not imported", never as $0; getting the scope is in
+   docs/shopify-setup.md ("Protected customer data").
 4. **The login**: Team & Access hides figures a member may not see. Without `finance.breakdown`
    there is no Total sales tile (the headline falls back to Net sales) and no gross sales,
    discounts, shipping or taxes; the figures shown are the same as an owner's.
-5. **Rounding**: Shopify's screen shows changes in whole percent (bizinsights' ↓55.8% is ↓56%
-   there) and money to the cent, rounded after adding up, as here.
+5. **Rounding**: Shopify's screen shows money to the cent, rounded after adding up, as here.
 
 ## Where the sales figures come from
 
@@ -115,7 +110,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   a year later. One day more is refused (`400 invalid_range`, "pick up to 12 months at a time"); the
   dates menu offers nothing longer, and the end
   date's calendar stops there. Older periods are not limited: 1 Jan – 31 Dec 2023 is a question like
-  any other, and it is compared with 2022. The downloads
+  any other, and the answer's `previous` is 2022. The downloads
   read the same rule; the ad platforms' own report endpoints keep their 366-day limit.
 - **Custom ranges** run from 2000-01-01 at the earliest, or from the store's first day once Shopify's
   creation date is known (`storeRangeLimits`: `Shop.createdAt`, `stores.shop_created_at`, read by the
@@ -123,9 +118,15 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   order imported from another platform can predate the store), and are reported only up to the
   store's today: picking 1–31 Oct on 9 Oct reports 1–9 Oct. A range that starts after today, or before
   the store's first day, is refused (`400 invalid_range`). The period before may reach back before the
-  store's first day: it then holds no orders, and the change says "No earlier data".
-- **Comparison period:** the % changes always compare with the **period just before** the dates
-  (`resolvePreset` in packages/shared/src/dates.ts). It isn't chosen: the comparison menu beside the
+  store's first day: it then holds no orders, and the answer's changes on it are `null`.
+- **Comparison period:** the answers' `previous` and `deltas` always compare with the **period just
+  before** the dates (`resolvePreset` in packages/shared/src/dates.ts). Since 2026-11-13 the pages
+  no longer show these changes (removed at the owner's request): the answers still carry them, and
+  the pages keep their other comparisons (month against month and year against year in the yearly
+  charts, days against an average day, this month so far against the same days last month, business
+  events in the Profit sheet, Meta against Google and campaign against campaign, the Google Ads
+  "Spending trend", a funnel segment or product against the others, and the Inventory and Staff
+  pages' own changes). The period isn't chosen: the comparison menu beside the
   dates (previous period, previous year, custom dates) was removed at the owner's request on
   2026-11-13, and a link that still carries its `compare`, `cfrom` or `cto` is answered as if it
   didn't. The period before is the same number of days
@@ -137,8 +138,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 
   The answer's `previous` holds the dates (`from`, `to`, `until`) and `imported`; `preset` says how
   the dates were asked for, so a panel asking about them again (Sales by collection) gets the same
-  days on both sides. The dates' tooltip names the dates compared with ("Compared with 17 Oct"),
-  and a finished day's tiles say "vs 17 Oct", not "vs the day before".
+  days on both sides.
   **Like for like, as Shopify's Analytics compares:** while the range is still
   running (it ends on the store's today), the comparison stops at the same time of day on its last
   day. Today until 4:44:12 pm is compared with yesterday until 4:44:12 pm, and the last 7 days with the 7 before up to the same
@@ -149,21 +149,21 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   (`dayTotals` in packages/core/src/persist.ts), and its store visits are the ones that started before
   it. Ad platforms (Meta, Google, AdSense) report whole days, so their comparisons are whole days
   only: while the range reaches a day still running (the store's today, or an ad account's today in
-  its own time zone), both the range and the comparison lose that many days at their end and the
-  change says "through yesterday"; Today on its own isn't compared (see "Ads" below). Their rows are
+  its own time zone), both the range and the comparison lose that many days at their end
+  (`compared`); Today on its own isn't compared (see "Ads" below). Their rows are
   read for the range and for the comparison separately.
 
   **No earlier data:** when the comparison starts before the store's imported history (`historyFrom`,
   below), `previous.imported` is false: the sales figures of the comparison come back `null`, every
-  sales, refund and returning-customer change is `null`, and the dashboard says "No earlier data"
-  instead of a change. A period mostly missing would otherwise read as a fake drop (or a fake rise,
-  or 0%). It is the same rule as the month-by-month view's "not imported" months.
+  sales, refund and returning-customer change is `null`. A period mostly missing would otherwise
+  read as a fake drop (or a fake rise, or 0%). It is the same rule as the month-by-month view's
+  "not imported" months.
 
   Store visits and ad figures have histories of their own, and the same rule applies to each on its
   own: the funnel and the ads and AdSense modules return their own `historyFrom` and
   `previous.imported`, and when the comparison starts before their `historyFrom` their comparison
-  figures come back `null`, every change is `null`, and their panels say "No earlier data" with the
-  reason. So the sales can compare while the visits or ads don't, and the other way round. A
+  figures come back `null` and every change is `null`. So the sales can compare while the visits or
+  ads don't, and the other way round. A
   comparison lying entirely before a history gives no change anyway (the change on 0 is `null`); one
   that straddles its start would show a rise that never happened.
 
@@ -178,8 +178,8 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
     days before it was connected (`ADS_BACKFILL_DAYS`). With several accounts added up, `historyFrom`
     is the latest start among the accounts counted (`commonCoverage`): before it, one of them is in
     the dates picked and missing from the dates compared with. An account not synced yet has no
-    figures at all, so nothing it is part of is given (its `historyFrom` is null and the change says
-    why, see "Ads"); hidden accounts and accounts in another currency aren't counted, so their starts
+    figures at all, so nothing it is part of is given (its `historyFrom` is null and `notCompared`
+    says why, see "Ads"); hidden accounts and accounts in another currency aren't counted, so their starts
     don't matter.
 
   **Where the imported history starts (`data.historyFrom`):** the first store-local day whose orders
@@ -198,7 +198,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   before its window (imported before the window was recorded) starts at that order's day instead:
   `historyFrom` is the earlier of the window's first whole day and `oldestOrderDay`. A quiet store's
   first order can come days after its window starts; those days were imported too, with no orders, so
-  they compare as $0 rather than "No earlier data". Disconnecting a store deletes its orders and
+  they compare as $0 rather than as not imported. Disconnecting a store deletes its orders and
   forgets the window. Stores imported before the record existed were given 60 days before their last
   successful orders sweep (a start they surely hold), and their next window import makes it exact.
   `oldestOrderDay`/`newestOrderDay` stay the orders actually held ("Orders from … to …").
@@ -260,7 +260,7 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
 | Funnel step | visits whose furthest step is this one or later | Steps: visited → viewed a product → added to cart → started checkout → purchased |
 | Left at a step | visits whose furthest step is exactly this one | Plus the site section they were last on |
 | Section exit rate | visits that left the site from this section without buying ÷ visits that saw this section | |
-| Δ vs previous | (current − previous) ÷ \|previous\| | Against the comparison chosen; `null` when previous is 0 or not imported; like for like while the range runs (Conventions) |
+| Δ vs previous | (current − previous) ÷ \|previous\| | The answers' `deltas`, on the period just before, which the pages don't show (Conventions); `null` when previous is 0 or not imported; like for like while the range runs |
 
 ## Total sales breakdown and Custom sales
 
@@ -305,8 +305,8 @@ its own, by name (default name "Custom business revenue").
   breakdown" below), in the overview report's key figures and as its own column in the Sales
   download, each time named. Without `finance.breakdown` a member gets neither the lines (for the
   range, each day or each month of the year) nor the calculation.
-- **Comparisons**: the lines come for the dates compared with too, so Custom sales has its own
-  change on them, with the same "No earlier data" rule as every sales figure. Each month of the
+- **Comparisons**: the answer carries the lines for the period before too (`previous`; `null` when
+  it isn't imported, as every sales figure), and the pages show no change on it. Each month of the
   year carries its lines and those of the dates it is compared with (`comparedLines`), so a month's
   Custom sales has its own change on the month before.
 
@@ -368,15 +368,14 @@ out by the same code:
   currencies) and, on hover and for screen readers, "Not profit". Without a cost known, Average order
   value instead. Last, **Visits that bought** (the funnel's conversion rate, of the visits the pixel
   tracked) where there are tracked visits, otherwise Average order value (or Total products sold).
-  Each change is "+12.7%" under the number (beside its name on a phone); the date card says what
-  it is compared with. The "i" in a tile's corner says what the figure measures, in the words of
+  The "i" in a tile's corner says what the figure measures, in the words of
   `components/dashboard/figureHelp.ts` (the Sales Overview's figures use the same): keep them in
   step with "Formulas" above.
 - **Sales by day**: total sales (net without the breakdown) each day of the dates as dark green
-  bars, today's paler with "today so far" over it, and the dates compared with as a dotted line, day
-  i over day i (`sales_overview.previousSeries`: each day's net and total sales, null when those
-  dates weren't imported). No axis: hovering, the arrow keys and a table for screen readers give
-  each day's figures.
+  bars, today's paler with "today so far" over it. No axis: hovering, the arrow keys and a table
+  for screen readers give each day's figure. The answer also carries the period before day by day
+  (`sales_overview.previousSeries`: each day's net and total sales, null when those dates weren't
+  imported), which the chart doesn't draw.
 - **What changed**: the first three checks of the business health check, each opening its details,
   beside the chart.
 - **More insights you can unlock** (owners and admins, when Shopify access is missing): one quiet
@@ -388,12 +387,10 @@ The dashboard's topics as pages of their own, in the Stitch design's layouts (sc
 `apps/web/src/components/dashboard/SalesViews.tsx`, frame and tabs in `SalesFrame.tsx`). Each reads
 the same overview answer as the Home (GET …/overview for the dates picked), so a figure is the same
 wherever it shows. Under the Overview's layout, "More detail" keeps the earlier panels (Total sales
-breakdown, the check against Shopify, gross profit, the comparison table, returns, sales by day and
-by month).
+breakdown, the check against Shopify, gross profit, returns, sales by day and by month).
 
 - **Overview**:
-  - **In short**: total sales (net sales without `finance.breakdown`), its change on the dates
-    compared with, orders and items sold.
+  - **In short**: total sales (net sales without `finance.breakdown`), orders and items sold.
   - **Four numbers**: Total sales (or Net sales), Orders, Average order (net sales ÷ orders, as
     "Formulas"), and Visits that bought (the funnel's conversion rate of tracked visits) or, with no
     tracked visits, Items sold.
@@ -420,8 +417,8 @@ by month).
     available", never "no sales".
   - **Products in your shop**: the catalogue's active products, with draft and archived.
   - Then Top 100 products, Sales by collection and Catalog, unchanged.
-- **Customers**: customers who ordered, new, returning (and the returning rate), and the returning
-  rate for the dates compared with, as "Repeat customers and monthly cohorts" counts them. The bar
+- **Customers**: customers who ordered, new and returning (and the returning rate), as "Repeat
+  customers and monthly cohorts" counts them. The bar
   splits customers who ordered into bought before (`returningCustomers`) and first purchase
   (customers − returning). Someone whose first and second orders both fall in the dates is both new
   and returning, so new + returning can be more than customers.
@@ -443,7 +440,7 @@ The full dashboard, one click from the simple Home. Reference implementation: `a
 carries; nothing is estimated.
 
 - **Headline tiles**: Total sales (Net sales without `finance.breakdown`), Orders, Average order
-  value, Total products sold, each with its change and a sparkline of the same figure day by day
+  value, Total products sold, each with a sparkline of the same figure day by day
   (`series`; a day's `units` are its net items sold). Under Total sales: "Refunds −A$…", what
   refunds took off it in the dates (`sales_overview.current.totalRefunded`, Total refunded above),
   then the store's Custom sales when it shows them.
@@ -546,12 +543,11 @@ Reference implementation: the grading rules in `packages/shared/src/health.ts` (
 
 | Area | Looks good | Keep an eye on | Needs attention |
 | --- | --- | --- | --- |
-| Net sales, orders, average order, visitors who bought, returning customers | up or level on the comparison | down by less than 10% | down by 10% or more |
 | Refunds | up to 5% of sales | over 5% and up to 10% | over 10% |
 | Stock | nothing sold out or low | something running low | something sold out |
 | Shipping | nothing waiting | orders waiting, none over 3 days | an order waiting over 3 days |
 
-Best seller, top channel and busiest time are information only. With nothing earlier to compare with, an area is information only too. When the only day picked is today, trends aren't graded, because the day isn't over.
+Net sales, orders, average order, tracked visits that bought and returning customers are information only ("For your info"): each states its figure. So are best seller, top channel and busiest time.
 
 ## Where sales come from (Sales channels → "Where your sales come from")
 
@@ -620,7 +616,7 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
 | Conversions (all conversion actions) | Google: `metrics.conversions`, every action set to count in Conversions (leads, sign-ups, calls and purchases) | Shown on the Google Ads card and the Ads panel only, never called or added up as purchases. Meta's conversions are its purchases |
 | Cost per conversion | spend ÷ conversions | |
 | Ads as share of sales | ad spend ÷ the store's net sales for the same dates | Only when both are in the same currency and every day of the ad spend is known |
-| Sales per unit of ad spend (MER) | the store's net sales ÷ ad spend (every platform), for the same dates | The marketing efficiency ratio: every sale the store made, whatever brought it, against everything spent on ads. The store's own measure, kept apart from a platform's ROAS (which counts only the purchases the platform credits to itself). Same conditions as the share of sales; `null` while nothing was spent. Its change, and the cost per order's, only when the dates picked have ended (both sides whole ranges), since the store's figures are for the whole of each |
+| Sales per unit of ad spend (MER) | the store's net sales ÷ ad spend (every platform), for the same dates | The marketing efficiency ratio: every sale the store made, whatever brought it, against everything spent on ads. The store's own measure, kept apart from a platform's ROAS (which counts only the purchases the platform credits to itself). Same conditions as the share of sales; `null` while nothing was spent. The answer's change on it, and on the cost per order, only when the dates picked have ended (both sides whole ranges), since the store's figures are for the whole of each |
 | Cost per Shopify order | ad spend ÷ the store's orders for the same dates (gift-card-only orders aside, as Shopify counts) | A derived cost, labelled as such: every order, not what an order from an ad cost. `null` without orders |
 | Orders from a platform's ads (Shopify's visit record) | orders whose last visit before the order (Shopify's `customerJourneySummary.lastVisit`, see Traffic sources) came from Facebook or Instagram (Meta) or Google or YouTube (Google Ads) through a link tagged as an ad (`traffic_medium` paid), and their net sales | The store's attribution, shown beside the platform's own purchases and never added to them: a platform can claim a sale that would have happened anyway, Shopify sees only the last visit. Orders on the day they happened in the store's zone; the platforms count purchases on the day of the click in the ad account's zone. Sales from those orders ÷ that platform's spend is given too ("sales per unit, Shopify's record"), same currency only. Team & Access "View conversion attribution" |
 
@@ -663,8 +659,7 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   The overview's Performance overview chart draws the spend added up beside each platform's purchase
   value, and a ROAS line per platform (its purchase value ÷ its own spend), from `seriesByProvider`.
   Key insights (`advertisingInsights`) set the break-even ROAS against each platform's own ROAS, name
-  the one that falls short, say what each platform's ROAS means, and give the purchase value's change
-  and "spend up while purchases fell" per platform on its own comparison. The Meta Ads and Google Ads
+  the one that falls short and say what each platform's ROAS means. The Meta Ads and Google Ads
   pages' details (`AdsDetail`) give a figure per platform of its purchases (their value, its ROAS and
   cost per purchase) in place of the four added up, in "In short" and on the daily spend chart's days
   too, and "What you could do next" names each platform's ROAS beside MER. The Advertising summary CSV
@@ -674,16 +669,15 @@ and `adsFigures` in `packages/core/src/reports/ads.ts`. Connection and sync: `do
   and ROAS ("Meta Ads credits … in purchases to its ads (2.4×) and Google Ads … (1.9×), each by its own
   count"), and Overview's details have a "Return on ad spend (Meta Ads' own)" row per platform in place
   of the platforms' one (`businessHealth`, `OverviewDetail`).
-- **Changes compare whole days only.** `compared` holds the days each side is worked out on and their
-  totals: while the range reaches a day still running (the store's today, or a counted account's today
-  in its own zone; `lastWholeAdDay`), both sides lose that many days at their end (`trimmed`), and the
-  change says "through yesterday" (`adComparisonWindows`). Today alone (or yesterday while an account's
-  day is still running) has no change: `notCompared` is `running` and the page says "today so far". The
-  `previous` figures and dates are those compared, so what is shown as before is what was compared.
-  `notCompared` is also `no_history` (the comparison starts before `historyFrom`: "No earlier data")
-  or `incomplete` (a counted account lacks days of either side). Each platform is compared from its
-  own history, so the comparison's days are read whenever any counted platform's figures reach back to
-  them (`daysToRead`); when they aren't read, nothing is compared (`no_history`), never set against $0.
+- **Changes compare whole days only** (the answer's `deltas`; the pages show none). `compared` holds
+  the days each side is worked out on and their totals: while the range reaches a day still running
+  (the store's today, or a counted account's today in its own zone; `lastWholeAdDay`), both sides
+  lose that many days at their end (`trimmed`, `adComparisonWindows`). Today alone (or yesterday
+  while an account's day is still running) has no change: `notCompared` is `running`. The `previous`
+  figures and dates are those compared. `notCompared` is also `no_history` (the comparison starts
+  before `historyFrom`) or `incomplete` (a counted account lacks days of either side). Each
+  platform is compared from its own history, so the comparison's days are read whenever any
+  counted platform's figures reach back to them (`daysToRead`); when they aren't read, nothing is compared (`no_history`), never set against $0.
 - **Days** are each ad account's own calendar days. When an account's time zone has other days than
   the store's (`otherTimeZone`, `sameDays`: not the name, the local date and time now and half a year
   either side), its card says "Google Ads days follow the ad account's time zone, America/Los_Angeles",
@@ -730,7 +724,7 @@ account connected").
 | Orders | those orders placed in the range | Gift-card-only orders aside, as everywhere |
 | Share of your sales | the platform's sales ÷ the store's net sales over the range, every source together | Orders whose visit isn't read yet count in the whole, in no platform (`pending`) |
 | From links tagged as ads | the same for `traffic_medium = 'paid'` | An untagged Meta ad counts as a visit from Facebook or Instagram, not as an ad |
-| Change | (now − before) ÷ before, for the dates compared with | Only with their orders imported; a running day is cut at the same time of day (orders by processed time, sales by when they happened) |
+| Change (the answer's `deltas`) | (now − before) ÷ before, for the dates compared with | Only with their orders imported; a running day is cut at the same time of day (orders by processed time, sales by when they happened) |
 
 Each day of the range is given, a day before the store's imported orders as unknown (never 0). These are
 the store's last-click view and never added to, or shown as, a platform's own figures.
@@ -823,20 +817,22 @@ visits in the same dates and filter, so no rate mixes two sources:
 | Checkout completion | Visits that completed checkout ÷ visits that started checkout |
 | View to cart rate (a product) | Visits that added the product to cart on its page ÷ visits that viewed its page |
 | Checkout completion (a product) | Visits that bought the product ÷ visits that started a checkout holding it (`checkoutCompletion`; every buying visit started that checkout) |
-| Change of a stage | (visits now − visits then) ÷ visits then, against the comparison (`stepDeltas`) |
+| Change of a stage (in the answer only) | (visits now − visits then) ÷ visits then, against the comparison (`stepDeltas`) |
 
 - **Largest drop-off**: the transition that lost the most visits (`largestDropOff`; a tie goes to the
-  earlier step). Rates are never called good or bad: there is no benchmark, only the store's own
-  earlier dates.
-- **A clear change**: a transition's progression differs from the comparison by more than chance, by
-  the pooled two-proportion z-test at 95% (`proportionZ`, |z| ≥ 1.96) with at least 30 visits on each
-  side and five expected successes and failures in each group; otherwise "within normal variation".
-- **Observations** (`funnelInsights`, at most six): where most visits are lost (30 visits or more);
-  visits up or down (Poisson test, at least 50 a side, only between dates of the same length); the
-  conversion rate or a transition changed (the z-test); mobile against desktop, or new against
-  returning visitors, buying or completing checkout at different rates (the z-test); a product page
-  added to cart less often than the store's other product pages (the z-test). Nothing else is said,
-  and reasons are offered as things to check, never as measured causes.
+  earlier step). Rates are never called good or bad: there is no benchmark.
+- **A clear difference**: two rates differ by more than chance, by the pooled two-proportion z-test
+  at 95% (`proportionZ`, |z| ≥ 1.96) with at least 30 visits on each side and five expected
+  successes and failures in each group. The answer marks each transition against the period before
+  with it (`change`, `significant`); the page shows no change of a transition.
+- **Observations** (`funnelInsights`, at most six). The page words three kinds: where most visits
+  are lost (`largest_drop`, 30 visits or more); mobile against desktop, or new against returning
+  visitors, buying or completing checkout at different rates (`segment_gap`, the z-test); a product
+  page added to cart less often than the store's other product pages (`product_interest`, the
+  z-test). The answer also holds the three kinds that are changes on the period before, which the
+  page doesn't word: `visits` (up or down by a Poisson test, at least 50 a side, only between dates
+  of the same length), `conversion` and `transition` (the z-test). Nothing else is said, and reasons
+  are offered as things to check, never as measured causes.
 - **Segments** (each a funnel of its own on the same visits): device, country, landing page (the
   section the visit started on), new or returning (returning: the same hashed browser has a visit on
   an earlier day since the pixel's history began), traffic source. The **filter** (`device`,
@@ -888,7 +884,7 @@ visits in the same dates and filter, so no rate mixes two sources:
   (`PUT …/funnel/actions/:id`, `funnel_action_checks`; audited as `funnel.action_done` /
   `funnel.action_undone`). A shared, view-only dashboard and API keys can't tick.
 - **Download**: `GET …/export?section=funnel` with the dates and filter: the dates, the filter, the
-  funnel now and before, every transition, every day, every segment and the products (with quick
+  funnel, every transition, every day, every segment and the products (with quick
   adds, checkouts and purchases, empty where not recorded). "Print or save as PDF" prints the page.
 
 ## Profit sheet (Profit & Loss → Detailed Table)
@@ -1017,30 +1013,32 @@ Reference implementation: `profitStatement` (`packages/core/src/reports/profit.t
 `apps/web/src/app/(app)/profit/page.tsx` and `components/profit/`.
 
 The owner's own profit and loss workbook (EEq.xlsx, a "Dashboard" sheet with a column a day and an
-"Add Cost" sheet) as a page: any dates and the period before them, which they're compared with (the dashboard's dates menu:
+"Add Cost" sheet) as a page: any dates (the dashboard's dates menu:
 today, yesterday, this week, this month, last month, this year, last year, custom), a column per day, week, month or year (at most `MAX_STATEMENT_COLUMNS`, 62;
 coarser when the dates need more). Every figure is `profitAndLoss`'s
-(`packages/shared/src/profit.ts`), worked out on the server; the page formats it.
+(`packages/shared/src/profit.ts`), worked out on the server; the page formats it. The answer also
+carries the statement of the period before the dates (`compare`, with its dates in `previous`),
+which the page doesn't show.
 
 **Layout (the owner's design, 2026-11-13).** One page for the profit and loss and the Profit sheet.
 The header has the dates, Daily / Weekly / Monthly / Yearly (`?grain=`: the charts' periods, the
 statement's columns and the sheet's) and Export (the statement as CSV). Under it four figures, each
-with its change from the dates compared with and what it means behind its "i": Revenue (Tax Incl.),
+with what it means behind its "i": Revenue (Tax Incl.),
 Total Expenses, Profit (After Tax) (revenue before tax − total expenses: the tax collected is taken
-out first) and Profit Margin (its change in percentage points). Then five sections (`?tab=`), with
+out first) and Profit Margin. Then five sections (`?tab=`), with
 the quick actions Add Expense and Add Business Event beside them:
 
 | Section | What it shows |
 | --- | --- |
-| Overview (default) | Revenue and expenses as columns with profit as a line, per period; Key Insights; Expense Breakdown (a ring); Profit Analysis; the statement in four columns (these dates, the dates compared with, the change, its share), with Download CSV and View Details |
+| Overview (default) | Revenue and expenses as columns with profit as a line, per period; Key Insights; Expense Breakdown (a ring); Profit Analysis; the statement for the dates as a whole (two columns: Metric, This Period), with Download CSV and View Details |
 | Revenue (`revenue`) | Revenue with and without tax, tax collected, orders, items sold; revenue per period; the sum from gross sales to revenue with tax, a step a line |
 | Expenses (`expenses`) | Total, advertising, variable and fixed costs; Expense Breakdown (the ring); every cost biggest first, with what the connected ad accounts add; the expenses table; the recurring expenses; how fixed costs are spread (every day, or the days the store is open) |
 | Profit Analysis (`analysis`) | Profit Analysis; the sum from revenue before tax to profit, a step a line; profit day by day; margin, MER, ROAS, VCR and FCR each with a line of plain words; the cash-flow note |
 | Detailed Table (`table`) | The statement, a column per period (the table below); then the day-by-day sheet with the business events ("Profit sheet" above) |
 
-- **Key Insights** are sentences a figure on the page backs, never a guess: profit against the dates
-  compared with (or why it can't be given); the largest of the five cost groups and its share of
-  total expenses; the advertising spend and its share of revenue (or "No advertising spend in this
+- **Key Insights** are sentences a figure on the page backs, never a guess: the profit or the loss
+  made, or that the store broke even (or why it can't be given); the largest of the five cost
+  groups and its share of total expenses; the advertising spend and its share of revenue (or "No advertising spend in this
   period."); the best day by profit; how many business events fall in the dates (or a prompt to add one).
 - **Expense Breakdown** groups every cost five ways that add up to total expenses: product costs,
   other variable costs (your variable categories), fixed costs, advertising, and interest, tax and
@@ -1154,7 +1152,7 @@ amount). Saved with `PUT …/expenses/settings` `{ operatingWeekdays }` (audited
 | Figure | Formula | Notes |
 | --- | --- | --- |
 | A cost over the dates | once: the amount, on its day; daily, weekly, fortnightly: each payment spread over the days it pays for (a weekly one a seventh a day); monthly, quarterly, six-monthly, yearly: per calendar month (quarter, half year, year), the payment due in it × its days in the dates ÷ the period's days (366 days in a leap year); a percentage or an amount per order or item: each day's own, from its sales. With open days: the open days in the dates ÷ the period's open days | Only the days from its start to its end (or on, with none). A whole month is the whole monthly amount, whatever its length; a payment recorded with another amount counts in its own period, a skipped one (or one due while paused) counts nothing. Rounded to the cent once per cost and run of consecutive days |
-| Your costs | Σ of every cost over the dates, by category | Compared with the same over the dates compared with (whole days: a cost has no time of day) |
+| Your costs | Σ of every cost over the dates, by category | The answer carries their total over the period before too (`previous`; whole days: a cost has no time of day) |
 | Revenue (for net profit) | net sales + shipping + additional fees: total sales less taxes and duties | What the store kept from its sales; taxes and duties are collected for governments |
 | **Net profit** | revenue − product costs (Shopify's cost of goods sold, or the items sold at their cost per item) − the connected ad accounts' spend − your costs | Given only when every input is known (below) |
 
@@ -1200,8 +1198,8 @@ customer data approval, docs/shopify-setup.md) instead of estimating:
   windows after 10 minutes, the last two days after 30, older ones after 6 hours; a failed call
   after 10 minutes (the last figures stay shown), a refusal after 6 hours. Kept 14 days.
 - **No figures, no numbers**: when Shopify refuses (no access, a report this plan can't run) or
-  hasn't answered yet, the card says so. A comparison before bizinsights' imported history is
-  still compared: Shopify's reports have the whole history.
+  hasn't answered yet, the card says so. A period before bizinsights' imported history still has
+  its figures in the answer's `previous`: Shopify's reports have the whole history.
 - **The check's states**: match; differs; catching up (changes from Shopify are still being
   counted here, or our data is older than Shopify's answer); not reported.
 - **Reconciliation report**: the same check for today, yesterday, the last 7/30/90 days, this month
@@ -1218,9 +1216,9 @@ dates only: no name, email, phone or address is asked for or kept.
 
 | Figure | Definition |
 | --- | --- |
-| Abandoned checkouts | Shopify's count of the checkouts in its abandoned checkouts list created in the dates, on the store's days: the shopper gave an email or phone number and didn't pay. Recovered and archived ones included, as Shopify's list keeps both. Shown with a "+" when Shopify gives the count only as a lower bound (`precision: AT_LEAST`); it then has no change and no rate |
+| Abandoned checkouts | Shopify's count of the checkouts in its abandoned checkouts list created in the dates, on the store's days: the shopper gave an email or phone number and didn't pay. Recovered and archived ones included, as Shopify's list keeps both. Shown with a "+" when Shopify gives the count only as a lower bound (`precision: AT_LEAST`); it then has no rate, and no change in the answer |
 | Recovered so far | Of them, the ones Shopify marks recovered (`recovery_state:recovered`): completed later |
-| Recovered rate | Recovered ÷ abandoned, both by the day the checkout was created. Keeps rising for recent dates as late recoveries come in, hence "so far": a range that just ended compares unfavourably with an older one, so its change is shown uncoloured, never as better or worse |
+| Recovered rate | Recovered ÷ abandoned, both by the day the checkout was created. Keeps rising for recent dates as late recoveries come in, hence "so far": a range that just ended compares unfavourably with an older one |
 | Abandoned checkout value | Each checkout's total price added up (`totalPriceSet.shopMoney`: items after discounts, shipping and taxes) in the shop's currency, recovered ones included |
 | Recovered value | The total price of the ones completed later (`completedAt` set) |
 
@@ -1237,9 +1235,10 @@ Limits, each shown in words, never as 0:
   in the last 60 days ("For older orders, add `read_all_orders`", shopify.dev access scopes).
   Without `read_all_orders` (no bizinsights app asks for it yet) a window starting before the
   store's today − 59 days is never asked for: the card says Shopify shares the last 60 days of
-  checkouts and from which day, and a comparison that old has no change. With `read_all_orders`
+  checkouts and from which day, and a period before that old has no figures in the answer
+  (`previousStatus` `beyond_history`). With `read_all_orders`
   older windows are asked for; how long Shopify keeps abandoned checkouts isn't documented
-  (community posts say about three months), so an old comparison deserves care.
+  (community posts say about three months), so figures for old dates deserve care.
 - **Approval.** Abandoned checkouts are protected customer data (Shopify's "Orders" category);
   without names or contact details that is Level 1, the same approval the orders import waits on.
   An app Shopify hasn't approved yet (the App Store app on live stores) gets `ACCESS_DENIED`, kept

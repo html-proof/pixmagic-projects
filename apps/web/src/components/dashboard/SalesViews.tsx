@@ -13,17 +13,15 @@ import {
   type OrderListSort,
 } from "@app/shared/orders";
 import { TRAFFIC_SPLIT_LABEL } from "@app/shared/traffic";
-import { Card as KitCard, ChangeTag, FigureTile, InShortLine, ShareRow } from "@/components/PageKit";
+import { Card as KitCard, FigureTile, InShortLine, ShareRow } from "@/components/PageKit";
 import { useApp } from "@/components/AppContext";
 import { fmtMoney, fmtNum, fmtPct, friendlyError, useApi } from "@/lib/api";
 import { collectionName, CollectionSales, useCollectionSales, type CollectionChoice } from "./CollectionSales";
 import { ContactsCard } from "./Contacts";
 import { MonthlyCohorts, RepeatCustomers, useCustomerAnalytics } from "./CustomerCohorts";
-import { comparisonHelp, noEarlierData, versusWords, comparedWith } from "./DateRange";
 import { FIGURE_HELP, visitsThatBoughtHelp } from "./figureHelp";
-import { fmtDateTime, fmtDuration, fmtLongDay, fmtRange, fmtSpan, hourRange, plural, weekdayName } from "./format";
+import { fmtDateTime, fmtDuration, fmtLongDay, fmtSpan, hourRange, plural, weekdayName } from "./format";
 import { CatalogCard, FulfillmentBadge, OrderName, PaymentBadge } from "./Modules";
-import { comparedOn, upDown } from "./Narrative";
 import { breakdownOf, salesLinesOf } from "./redacted";
 import { SalesByDay } from "./SimpleHome";
 import { TopProducts } from "./TopProducts";
@@ -52,8 +50,6 @@ export function ShortLine({ ov, icon, children }: { ov: Overview; icon?: ReactNo
     </InShortLine>
   );
 }
-
-const Change = ChangeTag;
 
 /** One of a tab's numbers (components/PageKit.tsx), its test id `sales-figure-<title>`. */
 const Figure = (p: Parameters<typeof FigureTile>[0]) => <FigureTile testId={`sales-figure-${p.title}`} {...p} />;
@@ -333,31 +329,28 @@ export function SalesOverviewTab({ ov, currency, onOpen }: { ov: Overview; curre
   const s = ov.modules.sales_overview!;
   const c = s.current;
   const money = (n: number) => fmtMoney(n, currency);
-  const versus = versusWords(ov);
   const total = c.totalSales ?? null;
-  const change = upDown(total !== null ? (s.deltas.totalSales ?? null) : s.deltas.netSales);
   const funnel = ov.modules.funnel && ov.modules.funnel.visits > 0 ? ov.modules.funnel : null;
   const m = ov.modules;
   return (
     <>
       <ShortLine ov={ov}>
-        {total !== null ? "total sales" : "net sales"}
-        {change ? ` ${change} to` : " of"} <strong className="font-semibold">{money(total ?? c.netSales)}</strong> from{" "}
+        {total !== null ? "total sales" : "net sales"} of <strong className="font-semibold">{money(total ?? c.netSales)}</strong> from{" "}
         <strong className="font-semibold">{plural(c.orders, "order")}</strong>
         {c.units ? ` (${plural(c.units, "item")})` : ""}.
       </ShortLine>
       <section aria-label="Sales numbers" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         {total !== null ? (
-          <Figure title="Total sales" value={money(total)} change={<Change value={s.deltas.totalSales} versus={versus} />} help={FIGURE_HELP.totalSales} />
+          <Figure title="Total sales" value={money(total)} help={FIGURE_HELP.totalSales} />
         ) : (
-          <Figure title="Net sales" value={money(c.netSales)} change={<Change value={s.deltas.netSales} versus={versus} />} help={FIGURE_HELP.netSales} />
+          <Figure title="Net sales" value={money(c.netSales)} help={FIGURE_HELP.netSales} />
         )}
-        <Figure title="Orders" value={fmtNum(c.orders)} change={<Change value={s.deltas.orders} versus={versus} />} help={FIGURE_HELP.orders} />
-        <Figure title="Average order" value={c.averageOrderValue === null ? "—" : money(c.averageOrderValue)} change={<Change value={s.deltas.averageOrderValue} versus={versus} />} help={FIGURE_HELP.averageOrder} />
+        <Figure title="Orders" value={fmtNum(c.orders)} help={FIGURE_HELP.orders} />
+        <Figure title="Average order" value={c.averageOrderValue === null ? "—" : money(c.averageOrderValue)} help={FIGURE_HELP.averageOrder} />
         {funnel ? (
-          <Figure title="Visits that bought" value={fmtPct(funnel.conversionRate)} change={<Change value={funnel.previous.imported === false ? null : funnel.deltas.conversionRate} versus={versus} />} sub={`Of ${plural(funnel.visits, "tracked visit")}`} help={visitsThatBoughtHelp(funnel.visits)} />
+          <Figure title="Visits that bought" value={fmtPct(funnel.conversionRate)} sub={`Of ${plural(funnel.visits, "tracked visit")}`} help={visitsThatBoughtHelp(funnel.visits)} />
         ) : (
-          <Figure title="Items sold" value={fmtNum(c.units)} change={<Change value={s.deltas.units} versus={versus} />} help={FIGURE_HELP.itemsSold} />
+          <Figure title="Items sold" value={fmtNum(c.units)} help={FIGURE_HELP.itemsSold} />
         )}
       </section>
       <SalesAddUp ov={ov} currency={currency} />
@@ -389,8 +382,6 @@ export function ProductsTab({ ov, currency }: { ov: Overview; currency: string }
   const tp = ov.modules.top_products;
   const items = tp?.items ?? [];
   const c = ov.modules.sales_overview?.current;
-  const s = ov.modules.sales_overview;
-  const versus = versusWords(ov);
   const top = items[0];
   const share = top && c && c.netSales > 0 ? top.revenue / c.netSales : null;
   const topTotal = items.reduce((a, i) => a + i.revenue, 0);
@@ -419,7 +410,7 @@ export function ProductsTab({ ov, currency }: { ov: Overview; currency: string }
         )}
       </ShortLine>
       <section aria-label="Product numbers" className="grid gap-3 sm:grid-cols-3 sm:gap-4">
-        {c && s && <Figure title="Items sold" value={fmtNum(c.units)} change={<Change value={s.deltas.units} versus={versus} />} sub={c.orders ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.units / c.orders)} per order` : undefined} />}
+        {c && <Figure title="Items sold" value={fmtNum(c.units)} sub={c.orders ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(c.units / c.orders)} per order` : undefined} />}
         {/* No top product when rankings are held back (some sales have no product to group by yet) is
             "not available", not "no sales": items did sell. */}
         {tp && (
@@ -458,8 +449,6 @@ export function CustomersTab({ ov, currency, contactsOn }: { ov: Overview; curre
   const [months, setMonths] = useState(12);
   const lifetime = useCustomerAnalytics(ov, !!cu, months);
   const rate = cu?.current.returningCustomerRate ?? null;
-  const before = cu?.previous.returningCustomerRate ?? null;
-  const missing = ov.previous.imported === false;
   return (
     <>
       {cu && (
@@ -469,16 +458,14 @@ export function CustomersTab({ ov, currency, contactsOn }: { ov: Overview; curre
               "no orders with a known customer in these dates yet."
             ) : (
               <>
-                <strong className="font-semibold">{fmtPct(rate)}</strong> of buyers had bought before
-                {before !== null && !missing ? `, ${rate >= before ? "up" : "down"} from ${fmtPct(before)} for ${comparedOn(ov)}` : ""}.
+                <strong className="font-semibold">{fmtPct(rate)}</strong> of buyers had bought before.
               </>
             )}
           </ShortLine>
-          <section aria-label="Customer numbers" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+          <section aria-label="Customer numbers" className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
             <Figure title="Customers who ordered" value={fmtNum(cu.current.customers)} sub="Each customer once, however many orders" />
             <Figure title="New" value={fmtNum(cu.current.newCustomers)} sub="Their first purchase ever" />
             <Figure title="Returning" value={fmtNum(cu.current.returningCustomers)} change={rate !== null ? <span className="text-xs font-medium text-good tabular-nums">({fmtPct(rate)})</span> : undefined} sub="Had bought from you before" />
-            <Figure title="Returning before" value={missing ? "—" : fmtPct(before)} sub={missing ? noEarlierData(ov.data?.historyFrom) : comparisonHelp(ov.previous, ov.range)} />
           </section>
           {rate !== null && cu.current.customers > 0 && <FirstOrBefore customers={cu.current.customers} returning={cu.current.returningCustomers} />}
           {/* Each panel takes the page's width: both hold wide tables of their own. */}
@@ -891,14 +878,5 @@ function OrdersList({ ov, currency, recent, cancelledInRange }: { ov: Overview; 
         )
       }
     />
-  );
-}
-
-/** What the dates are compared with, for a tab's foot ("Compared with 7 Sep – 6 Oct"). */
-export function ComparedFoot({ ov }: { ov: Overview }) {
-  return (
-    <p className="text-xs text-muted" data-testid="sales-compared">
-      {fmtRange(ov.range.from, ov.range.to)}. {comparedWith({ range: ov.range, previous: ov.previous, timezone: ov.store.timezone })}.
-    </p>
   );
 }

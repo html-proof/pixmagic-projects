@@ -2,10 +2,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { CalendarDays, ChevronDown, ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react";
 import {
-  addDays,
   calendarYear,
   customRangeProblem,
-  daysBetweenInclusive,
   isDay,
   latestRangeEnd,
   localDay,
@@ -14,12 +12,11 @@ import {
   storeRangeLimits,
   yearEarlier,
   yearsBetween,
-  type Comparison,
   type CustomRangeProblem,
   type DatePreset,
   type DateRange,
 } from "@app/shared/dates";
-import { fmtClock, fmtComparison, fmtDay, fmtRange, fmtSpan } from "./format";
+import { fmtDay, fmtRange, fmtSpan } from "./format";
 
 /**
  * The dates menu. `option` is the menu's longer wording where the pill's short label leaves a
@@ -208,90 +205,8 @@ export function useDateRange(timeZone: string, start: StoreStart = { day: null, 
 
 export type DateRangeState = ReturnType<typeof useDateRange>;
 
-/**
- * What the numbers are compared with, as the API answers it: the period just before the dates.
- * `imported` is false when the store's imported orders don't reach back to it (no change is given).
- */
-export type ShownComparison = Comparison & { imported?: boolean };
-
 /** What the numbers on the page are for, once they have loaded. */
-export type Shown = { range: DateRange; previous: ShownComparison; timezone: string } | null;
-
-/**
- * "Compared with 18 Aug – 16 Sep" for a tooltip, once the numbers have loaded; "Compared with
- * 16 Oct until 4:44 pm, the same time of day" while the dates picked are still running.
- */
-export const comparedWith = (shown: Shown) => {
-  if (!shown) return undefined;
-  const p = shown.previous;
-  const cut = p.until ? ` until ${fmtClock(p.until)}, the same time of day` : "";
-  const missing = p.imported === false ? ". No orders were imported from that far back, so nothing is compared" : "";
-  // With their year when it isn't the dates' own: 2024 is compared with 2023, not with "1 Jan – 31 Dec".
-  return `Compared with ${fmtSpan(p.from, p.to, { year: p.to.slice(0, 4) !== shown.range.to.slice(0, 4) })}${cut}${missing}`;
-};
-
-const wholeYear = (r: DateRange) => r.from.endsWith("-01-01") && r.to.endsWith("-12-31") && r.from.slice(0, 4) === r.to.slice(0, 4);
-
-/**
- * What a change is on, short enough for under a headline number: "vs same time yesterday",
- * "vs 17 Oct", "vs previous 30 days". Last month is compared with the whole month before it,
- * whatever its length.
- */
-export function versusWords(shown: { range: DateRange; previous: ShownComparison } | null): string {
-  if (!shown) return "vs previous period";
-  const { range, previous: p } = shown;
-  const days = daysBetweenInclusive(range.from, range.to);
-  // A finished day names the day it is compared with: "the day before" left it to be worked out,
-  // next to a Shopify screen comparing with a date of its own.
-  // This week so far is compared with the same weekdays of the week before (Monday on).
-  if (p.from === addDays(range.from, -7) && p.to === addDays(range.to, -7) && days < 7) return p.until ? "vs same time last week" : "vs same days last week";
-  if (days === 1) return p.until ? "vs same time yesterday" : `vs ${fmtDay(p.from, { year: false })}`;
-  // Last year is compared with the whole year before, leap or not; last month with the whole month before.
-  if (wholeYear(range) && wholeYear(p)) return "vs the year before";
-  if (daysBetweenInclusive(p.from, p.to) !== days) return "vs the month before";
-  if (days === 7 && new Date(`${range.from}T00:00:00Z`).getUTCDay() === 1 && p.to === addDays(range.from, -1)) return "vs the week before";
-  return `vs previous ${days} days`;
-}
-
-/**
- * What the numbers are compared with, for a panel's help line: "16 Oct until 4:44 pm, the same
- * number of days just before, up to the same time of day, as Shopify compares".
- */
-export function comparisonHelp(p: ShownComparison, range?: DateRange): string {
-  const sameWeekdays = range && p.from === addDays(range.from, -7) && p.to === addDays(range.to, -7) && daysBetweenInclusive(range.from, range.to) < 7;
-  const how = sameWeekdays ? ", the same weekdays of the week before" : ", the same number of days just before";
-  return `${fmtComparison(p)}${how}${p.until ? ", up to the same time of day, as Shopify compares" : ""}`;
-}
-
-/** What has its own history on the dashboard: each is compared only with dates from its start. */
-export type HistorySource = "sales" | "visits" | "ads" | "adsense";
-
-/**
- * Why figures aren't compared when their history doesn't reach back to the comparison
- * (`previous.imported` false). `historyFrom` is the first day they were all recorded from: the
- * overview's `data.historyFrom` for sales (absent for a member who may not see orders), the
- * funnel's or the ad module's own for visits and ads.
- */
-export function noEarlierData(historyFrom: string | null | undefined, source: HistorySource = "sales"): string {
-  const day = historyFrom ? fmtDay(historyFrom) : null;
-  switch (source) {
-    case "visits":
-      return day
-        ? `No earlier data: the bizinsights pixel has counted visits since ${day}, so visits aren't compared with dates before that.`
-        : "No earlier data: no visits were counted on those dates, so visits aren't compared.";
-    case "ads":
-    case "adsense": {
-      const what = source === "ads" ? "ad figures" : "AdSense figures";
-      return day
-        ? `No earlier data: bizinsights has your ${what} from ${day} on, so they aren't compared with dates before that. A new account brings its last 90 days first, then earlier days back to 25 months, a few months at a time.`
-        : `No earlier data: your ${source === "ads" ? "ad accounts haven't" : "AdSense account hasn't"} been read yet, so nothing is compared.`;
-    }
-    default: {
-      const start = day ? `Shopify shared orders from ${day} on, so sales aren't compared with dates before that` : "no orders were imported from those dates, so sales aren't compared";
-      return `No earlier data: ${start}. Without access to all orders, Shopify shares only the last 60 days.`;
-    }
-  }
-}
+export type Shown = { range: DateRange; timezone: string } | null;
 
 /**
  * A pill naming a choice, with the native select laid over it, so it opens the system's own list
@@ -418,7 +333,7 @@ function datesChoice(r: DateRangeState, shown: Shown) {
     text,
     /** A preset's name is followed by its dates, "(7 Oct – 5 Nov)": a custom range or a year already says them. */
     named: year === null && r.preset !== "custom",
-    title: shown ? `${fmtSpan(shown.range.from, shown.range.to)}. ${comparedWith(shown)}. Days follow the store's time zone (${shown.timezone}); weeks run Monday to Sunday.` : undefined,
+    title: shown ? `${fmtSpan(shown.range.from, shown.range.to)}. Days follow the store's time zone (${shown.timezone}); weeks run Monday to Sunday.` : undefined,
     select: {
       value: year !== null ? yearId(year) : r.preset,
       options: PRESETS,

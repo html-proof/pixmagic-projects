@@ -4,13 +4,13 @@ import { advertisingInsights, type AdInsightTone } from "@app/shared/adInsights"
 import { claimsAddUp } from "@app/shared/ads";
 import { fmtMoney, fmtPct } from "@/lib/api";
 import { shownFigures } from "@/components/dashboard/adFigures";
-import { fmtMoneyWhole, fmtSpan, fmtTimes } from "@/components/dashboard/format";
+import { fmtMoneyWhole, fmtTimes } from "@/components/dashboard/format";
 import type { AdsModule, Overview } from "@/components/dashboard/types";
 import { AdCard, EmptyNote } from "./AdCard";
 
 // ---------------------------------------------------------------------------
 // "Key insights": a few sentences from figures the page already shows (advertisingInsights in
-// @app/shared/adInsights): what changed, which platform returns more, what ROAS pays for at the store's
+// @app/shared/adInsights): which platform returns more, what ROAS pays for at the store's
 // margin. A figure not known leaves its sentence out. With more than one platform counted, a sentence on
 // purchases is each platform's own, named, never their claims added up (`claimsAddUp`).
 // ---------------------------------------------------------------------------
@@ -35,15 +35,9 @@ export function KeyInsights({ a, ov }: { a: AdsModule; ov: Overview }) {
     {
       platforms: a.byProvider.flatMap((p) => {
         const t = shownFigures(p).totals;
-        // Each platform is compared on its own days (its own `compared`).
-        const vs = p.compared ? `vs ${fmtSpan(p.compared.previous.from, p.compared.previous.to)}` : null;
-        return t
-          ? [{ provider: p.provider, spend: t.spend, purchases: t.purchases, purchaseValue: t.purchaseValue, roas: t.roas, deltas: vs ? { spend: p.deltas.spend, purchases: p.deltas.purchases, purchaseValue: p.deltas.purchaseValue } : null, versus: vs }]
-          : [];
+        return t ? [{ provider: p.provider, spend: t.spend, purchases: t.purchases, purchaseValue: t.purchaseValue, roas: t.roas }] : [];
       }),
       totals: totals && { spend: totals.spend, purchases: totals.purchases, purchaseValue: totals.purchaseValue, roas: totals.roas },
-      deltas: a.compared ? { spend: a.deltas.spend, purchases: a.deltas.purchases, purchaseValue: a.deltas.purchaseValue } : null,
-      versus: a.compared ? `vs ${fmtSpan(a.compared.previous.from, a.compared.previous.to)}` : null,
       margin: shopifyMargin(ov, a),
       demo: a.demo,
       claimsAddUp: claimsAddUp(a.byProvider.map((p) => p.provider)),

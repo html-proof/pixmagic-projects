@@ -1,15 +1,12 @@
 "use client";
 import type { ReactNode } from "react";
-import { ArrowDown, ArrowUp } from "lucide-react";
 import { HelpTip } from "@/components/PageKit";
-import { fmtPct } from "@/lib/api";
 import { toneOf, TONE_TEXT } from "./profitUi";
 
 // ---------------------------------------------------------------------------
 // The pieces the Profit & Loss page's sections are drawn with (the owner's design, 13 Nov 2026): a
-// card headed by a tinted icon, its title and one plain line; a change beside a figure; a small
-// figure tile; and a sum laid out a step a line. Colours are the app's own tokens, so every piece
-// follows light and dark.
+// card headed by a tinted icon, its title and one plain line; a small figure tile; and a sum laid
+// out a step a line. Colours are the app's own tokens, so every piece follows light and dark.
 // ---------------------------------------------------------------------------
 
 export const MISSING = "Missing data";
@@ -70,54 +67,11 @@ export function PlCard({
   );
 }
 
-/** The share a figure changed by from the dates compared with; null when either isn't known or there was nothing before. */
-export function changeOf(now: number | null | undefined, before: number | null | undefined): number | null {
-  if (now == null || before == null || before === 0) return null;
-  const c = (now - before) / Math.abs(before);
-  return Number.isFinite(c) ? c : null;
-}
-
-/**
- * A change beside a figure: "↑ +27%", coloured by whether it is good for profit (`cost`: a rise is
- * bad), with words for screen readers. Nothing when it can't be worked out.
- */
-export function Change({ now, before, cost = false }: { now: number | null | undefined; before: number | null | undefined; cost?: boolean }) {
-  const c = changeOf(now, before);
-  if (c === null) return null;
-  if (Math.abs(c) < 0.0005) return <span className="text-xs font-medium text-muted">No change</span>;
-  const good = cost ? c < 0 : c > 0;
-  const Arrow = c > 0 ? ArrowUp : ArrowDown;
-  return (
-    <span className={`inline-flex items-center gap-0.5 text-xs font-semibold tabular-nums ${good ? "text-good" : "text-danger"}`}>
-      <Arrow aria-hidden className="h-3.5 w-3.5" strokeWidth={2.5} />
-      <span className="sr-only">{c > 0 ? "up " : "down "}</span>
-      <span aria-hidden>{c > 0 ? "+" : "−"}</span>
-      {fmtPct(Math.abs(c))}
-    </span>
-  );
-}
-
-/** A change in percentage points ("+2.6 pp"), for a margin or a ratio. */
-export function PointsChange({ now, before, cost = false }: { now: number | null | undefined; before: number | null | undefined; cost?: boolean }) {
-  if (now == null || before == null) return null;
-  const d = (now - before) * 100;
-  if (Math.abs(d) < 0.05) return <span className="text-xs font-medium text-muted">No change</span>;
-  const good = cost ? d < 0 : d > 0;
-  return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${good ? "bg-good/12 text-good" : "bg-danger/12 text-danger"}`} title="Percentage points: the difference between the two percentages">
-      {d > 0 ? "+" : "−"}
-      {Math.abs(d).toFixed(1)} pp
-    </span>
-  );
-}
-
-/** One of a section's figures: its name (with what it means behind the "i"), the figure, its change and a line under it. */
+/** One of a section's figures: its name (with what it means behind the "i"), the figure and a line under it. */
 export function MiniTile({
   label,
   value,
   help,
-  change,
-  versus,
   note,
   signed,
   testid,
@@ -125,8 +79,6 @@ export function MiniTile({
   label: string;
   value: string | null;
   help?: ReactNode;
-  change?: ReactNode;
-  versus?: string;
   note?: ReactNode;
   /** A profit: green above 0, red below. */
   signed?: number | null;
@@ -144,12 +96,6 @@ export function MiniTile({
       <p className={`mt-1 truncate text-xl font-semibold tracking-[-0.01em] tabular-nums ${tone ? (TONE_TEXT[tone] ?? "") : ""}`} title={value ?? MISSING} data-testid={testid && `${testid}-value`}>
         {value ?? <span className="text-sm font-medium text-warn">{MISSING}</span>}
       </p>
-      {change && (
-        <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted">
-          {change}
-          {versus && <span>{versus}</span>}
-        </p>
-      )}
       {note && <p className="mt-1 text-xs text-muted">{note}</p>}
     </div>
   );

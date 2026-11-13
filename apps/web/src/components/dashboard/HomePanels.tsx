@@ -15,7 +15,6 @@ import { fmtMoney, fmtNum, fmtPct } from "@/lib/api";
 import { shownFigures, upToWords } from "./adFigures";
 import { Donut, type DonutSlice } from "./Charts";
 import { fmtDateTime, fmtDay, fmtMoneyCompact, fmtTimes, humanize, plural } from "./format";
-import { ChangeText } from "./HomeCards";
 import { LineChart } from "./LineChart";
 import { OrderName, TrafficSplitBar, TrafficSplitNote } from "./Modules";
 import { businessHealth } from "./Overview";
@@ -86,7 +85,7 @@ function HomeCard({ id, title, sub, icon, action, className = "", children }: { 
   );
 }
 
-/** A figure in a panel's row of three: label under the number, the change under that. */
+/** A figure in a panel's row: label under the number, and one more line under that (`change`) when it has one. */
 function Figure({ label, value, change }: { label: string; value: ReactNode; change?: ReactNode }) {
   return (
     <div className="min-w-0">
@@ -424,12 +423,12 @@ export function SalesPerformance({ ov, currency, onOpen }: { ov: Overview; curre
       action={<DetailsLink onClick={() => onOpen("sales")} />}
     >
       <div className="grid grid-cols-3 gap-3 divide-x divide-border">
-        <Figure label={total ? "Total sales" : "Net sales"} value={money(total ? s.current.totalSales! : s.current.netSales)} change={<ChangeText value={total ? s.deltas.totalSales : s.deltas.netSales} />} />
+        <Figure label={total ? "Total sales" : "Net sales"} value={money(total ? s.current.totalSales! : s.current.netSales)} />
         <div className="pl-3">
-          <Figure label="Orders" value={fmtNum(s.current.orders)} change={<ChangeText value={s.deltas.orders} />} />
+          <Figure label="Orders" value={fmtNum(s.current.orders)} />
         </div>
         <div className="pl-3">
-          <Figure label="Average order" value={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} change={<ChangeText value={s.deltas.averageOrderValue} />} />
+          <Figure label="Average order" value={s.current.averageOrderValue !== null ? money(s.current.averageOrderValue) : "—"} />
         </div>
       </div>
       <div className="mt-4 flex-1">
@@ -528,12 +527,12 @@ function PlatformAds({ ov, provider, state, manage }: { ov: Overview; provider: 
     <>
       <SourceLine provider={provider} source="platform" />
       <div className="grid grid-cols-3 gap-3 divide-x divide-border">
-        <Figure label="Ad spend" value={totals ? money(totals.spend) : "—"} change={<ChangeText value={p.deltas.spend} neutral />} />
+        <Figure label="Ad spend" value={totals ? money(totals.spend) : "—"} />
         <div className="pl-3">
-          <Figure label={totals?.linkClicks !== null ? "Link clicks" : "Clicks"} value={clicks !== null ? fmtNum(clicks) : "—"} change={<ChangeText value={p.deltas.linkClicks} />} />
+          <Figure label={totals?.linkClicks !== null ? "Link clicks" : "Clicks"} value={clicks !== null ? fmtNum(clicks) : "—"} />
         </div>
         <div className="pl-3">
-          <Figure label="ROAS" value={fmtTimes(totals?.roas ?? null)} change={<ChangeText value={p.deltas.roas} />} />
+          <Figure label="ROAS" value={fmtTimes(totals?.roas ?? null)} />
         </div>
       </div>
       {more.length > 0 && (
@@ -601,13 +600,13 @@ function ShopifyAds({ ov, provider, state, manage }: { ov: Overview; provider: A
       ) : (
         <>
           <div className="grid grid-cols-3 gap-3 divide-x divide-border">
-            <Figure label={`Sales from ${SITES[provider]}`} value={money(p.sales)} change={<ChangeText value={p.deltas.sales} />} />
+            <Figure label={`Sales from ${SITES[provider]}`} value={money(p.sales)} />
             <div className="pl-3">
-              <Figure label="Orders" value={fmtNum(p.orders)} change={<ChangeText value={p.deltas.orders} />} />
+              <Figure label="Orders" value={fmtNum(p.orders)} />
             </div>
             <div className="pl-3">
               {tagged ? (
-                <Figure label="From tagged ads" value={money(p.paidSales ?? 0)} change={<ChangeText value={p.deltas.paidSales ?? null} />} />
+                <Figure label="From tagged ads" value={money(p.paidSales ?? 0)} />
               ) : (
                 <Figure label="Share of sales" value={fmtPct(p.share)} />
               )}
@@ -677,12 +676,12 @@ function MarketingAds({ ov, provider, state, manage }: { ov: Overview; provider:
     <>
       <SourceLine provider={provider} source="marketing" />
       <div className="grid grid-cols-3 gap-3 divide-x divide-border">
-        <Figure label="Spend" value={or(t.spend, money)} change={g.previous ? <ChangeText value={g.deltas.spend} neutral /> : undefined} />
+        <Figure label="Spend" value={or(t.spend, money)} />
         <div className="pl-3">
-          <Figure label="Clicks" value={or(t.clicks, fmtNum)} change={g.previous ? <ChangeText value={g.deltas.clicks} /> : undefined} />
+          <Figure label="Clicks" value={or(t.clicks, fmtNum)} />
         </div>
         <div className="pl-3">
-          <Figure label="ROAS (its count)" value={or(t.roas, (n) => fmtTimes(n))} change={g.previous ? <ChangeText value={g.deltas.roas} /> : undefined} />
+          <Figure label="ROAS (its count)" value={or(t.roas, (n) => fmtTimes(n))} />
         </div>
       </div>
       <p className="mt-3 text-xs text-muted" data-testid="home-ads-marketing-more">
