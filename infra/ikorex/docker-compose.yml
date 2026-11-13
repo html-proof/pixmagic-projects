@@ -82,6 +82,9 @@ services:
       - pgdata:/var/lib/postgresql/data
       - pgsocket:/var/run/postgresql
       - pgspool:/var/spool/pgbackrest
+      # The second backup repository, on this server's own disk (env/postgres.env, PGBACKREST_REPO2_*):
+      # the write-ahead log goes to it from here, the backups from the backup container.
+      - pgbackups:/var/lib/pgbackrest-local
     shm_size: 256m
     networks: [internal]
     logging: *logging
@@ -100,7 +103,8 @@ services:
     mem_limit: 2g
     cpus: 2.0
 
-  # Backups off the server and the weekly restore test (postgres/backup-loop.sh, restore-test.sh).
+  # Backups off the server, a second copy of them on it when that is set up, and the weekly restore
+  # test (postgres/backup-loop.sh, restore-test.sh).
   backup:
     image: bizinsights-postgres:17.11
     user: postgres
@@ -110,6 +114,7 @@ services:
       - pgdata:/var/lib/postgresql/data
       - pgsocket:/var/run/postgresql
       - restoretest:/restore-test
+      - pgbackups:/var/lib/pgbackrest-local
     networks: [internal]
     logging: *logging
     restart: unless-stopped
@@ -217,5 +222,6 @@ volumes:
   pgdata:
   pgsocket:
   pgspool:
+  pgbackups:
   blobs:
   restoretest:
