@@ -1884,4 +1884,18 @@ describe("historical dates, up to 12 months at a time", () => {
     const prev = (await overview(a.headers, ws, store.id, "preset=custom&from=2025-01-01&to=2025-12-31")).json().previous;
     expect(prev).toMatchObject({ from: "2024-01-01", imported: false });
   });
+
+  it("offers a reconnect for full order history only to the stores of an app that declares it (SHOPIFY_APP_SCOPES)", async () => {
+    // Shopify approves read_all_orders app by app: a store of an app that has it can grant it by
+    // reconnecting; a store of one that hasn't is waiting on Shopify, with nothing to press.
+    const { a, ws, store } = await owner();
+    const other = await createStore(ws, "pix.myshopify.com", ALL_SCOPES, { timezone: TZ, shopifyAppKey: "pixmagic" });
+    ctx.setEnv({ SHOPIFY_APP_SCOPES: "pixmagic:read_all_orders" });
+    try {
+      expect((await overview(a.headers, ws, other.id)).json().data.history.access).toBe("reconnect");
+      expect((await overview(a.headers, ws, store.id)).json().data.history.access).toBe("awaiting_shopify");
+    } finally {
+      ctx.setEnv({ SHOPIFY_APP_SCOPES: "" });
+    }
+  });
 });
