@@ -227,14 +227,14 @@ const schema = z.object({
   STAFF_FROM_NAME: z.string().regex(HEADER_NAME_RE).max(64).default(""),
   /** Where the app's emails send people with questions ("contact support@..."). Empty: no such line. */
   SUPPORT_EMAIL: z.union([z.literal(""), z.string().email()]).default(""),
-  /** Local development only: deliver every email to this Mailpit instead of Amazon SES. */
+  /** Local development only: deliver every email to this Mailpit instead of the mail provider. */
   MAILPIT_URL: z.string().optional().default(""),
   /**
-   * Who sends the app's own email (invitations, alerts): "resend" or "ses". Empty: Resend when its
-   * key is set, else SES where it is configured (core/mail). Changing it needs no code change.
+   * Who sends the app's own email (invitations, alerts): "resend". Empty: Resend when its key is
+   * set, else nothing is sent and each email is a line in the log (core/mail).
    */
-  EMAIL_PROVIDER: z.enum(["", "resend", "ses"]).optional().default(""),
-  /** Resend API key (Secrets Manager, APP_SECRET_ARN). Sending-only access is enough. */
+  EMAIL_PROVIDER: z.enum(["", "resend"]).optional().default(""),
+  /** Resend API key (the server's env/app.env). Sending-only access is enough. */
   RESEND_API_KEY: z.string().optional().default(""),
   /** Signing secret (whsec_...) of the Resend webhook endpoint POST /api/webhooks/email/resend. */
   RESEND_WEBHOOK_SECRET: z.string().optional().default(""),

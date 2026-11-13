@@ -71,25 +71,25 @@ describe("request id", () => {
 });
 
 describe("version", () => {
-  const vars = ["APP_COMMIT", "APP_BUILT_AT", "APP_ENVIRONMENT", "AWS_LAMBDA_FUNCTION_VERSION"] as const;
+  const vars = ["APP_COMMIT", "APP_BUILT_AT", "APP_ENVIRONMENT"] as const;
   afterEach(() => {
     for (const k of vars) delete process.env[k];
     resetEnvCache();
   });
 
-  it("says which commit, build and Lambda version answer, without a session", async () => {
-    Object.assign(process.env, { APP_COMMIT: "12e50d69fcba7ef6188cea9ca1ea157e7306bb75", APP_BUILT_AT: "2026-10-17T09:00:00.000Z", APP_ENVIRONMENT: "production", AWS_LAMBDA_FUNCTION_VERSION: "59" });
+  it("says which commit and build answer, without a session", async () => {
+    Object.assign(process.env, { APP_COMMIT: "12e50d69fcba7ef6188cea9ca1ea157e7306bb75", APP_BUILT_AT: "2026-10-17T09:00:00.000Z", APP_ENVIRONMENT: "production" });
     resetEnvCache();
     const r = await ctx.app.inject({ method: "GET", url: "/version" });
     expect(r.statusCode).toBe(200);
-    expect(r.json()).toEqual({ app: "bizinsights", environment: "production", commit: "12e50d69fcba7ef6188cea9ca1ea157e7306bb75", builtAt: "2026-10-17T09:00:00.000Z", release: "59" });
+    expect(r.json()).toEqual({ app: "bizinsights", environment: "production", commit: "12e50d69fcba7ef6188cea9ca1ea157e7306bb75", builtAt: "2026-10-17T09:00:00.000Z" });
     expect(r.headers["cache-control"]).toBe("no-store");
   });
 
   it("answers locally too, with nothing to show", async () => {
     resetEnvCache();
     const r = await ctx.app.inject({ method: "GET", url: "/version" });
-    expect(r.json()).toEqual({ app: "bizinsights", environment: "test", commit: null, builtAt: null, release: null });
+    expect(r.json()).toEqual({ app: "bizinsights", environment: "test", commit: null, builtAt: null });
   });
 });
 

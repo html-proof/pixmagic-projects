@@ -1,6 +1,6 @@
 /**
  * The app's own transactional email (Team & Access invitations, alerts, staff notices), whatever
- * provider sends it: Resend (resend.ts), Amazon SES (apps/aws/src/sesMailer.ts), Mailpit locally.
+ * provider sends it: Resend (resend.ts), Mailpit locally.
  * A provider is picked by configuration (EMAIL_PROVIDER), never in the code that sends, so swapping
  * it needs no change to invitations. Merchants' own connected accounts are core/email, not this.
  */
