@@ -6,6 +6,7 @@ import { canManage, StoresPending, useApp } from "@/components/AppContext";
 import { SectionLayout, Skeleton } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
 import { Badge } from "@/components/dashboard/Primitives";
+import { Alert } from "@/components/ui";
 import { useApi } from "@/lib/api";
 import { Automations } from "@/components/whatsapp/Automations";
 import { Campaigns } from "@/components/whatsapp/Campaigns";
@@ -17,6 +18,7 @@ import { Setup } from "@/components/whatsapp/Setup";
 import { Templates } from "@/components/whatsapp/Templates";
 import type { WaOverview } from "@/components/whatsapp/types";
 import { CONNECTION_TONE, useWa, waHref, WhatsappIcon } from "@/components/whatsapp/WaUi";
+import { WA_OFF } from "@/components/whatsapp/waErrors";
 
 // WhatsApp Automation (docs/whatsapp.md): one page, its tabs in ?tab=. The page keeps the routing and
 // the overview every tab shares; each tab is a component in components/whatsapp/.
@@ -77,6 +79,7 @@ function WhatsappAutomation() {
   else {
     const reload = () => void overview.reload();
     const conn = data.connection && data.connection.status !== "disconnected" ? data.connection : null;
+    const off = !data.platform.evolution;
     body = (
       <>
         {/* The page's header as the Stitch design heads Marketing (screens 14–18): the title, one line, and the connection's one status word on the right. */}
@@ -92,7 +95,9 @@ function WhatsappAutomation() {
                   : `Connect ${data.store.name}'s WhatsApp to message customers about their orders, automatically and safely.`}
               </p>
             </div>
-            {conn ? (
+            {off ? (
+              <Badge tone="neutral">Switched off</Badge>
+            ) : conn ? (
               <Badge tone={CONNECTION_TONE[conn.status] ?? "neutral"}>{conn.statusLabel}</Badge>
             ) : (
               <Link href={waHref("setup")} className="btn-primary h-10">
@@ -101,6 +106,12 @@ function WhatsappAutomation() {
             )}
           </div>
         </div>
+        {/* The service is off on purpose (docs/whatsapp.md, "Cost"): said once, above every tab, so no button below reads as an outage. */}
+        {off && (
+          <div data-testid="wa-off">
+            <Alert kind="info">{WA_OFF} Nothing can be connected and no message is sent until it is back on. Your automations, templates and message history are kept.</Alert>
+          </div>
+        )}
         {tab === "overview" && <Overview base={base} overview={data} reload={reload} />}
         {tab === "setup" && <Setup base={base} overview={data} reload={reload} />}
         {tab === "messages" && <Messages base={base} overview={data} />}
