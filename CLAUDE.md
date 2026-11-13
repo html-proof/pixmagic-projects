@@ -2,7 +2,9 @@
 
 Conventions and layout: [docs/architecture.md](docs/architecture.md). The server's runbook:
 [docs/ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md](docs/ikorex-migration/PRODUCTION_DEPLOYMENT_GUIDE.md).
-AWS's (the frozen fallback): [docs/aws-deployment.md](docs/aws-deployment.md).
+What is left in AWS and why: [docs/ikorex-migration/LEAVING_AWS.md](docs/ikorex-migration/LEAVING_AWS.md)
+(once #397 is merged). [docs/aws-deployment.md](docs/aws-deployment.md) describes the AWS setup as
+it was; most of it is deleted.
 
 ## Production runs on the iKorex server (since 2026-11-13)
 
@@ -23,16 +25,17 @@ The owner wants every finished change live there. The road:
    it before saying so.
 
 - **A merge alone is live nowhere.** Deploy to AWS (`.github/workflows/aws-deploy.yml`) is switched
-  off in GitHub (the owner, 2026-11-13): after the move it reached no merchant and could only fail,
-  its smoke test asking the public address for the Lambda release. Leave it off: a run that got to
-  its migrate step would change the frozen database under AWS's old code. Turning it on again
-  (`gh workflow enable aws-deploy.yml`) is a step of going back to AWS, and the owner's to ask for.
-- **AWS is frozen, as the way back** ([ROLLBACK_PLAN.md](docs/ikorex-migration/ROLLBACK_PLAN.md))
-  until the owner says otherwise: reserved concurrency 0 on `insights-production-api`, `-cron` and
-  `-jobs`, the three EventBridge schedules disabled, the WhatsApp service at 0 tasks, GitHub
-  variables `AWS_SCHEDULES=off` and `AWS_WHATSAPP=off`. Its database holds the data as of the
-  switch. Don't undo any of it and don't write to RDS: two live copies would refresh the same
-  Shopify tokens and fight over the WhatsApp sessions.
+  off in GitHub (the owner, 2026-11-13) and has nothing left to deploy to. Leave it off.
+- **There is no way back to AWS.** The owner had AWS's side deleted the same day (from 07:14 UTC:
+  the App stack with the functions, queues and CloudFront, then the rest), after a last dump of
+  its database was put on the server (`~/bizinsights-archive/rds-final-20261113/`). Two things in
+  that account are still in use by production, so nothing may delete them until the owner says
+  each is replaced: **sign-in** (the Cognito pool, its app client and domains, the IAM user
+  `bizinsights-ikorex`: `AUTH_MODE=migrating`, most people's passwords are still checked there)
+  and **the backups** (the bucket `bizinsights-backups-<account>`, the IAM user
+  `bizinsights-backups`, the parameter `/bizinsights/ikorex/backup-cipher-pass`; the owner put
+  the move to R2 off on 2026-11-13). Google sign-in no longer goes through Cognito: the server
+  uses the app's own Google client since that day.
 - The server is shared and small (about 2.5 GB was free for bizinsights), with no monitoring
   stack: say so before a change that leans on one. What watches it: the Uptime check workflow
   (`.github/workflows/uptime.yml`, every 10 minutes from GitHub; a failed run emails the owner),
@@ -58,7 +61,7 @@ The owner wants every finished change live there. The road:
   another)? Make it a draft: `gh pr ready <n> --undo`. Its CI stops and its checks show as skipped;
   `gh pr ready <n>` runs them again. Never `gh run cancel` it: a cancelled run shows as failing
   checks, and the owner reads those as broken work.
-- Don't `cdk deploy` anything by hand: AWS is frozen (above).
+- Don't `cdk deploy` anything: the stacks are deleted, and a deploy would build them again.
 - A schema change ships with its migration (CI checks they match); `deploy.sh` applies it on the
   server before the new release starts.
 - Not ready for merchants yet? Merge it behind a flag in `apps/web/src/lib/features.ts` rather

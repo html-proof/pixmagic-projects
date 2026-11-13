@@ -1,5 +1,16 @@
 # Rollback plan: iKorex migration
 
+> **Since 2026-11-13 this plan is history: there is no way back to AWS.** Production moved to the
+> server at 06:03 UTC, and from 07:14 UTC the owner had AWS's side deleted (the App stack with the
+> functions, queues and CloudFront first), without the 14-day rollback period below. What going
+> wrong means now: `deploy.sh` puts the previous release back by itself; the database is restored
+> from the backups ([PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE.md), "Restoring the
+> database"), or, for the state at the move, from the last dump of RDS kept on the server in
+> `~/bizinsights-archive/rds-final-20261113/`. Two limits on going back a release: since release
+> `8fd49e1a5dc9` (the SMS and email module's 33 tables dropped) no release from before #390 can
+> run, and the server keeps only the newest three releases anyway. Those tables as they were on
+> 2026-11-13 06:48 UTC are in the first full backup, for a point-in-time restore to before 07:32 UTC.
+
 The rule that makes rollback possible: **AWS keeps running, untouched, until stage F**, and stage F
 waits for the owner's separate approval after a 14-day rollback period. Stage F ends with the AWS
 account closed (decision 4b, owner 2026-11-07), so it is the one stage with no way back: everything

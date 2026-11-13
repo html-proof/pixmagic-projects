@@ -3,6 +3,21 @@
 What has been tested, how, and with what result. Only runs that happened are recorded here; a
 criterion with no run says so. Newest first.
 
+## 2026-11-13: after the cutover, the same day (Google on the app's own client, three more ships)
+
+| UTC | What | Result |
+| --- | --- | --- |
+| 06:37 | `main` `dc325638ec67` shipped (#393, #390, #391): the first ship by the new road | One migration applied (69); `/messaging`, `/automations`, `/settings/email`, `/stop`, `/unsubscribe` 404; no rollback |
+| 07:08 | `main` `34b0400161f7` shipped (#395: the `www` redirect) | `www.bizinsights.io/login?next=…` 301 to the same address on `bizinsights.io`; a POST on `www` still served |
+| 07:12 | Deploy to AWS switched off in GitHub (the owner) | No run since |
+| 07:14 on | AWS's stacks deleted by the session the owner gave that to (LEAVING_AWS.md): no way back to AWS from here | The site unaffected |
+| 07:29 | Google: `https://bizinsights.io/auth/callback` added to the OAuth client `567753266621-ltq5…` (project `bizinsights-sign-in`), in the owner's Chrome | Google stopped answering `redirect_uri_mismatch` within a minute |
+| 07:31 | `GOOGLE_SIGNIN_CLIENT_ID` set in the server's `env/app.env` (its secret ends like one of the client's two enabled ones), `web` restarted | `GET /api/auth/oauth/google/start` redirects to Google on that client with that address, and Google answers the link with its sign-in page. **Not seen: a person signing in with Google this way** |
+| 07:33 | `main` `8fd49e1a5dc9` shipped alone (#394: the SMS and email module's 33 tables, one function, one column dropped) | One migration applied (70); no `sms_*` or `email_*` table but `email_deliveries`, the function and the column gone; 97 tables; no error in `web` or `worker`; `ff7c01c98186`, the last release that expected those tables, pruned by `deploy.sh` |
+
+Backups to R2: put off by the owner the same hour (Cloudflare wants a payment card to activate R2,
+even at $0). They stay on S3, so that bucket, its user and the passphrase's parameter stay in AWS.
+
 ## 2026-11-13: backups off the server, and the restore test
 
 Forty-five minutes after the cutover, on the owner's "Yes, set up backups" (to a new S3 bucket in the
