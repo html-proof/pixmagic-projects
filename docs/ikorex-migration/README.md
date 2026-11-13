@@ -37,7 +37,8 @@ for at least 8 GB and 4 cores. **The owner decided on 2026-11-13 to run it there
 production moved the same day:** since 06:03 UTC `bizinsights.io` is served by the server
 (`~/bizinsights`, the low-memory limits of `infra/ikorex/docker-compose.lean.yml`, about 600 MB
 used; the server's other containers untouched), through the Cloudflare tunnel `bizinsights`. AWS is
-frozen as the way back, its database as of the switch. Still missing on the server: backups off it,
+frozen as the way back, its database as of the switch. Backups leave the server since 06:48 UTC that
+day (an S3 bucket for now; restore test passed). Still missing on the server:
 monitoring, the deploy key for Deploy to iKorex
 ([MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md#2026-11-13-the-cutover-stage-d-from-the-owners-pc)).
 

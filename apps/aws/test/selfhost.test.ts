@@ -123,6 +123,29 @@ describe("request router", () => {
     expect(big.status).toBe(413);
   });
 
+  it("sends page and API reads that arrive through the edge on another name to the app's own, as CloudFront's function did", async () => {
+    const one = webHandler(echo, files, { trustedIpHeader: "cf-connecting-ip", maxBodyBytes: 100, canonicalHost: "bizinsights.io" });
+    const ask = (path: string, host: string | null, init: RequestInit = {}, edge = true) =>
+      one(new Request(`https://bizinsights.io${path}`, { ...init, headers: { ...(host ? { host } : {}), ...(edge ? { "cf-connecting-ip": "203.0.113.9" } : {}) } }), "172.18.0.5");
+
+    const www = await ask("/login?next=%2Fdashboard&shop=a.myshopify.com", "www.bizinsights.io");
+    expect(www.status).toBe(301);
+    expect(www.headers.get("location")).toBe("https://bizinsights.io/login?next=%2Fdashboard&shop=a.myshopify.com");
+    expect(www.headers.get("cache-control")).toBe("max-age=3600");
+    expect((await ask("/api/version", "WWW.bizinsights.io", { method: "HEAD" })).status).toBe(301);
+
+    // Its own name, with or without the edge: served.
+    expect(await (await ask("/dashboard", "bizinsights.io")).text()).toBe("page /dashboard");
+    // Webhooks and other writes don't follow redirects: served where they arrive.
+    expect((await ask("/api/webhooks/shopify", "www.bizinsights.io", { method: "POST", body: "{}" })).status).toBe(200);
+    // From inside the server (no edge header): Docker's health check, deploy.sh's checks, the WhatsApp service.
+    expect(await (await ask("/__health", "www.bizinsights.io")).text()).toBe("ok");
+    expect((await ask("/api/readyz", "127.0.0.1:8080", {}, false)).status).toBe(200);
+    expect(await (await ask("/dashboard", "web:8080", {}, false)).text()).toBe("page /dashboard");
+    // Without an own name configured (the other tests' handler), nothing is redirected.
+    expect((await call("/dashboard", { headers: { host: "www.bizinsights.io", "cf-connecting-ip": "203.0.113.9" } })).status).toBe(200);
+  });
+
   it("formats Cloudflare's location like the CloudFront viewer function did", () => {
     expect(cloudflareGeo(new Headers({ "cf-ipcountry": "NZ" }))).toBe("NZ||");
     expect(cloudflareGeo(new Headers())).toBeNull();

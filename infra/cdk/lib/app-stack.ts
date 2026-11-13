@@ -301,11 +301,17 @@ export class AppStack extends Stack {
     // `originLockRead` (docs/aws-deployment.md, "Origin lock"). Not CloudFront KeyValueStore: something would still have to copy the value
     // there (a custom resource, or the owner), and every request would pay for a lookup.
     const originLock = cfg.domain?.originLock;
+    // CloudFront takes a comment of at most 128 characters and refuses the function's update over
+    // a longer one ("The parameter Comment is too big"), which rolls the whole stack back: the
+    // one "enforce" deploy went that way on 2026-11-13. stacks.test.ts counts every comment.
+    const viewerComment = !cfg.domain
+      ? "Pass the viewer's address and host to the origin (overwriting anything the client sent)"
+      : originLock === "enforce"
+        ? `Only Cloudflare's requests are served; page requests on other names go to ${cfg.domain.name}`
+        : `Pass the viewer's address and host to the origin; page requests on other names go to ${cfg.domain.name}`;
     const viewer = new cloudfront.Function(this, "ViewerRequest", {
       functionName: `${prefix}-viewer-request`,
-      comment: cfg.domain
-        ? `Pass the viewer's address and host to the origin; page requests on other names go to ${cfg.domain.name}${originLock === "enforce" ? "; only Cloudflare's requests are served" : ""}`
-        : "Pass the viewer's address and host to the origin (overwriting anything the client sent)",
+      comment: viewerComment,
       runtime: cloudfront.FunctionRuntime.JS_2_0,
       code: cloudfront.FunctionCode.fromInline(
         viewerRequestCode(cfg.domain?.name, originLock ? { secret: SecretValue.secretsManager(originLockSecretName(cfg)).unsafeUnwrap(), enforce: originLock === "enforce", read: cfg.domain?.originLockRead ?? "first" } : undefined),

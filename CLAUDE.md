@@ -22,17 +22,20 @@ The owner wants every finished change live there. The road:
 4. The change is live only when `https://bizinsights.io/api/version` names the merged commit. Check
    it before saying so.
 
-- **A merge alone is live nowhere.** Deploy to AWS (`.github/workflows/aws-deploy.yml`) still runs
-  on `main`, reaches no merchant, and fails: its smoke test asks the public address for the Lambda
-  release, and the public address is the server. Don't "fix" that by pointing anything back at AWS.
+- **A merge alone is live nowhere.** Deploy to AWS (`.github/workflows/aws-deploy.yml`) is switched
+  off in GitHub (the owner, 2026-11-13): after the move it reached no merchant and could only fail,
+  its smoke test asking the public address for the Lambda release. Leave it off: a run that got to
+  its migrate step would change the frozen database under AWS's old code. Turning it on again
+  (`gh workflow enable aws-deploy.yml`) is a step of going back to AWS, and the owner's to ask for.
 - **AWS is frozen, as the way back** ([ROLLBACK_PLAN.md](docs/ikorex-migration/ROLLBACK_PLAN.md))
   until the owner says otherwise: reserved concurrency 0 on `insights-production-api`, `-cron` and
   `-jobs`, the three EventBridge schedules disabled, the WhatsApp service at 0 tasks, GitHub
   variables `AWS_SCHEDULES=off` and `AWS_WHATSAPP=off`. Its database holds the data as of the
   switch. Don't undo any of it and don't write to RDS: two live copies would refresh the same
   Shopify tokens and fight over the WhatsApp sessions.
-- The server is shared and small (about 2.5 GB was free for bizinsights), with no off-server
-  backups and no monitoring stack yet: say so before a change that leans on either.
+- The server is shared and small (about 2.5 GB was free for bizinsights), with no monitoring
+  stack and no uptime check yet: say so before a change that leans on either. Its database is
+  backed up to an S3 bucket (nightly, the log continuously; the guide says where the passphrase is).
 - Work left on a local branch or uncommitted in a worktree never reaches the server.
 - A change of only Markdown files or `docs/` has nothing to ship: its merge is done once it is on
   `main`. Its pull request still runs CI for about a minute (the first job finds nothing to test
