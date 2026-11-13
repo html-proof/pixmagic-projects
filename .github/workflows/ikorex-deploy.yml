@@ -165,8 +165,34 @@ jobs:
         if: env.STAGING == 'true'
         env: { SHIP_GATED: "1" }
         run: infra/ikorex/scripts/ship.sh send ikorex bizinsights-staging "$RELEASE" "${COMMIT:0:12}"
-      - name: Deploy to production (~/bizinsights)
+      # Production never goes back by itself. CI's runs on main don't finish in the order of their
+      # commits, and a docs-only merge starts none, so the run that gets here last isn't always the
+      # newest commit: on 2026-11-13 the run for 33688521 arrived after 21d1dd6c was live and put
+      # the older release back. A commit the live release already contains (GitHub's compare: nothing
+      # ahead, something behind) is left alone. Anything else deploys: the same commit again, a newer
+      # one, and whenever the site or GitHub gives no answer. Going back on purpose is a ship by hand
+      # (the guide's "Rolling back a release").
+      - name: Is production already on a newer commit?
+        id: newer
         if: env.PRODUCTION == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIVE_URL: ${{ vars.IKOREX_PRODUCTION_URL || 'https://bizinsights.io' }}
+        run: |
+          set -uo pipefail
+          live="$(curl -fsS -m 20 "$LIVE_URL/api/version" | sed -nE 's/.*"commit":"([0-9a-f]{40})".*/\1/p' || true)"
+          if [[ -z "$live" ]]; then echo "No commit from $LIVE_URL/api/version: deploying."; exit 0; fi
+          compared="$(curl -fsS -m 30 -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/compare/$live...$COMMIT?per_page=1" || true)"
+          ahead="$(printf '%s' "$compared" | sed -nE 's/.*"ahead_by": *([0-9]+).*/\1/p' | head -1)"
+          behind="$(printf '%s' "$compared" | sed -nE 's/.*"behind_by": *([0-9]+).*/\1/p' | head -1)"
+          echo "live ${live:0:12}, this run ${COMMIT:0:12}: ahead by ${ahead:-?}, behind by ${behind:-?}"
+          if [[ "${ahead:-}" == 0 && "${behind:-0}" -gt 0 ]]; then
+            echo "::notice::Production already runs ${live:0:12}, which contains ${COMMIT:0:12}: nothing deployed."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Deploy to production (~/bizinsights)
+        if: env.PRODUCTION == 'true' && steps.newer.outputs.skip != 'true'
         env: { SHIP_GATED: "1" }
         run: infra/ikorex/scripts/ship.sh send ikorex bizinsights "$RELEASE" "${COMMIT:0:12}"
       - name: Remove the key

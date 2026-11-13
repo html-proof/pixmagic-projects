@@ -179,10 +179,37 @@ cd ~/bizinsights && scripts/render-monitoring.sh && docker compose -f docker-com
 ## Deploy to iKorex (GitHub Actions)
 
 `.github/workflows/ikorex-deploy.yml` deploys `main`'s commits by itself once CI has passed on them,
-like Deploy to AWS: to staging while the repository variable `IKOREX_STAGING` is `on`, then to
-production while `IKOREX_PRODUCTION` is `on` (from the cutover). **Both are off until the setup below
-is done**, and until then every run skips (grey, not red). By hand: Actions → Deploy to iKorex → Run
-workflow, from `main`, target staging or production (its variable must be on too).
+like Deploy to AWS did: to staging while the repository variable `IKOREX_STAGING` is `on`, then to
+production while `IKOREX_PRODUCTION` is `on`. With both off every run skips (grey, not red). By
+hand: Actions → Deploy to iKorex → Run workflow, from `main`, target staging or production (its
+variable must be on too).
+
+**Production is on since 2026-11-13** (the owner: "Yes, set it up"; the setup below, done that day
+from the owner's PC). Staging stays off: the two copies don't fit on the server together. So:
+
+- A merge to `main` that starts a CI run is deployed by the workflow when that run passes, about
+  two minutes after it: no ship by hand. Check `https://bizinsights.io/api/version` as before.
+- A merge of only Markdown or `docs/` starts no CI run and deploys nothing, so `/api/version` keeps
+  naming the last commit that did.
+- Production never goes back by itself. CI's runs on `main` don't finish in the order of their
+  commits, so a run can arrive for a commit older than the live one; the workflow asks the site
+  which commit is live and leaves it alone when it already contains the run's (the step "Is
+  production already on a newer commit?"). Without that step, on its first day, the run for
+  33688521 put that release back over 21d1dd6c seven minutes after it went live; the two differed
+  only in `docs/`. Going back on purpose is a ship by hand
+  ([Rolling back a release](#rolling-back-a-release)).
+- A ship by hand still works (the owner's key, `ship.sh`), for the day GitHub is unreachable.
+  `deploy.sh` takes a lock in the project's folder (`.deploy.lock`), so a hand ship and a run that
+  arrive together go one after the other; the second waits up to 15 minutes, then gives up without
+  changing anything.
+- The workflow never touches `env/` or `.env`. A change that needs a new setting on the server is
+  still a hand step, before or after its release as the change says.
+- To stop it: `gh variable set IKOREX_PRODUCTION --body off`. To take the key away: delete its
+  line (the one ending `bizinsights-deploy`) from `~/.ssh/authorized_keys` on the server.
+
+The deploy key's fingerprint is `SHA256:ZvoWV4wuTsWFDExXup9ZzGvkB4W1cnu08YP4pjn6Nms`. The first run
+(`workflow_dispatch`, [43389313745](https://github.com/html-proof/pixmagic-projects/actions/runs/43389313745))
+took 21d1dd6c live in 1 minute 40 seconds, 23 seconds of it on the server, on GitHub's own runner.
 
 It runs `ship.sh` in two halves. The `build` job installs every dependency and runs
 `ship.sh pack` (the bundle with the UI, and `infra/ikorex` as committed); it never sees the key. The
@@ -221,10 +248,15 @@ Setup, once, after the first deploy by hand above has worked (stage B). In Git B
 
    The installed gate doesn't update itself: run the first command again whenever `ssh-gate.sh`
    changes.
-4. GitHub: the environment `ikorex`, its secret, and the private key gone from the PC:
+4. GitHub: the environment `ikorex`, open to `main` only (a workflow on any other branch that names
+   the environment is refused the secret), its secret, and the private key gone from the PC:
 
    ```bash
-   gh api -X PUT repos/html-proof/pixmagic-projects/environments/ikorex
+   printf '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' | gh api -X PUT repos/html-proof/pixmagic-projects/environments/ikorex --input -
+   ```
+
+   ```bash
+   gh api -X POST repos/html-proof/pixmagic-projects/environments/ikorex/deployment-branch-policies -f name=main -f type=branch
    ```
 
    ```bash
@@ -245,7 +277,10 @@ Setup, once, after the first deploy by hand above has worked (stage B). In Git B
    gh workflow run ikorex-deploy.yml --ref main -f target=staging
    ```
 
-6. At the cutover (stage D, step 6): `gh variable set IKOREX_PRODUCTION --body on`.
+6. Production: `gh variable set IKOREX_PRODUCTION --body on`, and a first run by hand with
+   `-f target=production`. (On 2026-11-13 step 5 was skipped: staging was stopped to make room for
+   production, and the first run went to production with a release that differed from the running
+   one only in `docs/`.)
 
 The host and user are the guide's (`deployer@103.146.112.176`); the variable `IKOREX_SSH_TARGET`
 (`user@host`) changes them. The host key is always the pinned one in `infra/ikorex/known_hosts`.
