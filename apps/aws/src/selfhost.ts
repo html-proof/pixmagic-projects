@@ -9,7 +9,6 @@ import { consume, CRON, runScheduled, type WorkerDeps } from "@app/worker";
 import { logger, reportUnscopedSystemQueries, warnHalfConfigured, withTimeout } from "@app/core";
 import { disconnectDb } from "@app/db";
 import { apiDeps } from "./app.js";
-import { roleCredentials } from "./awsClient.js";
 import { pruneEvolutionData } from "./evolutionDb.js";
 import { fsBlobs } from "./fsBlobs.js";
 import { chooseMailer } from "./mailers.js";
@@ -81,13 +80,12 @@ export interface SelfHostDeps extends WorkerDeps {
 }
 
 export function selfHostDeps(pool: pg.Pool, env: NodeJS.ProcessEnv = process.env): SelfHostDeps {
-  const credentials = roleCredentials(env);
   const coord = pgCoord(pool);
   return {
     coord,
     queues: pgQueues(pool),
     payloads: fsBlobs(env.BLOB_DIR || "/data/blobs"),
-    mailer: chooseMailer(env, credentials, fetch),
+    mailer: chooseMailer(env, fetch),
     // Every outbound call the API and the jobs make goes through this, so each gets a time limit.
     fetchImpl: withTimeout((input, init) => fetch(input, init)),
   };

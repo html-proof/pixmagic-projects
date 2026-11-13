@@ -1,7 +1,9 @@
 #!/bin/bash
 # setup-env.sh <project> <app url>: the first-time settings of a bizinsights project folder on the
 # iKorex server (~/bizinsights or ~/bizinsights-staging). Run once the release's files are there
-# (env/*.example) and export-env.mjs has written env/app.env.from-aws and env/evolution.env.from-aws:
+# (env/*.example). The app's secrets come from files env/app.env.from-aws and env/evolution.env.from-aws
+# beside them, if there are any (the move from AWS wrote them; a new copy of the server takes them from
+# the running project's env/app.env and env/evolution.env under those names):
 #
 #   ssh deployer@103.146.112.176 'bash -s -- bizinsights-staging https://staging.bizinsights.io' < infra/ikorex/scripts/setup-env.sh
 #

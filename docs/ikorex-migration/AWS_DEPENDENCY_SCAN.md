@@ -21,6 +21,14 @@ What counts: AWS's libraries (`aws4fetch`, `@aws-crypto/*`, `aws-cdk-lib`), its 
 settings (`AWS_*`, `COGNITO_*`, `SES_REGION`, `SES_CONFIGURATION_SET`, `*_SECRET_ARN`). A line that is
 only a comment doesn't count. Markdown and `docs/` don't count: they describe AWS, they run nothing.
 
+## Result after the SES mailer and the copy tools were removed (2026-11-13, later)
+
+**28 files, 134 lines**, all of them Cognito: its code in `apps/api`, its settings (`COGNITO_*`), its
+stand-in for the tests and the browser tests that use it. Gone since the result below: the SES
+mailer and the AWS client it signed with (`aws4fetch` is no longer a dependency of `apps/aws`), the
+pool's template `infra/aws/cognito.yaml`, the migration's own tools (the copies between RDS and the
+server, the secrets export) and Lambda's version number in `/api/version`.
+
 ## Result after AWS's deploy code was removed (2026-11-13, evening)
 
 **43 files, 196 lines.** Gone with AWS's side ([LEAVING_AWS.md](LEAVING_AWS.md)): the first two

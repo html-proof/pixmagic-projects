@@ -277,10 +277,10 @@ jobs:
       # What CI counts as code (its pass records), and the newer-push watcher started above.
       - name: Tests of the code key and the newer-push watcher
         run: node --test infra/runner/code-key.test.mjs infra/runner/stop-when-superseded.test.mjs
-      # The database copy to the iKorex server: its pinned host key and its checks (copy-db.sh itself
-      # runs against PostgreSQL in apps/aws/test/copyDb.test.ts).
-      - name: Tests of the iKorex database copy
-        run: node --test infra/ikorex/scripts/copy-db-lib.test.mjs
+      # The server's host key ship.sh pins (infra/ikorex/known_hosts) is the one in the
+      # administrator's guide.
+      - name: Test of the server's pinned host key
+        run: node --test infra/ikorex/scripts/host-key.test.mjs
       # What the Uptime check workflow runs every 10 minutes (.github/workflows/uptime.yml).
       - name: Tests of the uptime check
         run: node --test infra/uptime/check.test.mjs
