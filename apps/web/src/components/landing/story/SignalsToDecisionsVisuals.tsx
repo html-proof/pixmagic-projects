@@ -1,6 +1,5 @@
 "use client";
 import { motion, useTransform, type MotionValue } from "motion/react";
-import { ArrowUpRight } from "lucide-react";
 import {
   useEffect,
   useId,
@@ -135,7 +134,7 @@ const TEXT = "#F7F9FC";
 const MUTED = "#7D8693";
 
 /* ---------------------------------------------------------------------------------------------
- * 01 Sales: a line that draws itself over a dashed previous-period line.
+ * 01 Sales: a line that draws itself across the week.
  */
 
 /** Smooth Catmull-Rom curve through `pts`, plus dense samples so the leading dot can ride it. */
@@ -181,12 +180,11 @@ function yAt(curve: { xs: number[]; ys: number[] }, x: number) {
   return lerp(ys[lo], ys[hi], (x - xs[lo]) / span);
 }
 
-/** Two normalised (0..1) shapes: a growing week, and a flatter previous one. Not data. */
-const SALES_SHAPES = (() => {
+/** A normalised (0..1) shape: a growing week. Not data. */
+const SALES_SHAPE = (() => {
   const rnd = seeded(2417);
   const n = 22;
   const current: number[] = [];
-  const previous: number[] = [];
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
     current.push(
@@ -195,19 +193,14 @@ const SALES_SHAPES = (() => {
         0.1 * Math.sin(t * Math.PI * 5.2 + 0.4) +
         (rnd() - 0.5) * 0.06,
     );
-    previous.push(
-      0.2 +
-        0.16 * t +
-        0.08 * Math.sin(t * Math.PI * 5.2 - 0.6) +
-        (rnd() - 0.5) * 0.05,
-    );
+    // Every other draw is skipped: with them the line takes this shape.
+    rnd();
   }
-  return { current, previous };
+  return current;
 })();
 
 function salesGeometry({ w, h }: Size) {
   const top = 14;
-  // A lane under the lowest point of the previous-period line for its direct label.
   const bottom = 18;
   const left = 6;
   const right = 8;
@@ -217,27 +210,14 @@ function salesGeometry({ w, h }: Size) {
       left + (i / (vals.length - 1)) * (w - left - right),
       top + (1 - v) * plotH,
     ]);
-  const cur = smoothCurve(toPts(SALES_SHAPES.current));
-  const prev = smoothCurve(toPts(SALES_SHAPES.previous));
+  const cur = smoothCurve(toPts(SALES_SHAPE));
   const firstX = cur.xs[0];
   const lastX = cur.xs[cur.xs.length - 1];
   const area = `${cur.d}L${fx(lastX)},${fx(h)}L${fx(firstX)},${fx(h)}Z`;
   const grid = [0, 1, 2, 3].map((i) => top + (plotH * i) / 3);
   // Positions that reach markup unformatted are rounded: trig results may differ in the last bit
   // between the server's engine and the browser's, which would be a hydration mismatch.
-  // The previous-period label sits under the start of its line, below both lines: at the end it
-  // tangled with the dashed line's last dip and the current line crossing over it.
-  let prevLow = 0;
-  for (let i = 0; i < prev.xs.length && prev.xs[i] <= firstX + 150; i++)
-    if (prev.ys[i] > prevLow) prevLow = prev.ys[i];
-  const prevLabelY = Math.round(Math.min(h - 2, prevLow + 17));
-  // The end tag (~190px wide, right-aligned) sits above the line's highest point under it, not
-  // just above the end point: the line peaks shortly before the end and would cut through it.
-  let peak = h;
-  for (let i = 0; i < cur.xs.length; i++)
-    if (cur.xs[i] >= w - 200 && cur.ys[i] < peak) peak = cur.ys[i];
-  const tagTop = Math.round(Math.max(0, peak - 36));
-  return { cur, prev, area, grid, firstX, lastX, prevLabelY, tagTop };
+  return { cur, area, grid, firstX, lastX };
 }
 
 const WEEK = ["M", "T", "W", "T", "F", "S", "S"];
@@ -248,8 +228,6 @@ export function SalesVisual({ progress }: { progress: MotionValue<number> }) {
   const geo = useMemo(() => salesGeometry(size), [size]);
   const uid = useSvgId("sales");
   const [nodes, bind] = useNodes();
-  const tagOpacity = useTransform(progress, (v) => segment(v, 0.84, 1));
-  const tagY = useTransform(progress, (v) => (1 - segment(v, 0.84, 1)) * 6);
 
   useProgressWrites(
     progress,
@@ -259,7 +237,6 @@ export function SalesVisual({ progress }: { progress: MotionValue<number> }) {
       const x = lerp(geo.firstX, geo.lastX, draw);
       const y = yAt(geo.cur, x);
       const head = draw > 0 ? Math.min(1, draw * 8) : 0;
-      set(n.prev, "opacity", segment(v, 0, 0.24));
       set(n.clip, "width", draw > 0 ? x + 14 : 0);
       set(n.head, "transform", `translate(${fx(x)} ${fx(y)})`);
       set(n.head, "opacity", head);
@@ -335,26 +312,6 @@ export function SalesVisual({ progress }: { progress: MotionValue<number> }) {
               strokeDasharray="2 6"
             />
           ))}
-          <g ref={bind("prev")} opacity="0">
-            <path
-              d={geo.prev.d}
-              fill="none"
-              stroke="#A8B0BC"
-              strokeOpacity="0.55"
-              strokeWidth="1.5"
-              strokeDasharray="4 5"
-            />
-            <text
-              x={geo.firstX}
-              y={geo.prevLabelY}
-              className={MONO}
-              fontSize="10"
-              letterSpacing="0.14em"
-              fill={MUTED}
-            >
-              PREVIOUS PERIOD
-            </text>
-          </g>
           <g clipPath={`url(#${uid}-clip)`}>
             <path d={geo.area} fill={`url(#${uid}-area)`} />
             <path
@@ -382,15 +339,6 @@ export function SalesVisual({ progress }: { progress: MotionValue<number> }) {
             <circle r="4" fill={TEXT} stroke="#A798FF" strokeWidth="2" />
           </g>
         </svg>
-        <motion.div
-          className="absolute right-0"
-          style={{ top: geo.tagTop, opacity: tagOpacity, y: tagY }}
-        >
-          <span className="inline-flex items-center gap-1.5 rounded-lg border border-lp-positive/25 bg-lp-positive/10 px-2 py-1 font-lp-mono text-[10px] uppercase tracking-[0.12em] text-lp-positive">
-            <ArrowUpRight aria-hidden className="size-3" strokeWidth={2.4} />
-            Above previous period
-          </span>
-        </motion.div>
       </div>
 
       <div className="mt-2 grid grid-cols-7 text-center font-lp-mono text-[10px] tracking-[0.1em] text-lp-muted">

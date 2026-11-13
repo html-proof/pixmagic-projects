@@ -125,8 +125,8 @@ shipping, taxes and total sales as Shopify's sales reports for the same dates.
   the pages keep their other comparisons (each month beside the same month of earlier years in the
   yearly chart, days against an average day, business
   events in the Profit sheet, Meta against Google and campaign against campaign, the Google Ads
-  "Spending trend", a funnel segment or product against the others, and the Inventory and Staff
-  pages' own changes). The period isn't chosen: the comparison menu beside the
+  "Spending trend", and a funnel segment or product against the others); the Inventory and Staff
+  tiles show no change or earlier figure either. The period isn't chosen: the comparison menu beside the
   dates (previous period, previous year, custom dates) was removed at the owner's request on
   2026-11-13, and a link that still carries its `compare`, `cfrom` or `cto` is answered as if it
   didn't. The period before is the same number of days

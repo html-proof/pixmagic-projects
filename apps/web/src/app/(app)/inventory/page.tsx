@@ -4,19 +4,16 @@ import { useState } from "react";
 import { CircleCheck, Search } from "lucide-react";
 import { PageHeader } from "@/components/AppUi";
 import { LoadError } from "@/components/LoadError";
-import { ChangeTag, FigureTile } from "@/components/PageKit";
-import { fmtDay, fmtRelative } from "@/components/dashboard/format";
+import { FigureTile } from "@/components/PageKit";
+import { fmtRelative } from "@/components/dashboard/format";
 import { ConnectCard, SOURCE_NOTE, StockStatus, SyncNote, useCanAdjust, useInventory } from "@/components/inventory/InventoryUi";
 import { RangePicker, rangeQuery, RANGES, type RangeChoice } from "@/components/inventory/RangePicker";
-import { AttentionChips, DefinedMark, NeutralChange, SettingsLink, SuggestedOrderNote } from "@/components/inventory/StockKit";
+import { AttentionChips, DefinedMark, SettingsLink, SuggestedOrderNote } from "@/components/inventory/StockKit";
 import { AttentionRows } from "@/components/inventory/StockTable";
 import { fmtMoney, fmtNum, liveDataChanged, useApi, useLiveApi } from "@/lib/api";
 import type { InventorySettingsView, Kpi, OverviewAnswer } from "@/lib/inventory";
 import { INVENTORY_KPIS, KPI_INFO, type InventoryKpi } from "@app/shared/inventory";
 
-/** Figures where going up is good or bad; the rest are neutral. */
-const GOOD_UP = new Set<InventoryKpi>(["unitsToday", "unitsMonth", "turnover"]);
-const GOOD_DOWN = new Set<InventoryKpi>(["lowStock", "outOfStock"]);
 const MONEY = new Set<InventoryKpi>(["costValue", "retailValue"]);
 
 /**
@@ -191,26 +188,16 @@ function KpiTile({ id, kpi, currency, data, rangeLabel }: { id: InventoryKpi; kp
       />
     );
   }
-  const compared = id === "unitsToday" ? "vs yesterday so far" : id === "unitsMonth" ? "vs last month so far" : id === "turnover" ? "vs the period before" : `vs ${fmtDay(data.comparedWith)}`;
   const asOf = kpi.basis === "stock" ? (data.status.stockUpdatedAt ?? data.status.catalogSyncedAt) : data.status.catalogSyncedAt;
-  // A change only where there is something to compare with; otherwise the note says why not.
-  const change =
-    kpi.value === null || kpi.previous === null ? undefined : GOOD_UP.has(id) || GOOD_DOWN.has(id) ? <ChangeTag value={kpi.change} invert={GOOD_DOWN.has(id)} versus={compared} /> : <NeutralChange value={kpi.change} versus={compared} />;
   return (
     <FigureTile
       testId={`kpi-${id}`}
       title={info.label}
       icon={mark}
       value={fmtKpi(id, kpi.value, currency)}
-      change={change}
       sub={
         <>
           <span className="sr-only">{info.definition} </span>
-          {kpi.previous !== null && (
-            <span className="block">
-              Before: {fmtKpi(id, kpi.previous, currency)} ({compared})
-            </span>
-          )}
           {kpi.note && <span className="block">{kpi.note}</span>}
           {id === "turnover" && <span className="block">{rangeLabel}</span>}
           <span className="mt-1 block text-[11px]">{asOf ? `As of ${fmtRelative(asOf)}` : "Not synced yet"}</span>

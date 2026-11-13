@@ -20,9 +20,8 @@ import {
   type SessionFlag,
 } from "@app/shared/staff";
 import type { Tone } from "@/components/dashboard/Primitives";
-import { ChangeTag, FigureTile } from "@/components/PageKit";
+import { FigureTile } from "@/components/PageKit";
 import { overlay } from "@/components/AppUi";
-import { fmtPct } from "@/lib/api";
 import { fmtHours, fmtMoney } from "@/lib/staff";
 
 // ---------------------------------------------------------------------------------------------
@@ -145,10 +144,6 @@ export interface KpiData {
   compareLabel: string | null;
 }
 
-/** Costs going up isn't "good"; hours and staff aren't good or bad either: deltas stay neutral there. */
-const GOOD_UP = new Set(["amount_paid"]);
-const GOOD_DOWN = new Set(["outstanding", "pending_approvals"]);
-
 export function formatKpi(k: Pick<KpiData, "unit">, v: number | string | null, currency: string | null) {
   if (v === null || v === undefined) return "—";
   if (k.unit === "hours") return fmtHours(Number(v));
@@ -156,41 +151,16 @@ export function formatKpi(k: Pick<KpiData, "unit">, v: number | string | null, c
   return new Intl.NumberFormat().format(Number(v));
 }
 
-/** A change with no good or bad direction (more hours isn't good or bad by itself): muted, its words for screen readers. */
-function NeutralChange({ value, versus }: { value: number | null; versus: string }) {
-  if (value === null) return <span className="text-xs text-muted">Nothing to compare with</span>;
-  return (
-    <span className="text-xs font-medium text-muted tabular-nums">
-      <span className="sr-only">{value > 0 ? "up " : value < 0 ? "down " : "unchanged, "}</span>
-      <span aria-hidden>{value > 0 ? "+" : value < 0 ? "−" : ""}</span>
-      {fmtPct(Math.abs(value))}
-      <span className="sr-only"> {versus}</span>
-    </span>
-  );
-}
-
-/** One of the API's staff figures as the design's tile: its name, the figure, its change, what it was before and what it counts. */
+/** One of the API's staff figures as the design's tile: its name, the figure and what it counts. */
 export function KpiCard({ kpi, currency, asOf }: { kpi: KpiData; currency: string | null; asOf?: string | null }) {
   const value = formatKpi(kpi, kpi.value, currency);
-  const change =
-    kpi.compareLabel === null ? undefined : GOOD_UP.has(kpi.key) || GOOD_DOWN.has(kpi.key) ? (
-      <ChangeTag value={kpi.change} invert={GOOD_DOWN.has(kpi.key)} versus={kpi.compareLabel} missing="Nothing to compare with" />
-    ) : (
-      <NeutralChange value={kpi.change} versus={kpi.compareLabel} />
-    );
   return (
     <FigureTile
       testId={`kpi-${kpi.key}`}
       title={kpi.label}
       value={value}
-      change={change}
       sub={
         <>
-          {kpi.previous !== null && kpi.compareLabel && (
-            <span className="block">
-              Before: {formatKpi(kpi, kpi.previous, currency)} <span className="opacity-80">({kpi.compareLabel.replace(/^vs /, "")})</span>
-            </span>
-          )}
           <span className="block">{kpi.help}</span>
           {asOf && <span className="mt-1 block text-[11px]">Updated {new Date(asOf).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>}
         </>

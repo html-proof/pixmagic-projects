@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import { Download, Settings } from "lucide-react";
 import { useToast } from "@/components/AppUi";
 import { fmtDay } from "@/components/dashboard/format";
-import { actionError, api, fmtNum, fmtPct } from "@/lib/api";
+import { actionError, api, fmtNum } from "@/lib/api";
 import type { AdjustmentRow, InventorySettingsView, ProductDetail, StockRow } from "@/lib/inventory";
 import { AdjustDialog, confirmedMessage, type AdjustTarget } from "./AdjustDialog";
 import { useCanAdjust, useInventory, variantLabel } from "./InventoryUi";
@@ -256,15 +256,3 @@ export function DefinedMark({ definition }: { definition: string }) {
   );
 }
 
-/** A change with no good or bad direction, in ChangeTag's type but grey; words for screen readers. */
-export function NeutralChange({ value, versus }: { value: number | null; versus: string }) {
-  if (value === null) return <span className="text-xs text-muted">Nothing to compare with</span>;
-  return (
-    <span className="text-xs font-medium text-muted tabular-nums">
-      <span className="sr-only">{value > 0 ? "up " : value < 0 ? "down " : "unchanged, "}</span>
-      <span aria-hidden>{value > 0 ? "+" : value < 0 ? "−" : ""}</span>
-      {fmtPct(Math.abs(value))}
-      <span className="sr-only"> {versus}</span>
-    </span>
-  );
-}
