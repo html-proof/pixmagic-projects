@@ -3,6 +3,25 @@
 What has been tested, how, and with what result. Only runs that happened are recorded here; a
 criterion with no run says so. Newest first.
 
+## 2026-11-13: backups off the server, and the restore test
+
+Forty-five minutes after the cutover, on the owner's "Yes, set up backups" (to a new S3 bucket in the
+AWS account, rather than wait for R2). Before it, the same hour: `main` (`dc325638ec67`, with #390 and
+#393) shipped to the server by the new road, its one migration applied, no rollback.
+
+| UTC | Step | Result |
+| --- | --- | --- |
+| before 06:47 | Bucket `bizinsights-backups-<account>` (private, SSE, TLS only, versioned with 14 days of old versions) and IAM user `bizinsights-backups` (that bucket only) | Made |
+| before 06:47 | A new passphrase and access key into the server's `env/postgres.env`; the passphrase also into Parameter Store `/bizinsights/ikorex/backup-cipher-pass` | Names only on screen |
+| 06:47:21 | `ARCHIVE_MODE=off` removed, `postgres` recreated with the archive on | Healthy again in 10 s; the worker logged five "claiming jobs failed" in that gap and carried on |
+| 06:47:44 | `backup` container: `stanza-create`, `check` | Both completed |
+| 06:47:45–06:48:33 | The first full backup | 122.8 MB of database, 19 MB in the bucket, AES-256 |
+| 06:48:40 | `pg_stat_archiver` | 4 segments archived, 0 failed |
+| 06:48:55–06:49:36 | `restore-test.sh`: the newest backup restored from the bucket into a scratch PostgreSQL, compared with the live one | **PASS: 121,481 rows and 69 migrations on both sides**; the `backup` container stayed inside its 192 MB |
+
+From AWS's side the bucket held 2,647 objects, 21 MB. Not yet seen: a nightly run (02:30 UTC), the
+Sunday full backup with its own restore test, a restore on another host. There is no backup ping yet.
+
 ## 2026-11-13: the cutover (stage D), from the owner's PC
 
 The owner's instruction the same afternoon, after the rehearsal below: "when the copy is done make
@@ -46,7 +65,8 @@ running with 0 restarts.
   refused with 401, which is the app not knowing a removed instance). Whoever was pairing starts
   again, on the server. The service itself is healthy and answers the app.
 - `www.bizinsights.io` used to redirect to `bizinsights.io` (CloudFront's function did it). Through
-  the tunnel it serves the app under `www`: a redirect is still to be added.
+  the tunnel it served the app under `www` until the web handler took the redirect over the same
+  day (`selfhost.ts`, `canonicalHost`: GET and HEAD through the edge on any other name, 301).
 - No backups leave the server (no bucket; `ARCHIVE_MODE=off`), no monitoring stack, no external
   uptime check. RDS holds the data as of 05:59 UTC.
 - Deploy to AWS fails from here on (its smoke test asks the public address for the Lambda release).
@@ -257,7 +277,7 @@ capacity claim); everything that touches production (stages D-F).
 | 13 | File uploads and downloads work | Blob store tested (above); there are no customer file uploads in the app |
 | 14 | Customer permissions work | Unchanged code and database roles; not yet tested on the server |
 | 15 | Historical analytics intact | The copy and its table-by-table check tested against PostgreSQL ([DATABASE_MIGRATION_REPORT.md](DATABASE_MIGRATION_REPORT.md)); against RDS: not yet (stage B rehearsal, stage D) |
-| 16 | Backups and restore tested | Scripts written; not yet run (stage C) |
+| 16 | Backups and restore tested | **Running since 2026-11-13 06:48 UTC, restore test passed** (to an S3 bucket for now: [below](#2026-11-13-backups-off-the-server-and-the-restore-test)); the weekly test and the nightly run themselves not yet seen |
 | 17 | Monitoring and alerting work | Configured; not yet run (stage C) |
 | 18 | No cross-tenant leakage | The new tables carry no tenant data and the tenant role has no rights on them (checked); the copy carries every table's row-level security and policies unchanged (tested); on the server: not yet |
 | 19 | Existing iKorex websites keep working | Not yet (nothing has run on the server) |

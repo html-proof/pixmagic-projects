@@ -112,20 +112,37 @@ export interface WebOptions {
   trustedIpHeader: string | null;
   /** Bodies larger than this are refused (the Lambda function URL allowed 6 MB). */
   maxBodyBytes: number;
+  /**
+   * The app's own host (APP_URL's). GET and HEAD requests that come through the edge on any other
+   * name the tunnel answers on (www, a test name) get a 301 there, path and query unchanged:
+   * sessions, the CSRF check and OAuth callbacks all expect one origin. What CloudFront's
+   * viewer-request function did on AWS (infra/cdk/lib/viewer-request.ts). Other methods (webhooks,
+   * pixel events, API-key clients) are served where they arrive: they don't follow redirects. And
+   * so is everything from inside the server (Docker's health check, deploy.sh's checks, the
+   * WhatsApp service), which has no edge header and calls by container name or 127.0.0.1.
+   */
+  canonicalHost?: string | null;
 }
 
 /** The request router: /__health for Docker, the API under /api (and the bare paths Shopify calls), the UI otherwise. */
 export function webHandler(app: App, files: ((request: Request) => Response) | null, o: WebOptions) {
+  const canonical = o.canonicalHost?.toLowerCase() || null;
   return async (request: Request, remoteAddress: string | undefined): Promise<Response> => {
     const url = new URL(request.url);
     if (url.pathname === "/__health") return new Response("ok", { headers: { "cache-control": "no-store" } });
+    const edgeIp = o.trustedIpHeader ? request.headers.get(o.trustedIpHeader)?.trim() : undefined;
+    const viaEdge = !!edgeIp && isIP(edgeIp) !== 0;
+    if (canonical && viaEdge && (request.method === "GET" || request.method === "HEAD")) {
+      const host = request.headers.get("host")?.trim().toLowerCase();
+      if (host && host !== canonical) {
+        return new Response(null, { status: 301, headers: { location: `https://${canonical}${url.pathname}${url.search}`, "cache-control": "max-age=3600" } });
+      }
+    }
     const path = apiPath(url.pathname);
     if (path === null) return files ? files(request) : new Response("Not found", { status: 404 });
     if (Number(request.headers.get("content-length") ?? 0) > o.maxBodyBytes) return Response.json({ error: "too_large" }, { status: 413 });
     url.pathname = path;
     const headers = new Headers(request.headers);
-    const edgeIp = o.trustedIpHeader ? request.headers.get(o.trustedIpHeader)?.trim() : undefined;
-    const viaEdge = !!edgeIp && isIP(edgeIp) !== 0;
     const geo = viaEdge ? cloudflareGeo(request.headers) : null;
     for (const h of OWN_HEADERS) headers.delete(h);
     const ip = viaEdge ? edgeIp : remoteAddress?.replace(/^::ffff:/, "");
@@ -196,8 +213,12 @@ export async function startWeb(env: NodeJS.ProcessEnv = process.env): Promise<Ru
   const assets = env.ASSETS_DIR || join(here, "public");
   const files = existsSync(join(assets, "index.html")) ? staticSite(assets) : null;
   if (!files) logger.warn({ assets }, "no UI build here: only the API answers");
-  const handle = webHandler(app, files, { trustedIpHeader: env.TRUSTED_IP_HEADER === "none" ? null : (env.TRUSTED_IP_HEADER || "cf-connecting-ip").toLowerCase(), maxBodyBytes: 6 * 1024 * 1024 });
   const origin = new URL(env.APP_URL!).origin;
+  const handle = webHandler(app, files, {
+    trustedIpHeader: env.TRUSTED_IP_HEADER === "none" ? null : (env.TRUSTED_IP_HEADER || "cf-connecting-ip").toLowerCase(),
+    maxBodyBytes: 6 * 1024 * 1024,
+    canonicalHost: new URL(origin).host,
+  });
 
   const registry = new Registry();
   const requests = registry.counter("bizinsights_http_requests_total", "Requests answered, by kind (api or page) and status class.");
