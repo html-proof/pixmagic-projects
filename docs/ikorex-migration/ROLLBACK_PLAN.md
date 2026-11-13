@@ -1,5 +1,11 @@
 # Rollback plan: iKorex migration
 
+**Since 2026-11-13 there is no rollback to AWS.** On the owner's instruction the AWS side was deleted
+that day, an hour and a half after the cutover, without the 14-day rollback period this page plans
+for: the database, the functions and CloudFront are gone ([LEAVING_AWS.md](LEAVING_AWS.md)). What
+protects the data now is the server's own backups and the previous release `deploy.sh` keeps. The
+rest of this page is the plan as it stood, kept as the record.
+
 The rule that makes rollback possible: **AWS keeps running, untouched, until stage F**, and stage F
 waits for the owner's separate approval after a 14-day rollback period. Stage F ends with the AWS
 account closed (decision 4b, owner 2026-11-07), so it is the one stage with no way back: everything
