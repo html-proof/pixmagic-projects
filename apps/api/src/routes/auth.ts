@@ -882,11 +882,14 @@ export function authRoutes(app: App, deps: Deps) {
    * code decides whose password the account keeps: whoever enters it proves the inbox. Anyone can
    * sign up again with the address meanwhile (signUpAgain), so the pending sign-up may carry
    * someone else's password by the time the owner types the newest code; that password is then
-   * replaced with this one, and anything signed in with it ends.
+   * replaced with this one, and anything signed in with it ends. So the password is required: a
+   * confirmation without one would leave the account whatever password the sign-up holds.
    */
   app.post("/auth/signup/confirm", async (c) => {
     requireAppOrigin(c);
     const input = z.object({ email: emailSchema, code: codeSchema, password: passwordSchema.optional(), keep: keepSchema }).parse(await body(c));
+    // Before the code is looked at: a request without the password costs none of its guesses.
+    if (!input.password) throw new HttpError(400, "Enter the password you chose, then the code again.", "password_required");
     await limit(deps.coord, `rl:code:verify:${clientIp(c)}`, LIMITS.codeVerifyIp);
     // The code's minute and its five guesses (emailCode.ts) come before anything looks at the code:
     // a code past its minute is refused here whatever Cognito would still make of it.
@@ -928,7 +931,6 @@ export function authRoutes(app: App, deps: Deps) {
     }
     // Spent: the same code again, or another guess, starts from "ask for a new one".
     await discardSignUpCode(deps.coord, input.email);
-    if (!input.password) return c.json({ ok: true });
     const signIn = () =>
       deps.auth.passwordSignIn(input.email, input.password!).catch((err: unknown) => {
         if (isCognito(err, "NotAuthorizedException")) return null;

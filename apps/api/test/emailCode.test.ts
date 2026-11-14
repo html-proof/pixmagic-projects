@@ -56,7 +56,7 @@ const wrongCode = (right: string) => String((Number(right) + 1) % 1_000_000).pad
 
 const signup = (overrides: Record<string, unknown> = {}) =>
   post("/auth/signup", { name: "Ada Lovelace", email: "ada@example.com", password: "correct-horse", confirmPassword: "correct-horse", acceptTerms: true, ...overrides });
-const confirm = (code: string, extra: Record<string, unknown> = {}) => post("/auth/signup/confirm", { email: "ada@example.com", code, ...extra });
+const confirm = (code: string, extra: Record<string, unknown> = {}) => post("/auth/signup/confirm", { email: "ada@example.com", code, password: "correct-horse", ...extra });
 
 describe("the sign-up code: a minute, five guesses, one resend a minute", () => {
   it("tells the page when the code expires and when another may be asked for, on the server's clock", async () => {

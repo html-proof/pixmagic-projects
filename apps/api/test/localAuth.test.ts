@@ -182,6 +182,18 @@ describe("the app's own sign-in (localAuth)", () => {
     expect(store.accounts.get(r2.username)!.totpSecret).not.toContain(secret);
   });
 
+  it("asks for the authenticator app's code after an emailed sign-in code too", async () => {
+    const t = await signedUp();
+    const { secret } = await auth.associateTotp(t.accessToken);
+    await auth.verifyTotp(t.accessToken, totpCode(secret));
+    await auth.setTotpEnabled(t.accessToken, true);
+    const { session } = await auth.startEmailOtp("pat@example.com");
+    const r = await auth.answerEmailOtp("pat@example.com", session, mail.code("pat@example.com"));
+    if (!("challenge" in r)) throw new Error("expected the code step, not tokens");
+    expect(r.challenge).toBe("SOFTWARE_TOKEN_MFA");
+    expect("tokens" in (await auth.answerTotpChallenge(r.username!, r.session, totpCode(secret)))).toBe(true);
+  });
+
   it("finds someone Cognito knew (auth_identities) and lets them in through Forgot password, under the same sub", async () => {
     const sub = randomUUID();
     store.identities.push({ sub, username: sub, email: "old@example.com", method: "password" });

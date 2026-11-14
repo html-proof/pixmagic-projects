@@ -53,8 +53,12 @@ describe("creating an account with email and password", () => {
     expect(await systemDb.user.count()).toBe(0);
 
     expect((await post("/auth/login", { email: "ada@example.com", password: "correct-horse" })).json().error).toBe("unconfirmed");
-    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: "000000" })).json().error).toBe("invalid_code");
-    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") })).statusCode).toBe(200);
+    // Without the password chosen at sign-up the code isn't even looked at (nor a guess spent): the
+    // account would otherwise keep whatever password the sign-up holds, maybe someone else's.
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") })).json().error).toBe("password_required");
+    expect(ctx.auth.calls).not.toContain("confirmSignUp");
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: "000000", password: "correct-horse" })).json().error).toBe("invalid_code");
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "correct-horse" })).statusCode).toBe(200);
 
     const login = await post("/auth/login", { email: "ADA@example.com", password: "correct-horse" });
     expect(login.statusCode).toBe(200);
@@ -96,7 +100,7 @@ describe("creating an account with email and password", () => {
     expect(again.json().challenge.issuedAt).toBeGreaterThan(first.json().challenge.issuedAt);
     expect(ctx.auth.sent.filter((s) => s.kind === "signup")).toHaveLength(2);
 
-    await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") });
+    await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "correct-horse" });
     const taken = await signup();
     expect(taken.statusCode).toBe(409);
     expect(taken.json().error).toBe("account_exists");
@@ -118,8 +122,8 @@ describe("creating an account with email and password", () => {
     expect(again.json()).toMatchObject({ next: "confirm", email: "ada@example.com" });
     expect(ctx.auth.calls).toContain("adminDeleteUser");
     // The first sign-up's code went with it; the fresh one confirms the new sign-up.
-    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: firstCode })).json().error).toBe("invalid_code");
-    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") })).statusCode).toBe(200);
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: firstCode, password: "owners-password" })).json().error).toBe("invalid_code");
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "owners-password" })).statusCode).toBe(200);
     expect((await post("/auth/login", { email: "ada@example.com", password: "squatters-password" })).statusCode).toBe(401);
     const login = await post("/auth/login", { email: "ada@example.com", password: "owners-password" });
     expect(login.statusCode).toBe(200);
@@ -213,7 +217,7 @@ describe("creating an account with email and password", () => {
 
   it("never signs in, or sets a password, for a sign-up that was already confirmed", async () => {
     await signup();
-    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com") })).json()).toEqual({ ok: true });
+    expect((await post("/auth/signup/confirm", { email: "ada@example.com", code: ctx.auth.code("signup", "ada@example.com"), password: "correct-horse" })).json()).toMatchObject({ ok: true });
     // The code was spent: a second confirmation is refused before Cognito is asked, whatever code
     // and password come with it, so it can't be a way to try passwords outside the sign-in page's limits.
     for (const password of ["a-guessed-password", "correct-horse"]) {
@@ -460,7 +464,7 @@ describe("an account with no Cognito user yet", () => {
     const { user, ws } = await accountWithoutSignIn();
     const signup = await post("/auth/signup", { name: "Old Timer", email: "old@x.com", password: "fresh-password", confirmPassword: "fresh-password", acceptTerms: true });
     expect(signup.statusCode).toBe(200);
-    expect((await post("/auth/signup/confirm", { email: "old@x.com", code: ctx.auth.code("signup", "old@x.com") })).statusCode).toBe(200);
+    expect((await post("/auth/signup/confirm", { email: "old@x.com", code: ctx.auth.code("signup", "old@x.com"), password: "fresh-password" })).statusCode).toBe(200);
     const login = await post("/auth/login", { email: "old@x.com", password: "fresh-password" });
     expect(login.statusCode).toBe(200);
     expect(login.json().user.id).toBe(user.id);
