@@ -12,7 +12,8 @@
  * Every input is a figure bizinsights has: the store's sales records day by day, each product's cost
  * per item in Shopify, the ad accounts' daily spend and the owner's own costs (./expenses). Nothing
  * is estimated, and nothing unknown counts as 0: a figure that needs an input bizinsights doesn't
- * have is null, with every reason (`ProfitLossGap`). Net profit here is the dashboard's net profit
+ * have is null, with every reason (`ProfitLossGap`). The owner's costs list counts as it stands:
+ * profit takes off every cost in it, whether or not they have marked it complete (`costsComplete`). Net profit here is the dashboard's net profit
  * (netProfit in ./expenses) worked out day by day: the same costs, none counted twice.
  *
  * Money is added up in whole cents; a cost spread over days is rounded to the cent once per run of
@@ -101,9 +102,7 @@ export type ProfitLossGap =
   /** An ad account's spend isn't known for every day, or isn't in the store's currency (or is the demo's). */
   | "ad_spend"
   /** The member isn't shown the ad spend. */
-  | "ads_hidden"
-  /** The owner hasn't said the costs list holds every cost for these days (Settings → Costs). */
-  | "costs_not_complete";
+  | "ads_hidden";
 
 export const PROFIT_LOSS_GAP_WORDS: Record<ProfitLossGap, string> = {
   sales_not_imported: "Some of these days are before the orders bizinsights has imported, so their sales aren't known.",
@@ -113,7 +112,6 @@ export const PROFIT_LOSS_GAP_WORDS: Record<ProfitLossGap, string> = {
   uncosted_sales: "Some products sold have no cost per item in Shopify, so the product costs are short.",
   ad_spend: "A connected ad account's spend isn't known for every day, or isn't in the store's currency.",
   ads_hidden: "Profit takes off the ad spend, which you aren't shown.",
-  costs_not_complete: "Your costs list isn't marked complete for these days.",
 };
 
 /** A run of days worked out: the sales, every cost, and the profit at each step. */
@@ -182,6 +180,11 @@ export interface ProfitLoss {
   grossGaps: ProfitLossGap[];
   /** Why operating and net profit can't be given (empty when they are). */
   gaps: ProfitLossGap[];
+  /**
+   * Whether the owner has said their costs list holds every cost for these days (Settings → Costs).
+   * Profit is given either way, from the costs in the list; this only says whether it is marked whole.
+   */
+  costsComplete: boolean;
 }
 
 const cents = (n: number) => Math.round(n * 100);
@@ -284,7 +287,7 @@ export function profitAndLoss(days: readonly ProfitDay[], setup: ProfitSetup): P
     return d && d.imported ? figuresOf(d) : undefined;
   };
   const yours = costsOver(setup.costs, list.map((d) => d.day), setup.operatingWeekdays, figures);
-  if (!list.length || !expensesComplete(setup.completeFrom, { from, to })) gaps.push("costs_not_complete");
+  const costsComplete = list.length > 0 && expensesComplete(setup.completeFrom, { from, to });
   const fixedCosts = yours.byGroup.fixed;
   const belowOperating = yours.byGroup.non_operating;
   const variableCosts = productsWhole !== null && adSpend !== null ? (cents(productsWhole) + cents(adSpend) + cents(yours.byGroup.variable)) / 100 : null;
@@ -337,6 +340,7 @@ export function profitAndLoss(days: readonly ProfitDay[], setup: ProfitSetup): P
     afterKnownCosts,
     grossGaps,
     gaps,
+    costsComplete,
   };
 }
 

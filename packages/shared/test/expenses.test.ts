@@ -77,7 +77,7 @@ describe("what Settings → Costs may save", () => {
 
 describe("net profit", () => {
   const range = { from: "2026-10-01", to: "2026-10-31" };
-  const known = { revenue: 10_000, productCosts: 4_000, uncosted: 0, adSpend: 1_500.5, yourCosts: 1_200.25, complete: true };
+  const known = { revenue: 10_000, productCosts: 4_000, uncosted: 0, adSpend: 1_500.5, yourCosts: 1_200.25 };
 
   it("is revenue less the cost of goods, the ad spend and the owner's costs, when every one is known", () => {
     expect(netProfit(known)).toEqual({ value: 3_299.25, gaps: [] });
@@ -86,7 +86,7 @@ describe("net profit", () => {
   });
 
   it("is never given with an input missing, and says every reason", () => {
-    expect(netProfit({ ...known, productCosts: null, adSpend: null, complete: false })).toEqual({ value: null, gaps: ["product_costs", "ad_spend", "costs_not_complete"] });
+    expect(netProfit({ ...known, productCosts: null, adSpend: null })).toEqual({ value: null, gaps: ["product_costs", "ad_spend"] });
     expect(netProfit({ ...known, uncosted: 12 })).toEqual({ value: null, gaps: ["uncosted_sales"] });
     expect(netProfit({ ...known, adSpend: "hidden" })).toEqual({ value: null, gaps: ["ads_hidden"] });
     // A member not shown Shopify's product costs: net profit would give them away.
@@ -98,7 +98,6 @@ describe("net profit", () => {
   it("never takes Shopify's 0 for the cost of goods when no sale had a cost recorded", () => {
     // Shopify counts a sale with no cost per item at no cost: a store that records none gets 0.
     expect(netProfit({ ...known, productCosts: "not_recorded", uncosted: 10_000 })).toEqual({ value: null, gaps: ["no_cost_recorded"] });
-    expect(netProfit({ ...known, productCosts: "not_recorded", uncosted: 10_000, complete: false })).toEqual({ value: null, gaps: ["no_cost_recorded", "costs_not_complete"] });
   });
 
   it("counts the costs list complete only for dates from the day the owner said so", () => {

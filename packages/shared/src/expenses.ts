@@ -656,9 +656,7 @@ export type ProfitGap =
   /** A connected ad account's spend isn't known for every day, or isn't in the store's currency. */
   | "ad_spend"
   /** The member isn't shown the ad spend, which net profit would give away. */
-  | "ads_hidden"
-  /** The owner hasn't said the costs list is complete, or not from as early as these dates. */
-  | "costs_not_complete";
+  | "ads_hidden";
 
 export interface NetProfitInputs {
   /** What the store kept from its sales: total sales less taxes and duties (net sales + shipping + additional fees). */
@@ -677,10 +675,8 @@ export interface NetProfitInputs {
    * member may not see it.
    */
   adSpend: number | null | "hidden";
-  /** The owner's costs for the dates (expenseTotals). */
+  /** The owner's costs for the dates (expenseTotals): every cost in their list, marked complete or not. */
   yourCosts: number;
-  /** Whether that list is complete for the dates (expensesComplete). */
-  complete: boolean;
 }
 
 /**
@@ -695,7 +691,6 @@ export function netProfit(i: NetProfitInputs): { value: number | null; gaps: Pro
   else if (i.uncosted !== null && i.uncosted > 0) gaps.push("uncosted_sales");
   if (i.adSpend === "hidden") gaps.push("ads_hidden");
   else if (i.adSpend === null) gaps.push("ad_spend");
-  if (!i.complete) gaps.push("costs_not_complete");
   if (gaps.length) return { value: null, gaps };
   const cents = Math.round(i.revenue * 100) - Math.round((i.productCosts as number) * 100) - Math.round((i.adSpend as number) * 100) - Math.round(i.yourCosts * 100);
   return { value: cents / 100, gaps };
@@ -709,5 +704,4 @@ export const PROFIT_GAP_WORDS: Record<ProfitGap, string> = {
   uncosted_sales: "Some sales have no cost recorded in Shopify, so the cost of goods sold is short.",
   ad_spend: "A connected ad account's spend isn't known for every day of these dates, or isn't in the store's currency.",
   ads_hidden: "Net profit includes the ad spend, which you aren't shown.",
-  costs_not_complete: "Your costs list isn't marked complete for these dates (Settings → Costs).",
 };

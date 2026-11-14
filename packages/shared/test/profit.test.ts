@@ -139,16 +139,18 @@ describe("figures that can't be given", () => {
     expect(pl.gaps).toContain("sales_not_imported");
   });
 
-  it("gives no operating profit until the costs list is marked complete for the days, but says what is left after the known costs", () => {
+  it("gives profit from the costs in the list when it isn't marked complete, and says it isn't", () => {
     const pl = profitAndLoss([day("2026-11-02", 10_000, 3_000, 700)], setup({ completeFrom: null }));
-    expect(pl.operatingProfit).toBeNull();
-    expect(pl.netProfit).toBeNull();
-    expect(pl.gaps).toEqual(["costs_not_complete"]);
-    expect(pl.afterKnownCosts).toBe(10_000 - 3_000 - 700 - 1666.67);
-    // Gross profit needs no costs list.
+    expect(pl.gaps).toEqual([]);
+    expect(pl.costsComplete).toBe(false);
+    expect(pl.operatingProfit).toBe(10_000 - 3_000 - 700 - 1666.67);
+    expect(pl.netProfit).toBe(pl.operatingProfit);
+    expect(pl.afterKnownCosts).toBeNull();
     expect(pl.grossProfit).toBe(7_000);
-    // Complete only from a later day: not for these days.
-    expect(profitAndLoss([day("2026-11-02", 10_000, 3_000)], setup({ completeFrom: "2026-11-03" })).gaps).toEqual(["costs_not_complete"]);
+    // Complete only from a later day: not marked complete for these days, the profit the same.
+    const later = profitAndLoss([day("2026-11-02", 10_000, 3_000, 700)], setup({ completeFrom: "2026-11-03" }));
+    expect(later).toMatchObject({ costsComplete: false, operatingProfit: pl.operatingProfit });
+    expect(profitAndLoss([day("2026-11-02", 10_000, 3_000, 700)], setup()).costsComplete).toBe(true);
   });
 
   it("gives no gross profit when product costs aren't known whole", () => {

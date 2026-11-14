@@ -175,12 +175,12 @@ export function profitOf(ov: Overview, k: Costs, ads: { offered: boolean; shown:
   const revenue = Math.round((c.netSales + c.shipping + c.additionalFees) * 100) / 100;
   const adSpend = !ads.offered ? 0 : !ads.shown ? "hidden" : k.adState === "missing" ? 0 : k.adState === "partial" ? null : k.adSpend;
   const productCosts = !costsOn ? "hidden" : k.productState === "not_recorded" ? "not_recorded" : k.productCosts;
-  return { ...netProfit({ revenue, productCosts, uncosted: k.uncosted, adSpend, yourCosts: e.current.total, complete: e.complete }), revenue };
+  return { ...netProfit({ revenue, productCosts, uncosted: k.uncosted, adSpend, yourCosts: e.current.total }), revenue };
 }
 
 /**
  * What is left of the dates' sales after the costs bizinsights can see: Business profit overview's
- * figure. Net profit when every cost is known and the costs list is marked complete (`profitOf`), out of
+ * figure. Net profit when every cost is known (`profitOf`; the costs list as it stands), out of
  * revenue; otherwise net sales less the costs known, out of net sales.
  */
 export interface LeftOver {
