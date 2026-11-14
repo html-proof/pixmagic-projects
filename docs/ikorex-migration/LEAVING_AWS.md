@@ -192,11 +192,12 @@ Outside AWS, two loose ends of it:
   requests to the iKorex server"; done in the dashboard the same day). Seven dead records are
   deleted: `auth` (→ Cognito's deleted CloudFront domain), the three `acm-validations.aws` records
   of the deleted certificates (`_629bb…`, `_66e52….www`, `_eab66….auth`) and the three
-  `<token>._domainkey` → `dkim.amazonses.com` records of the deleted SES identity. 15 records are
-  left: the apex, `www` and `server-test` on the tunnel `bizinsights`, Cloudflare Email Routing
-  (three MX, SPF, `cf2024-1._domainkey`), Resend (`resend._domainkey`, `rsend`, `send`), `_dmarc`,
-  Google's site verification and `_domainconnect`. No Worker route, redirect rule or origin rule
-  exists in the zone; its one rule is the cache bypass for `/api/`.
+  `<token>._domainkey` → `dkim.amazonses.com` records of the deleted SES identity. On 2026-11-14
+  the owner had `server-test` deleted too (the spare name the tunnel was tested on before the
+  cutover). 13 records are left: the apex and `www` on the tunnel `bizinsights`, Cloudflare Email
+  Routing (three MX, SPF, `cf2024-1._domainkey`), Resend (`resend._domainkey`, `rsend`, `send`),
+  `_dmarc`, Google's site verification and `_domainconnect`. No Worker route, redirect rule or
+  origin rule exists in the zone; its one rule is the cache bypass for `/api/`.
 - **The last bill** arrives the month after: about US$66.52 had run up by 2026-11-13, before GST
   (US$29.00 of it the Business Support+ plan, which ended with the account).
 
