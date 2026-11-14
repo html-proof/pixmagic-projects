@@ -87,10 +87,9 @@ test("the gross profit card gives Business profit overview's net profit, or its 
   const f = profitCardFigures(ov, "AUD", noAds, true);
   assert.equal(f.net, 1100);
   assert.match(f.netNote, /as in Business profit overview/);
-  // The costs list not marked complete: no figure, and the overview's own words for why.
+  // The costs list not marked complete: the same figure, from the costs in the list.
   const open = profitCardFigures(overview(profit, { expenses: { total: 300, complete: false } }), "AUD", noAds, true);
-  assert.equal(open.net, null);
-  assert.equal(open.netNote, expenses.PROFIT_GAP_WORDS.costs_not_complete);
+  assert.equal(open.net, 1100);
   // Ads offered but not shown to this member: net profit would give the spend away.
   assert.equal(profitCardFigures(ov, "AUD", { offered: true, shown: false }, true).netNote, expenses.PROFIT_GAP_WORDS.ads_hidden);
   // A member not shown the owner's costs.
@@ -222,7 +221,7 @@ test("the Profit sheet's profit and loss names the account left out of a spend i
   assert.equal(adsNotUsableWords({ demo: true, currency: null, leftOut: [] }, "AUD"), "The Google Ads demo's spend is simulated.");
 });
 
-test("Left over is Business profit overview's figure: net profit once complete, else net sales less the costs known", () => {
+test("Left over is Business profit overview's figure: net profit when every cost is known, else net sales less the costs known", () => {
   const profit = { grossProfit: 1350, costOfGoodsSold: 650, netSalesWithCost: 2000, netSalesWithoutCost: 0, profitOnCosted: 1350, marginOnCosted: 0.675 };
   // Costs list complete: net profit out of revenue (2,050 − 650 − 300).
   const done = overview(profit);
@@ -231,9 +230,12 @@ test("Left over is Business profit overview's figure: net profit once complete, 
   assert.equal(net.value, 1100);
   assert.equal(net.base, 2050);
   assert.equal(leftOverWords(net), "Net profit");
-  // Not marked complete: net sales less what is known (2,000 − 650 − 300), never called profit.
+  // Not marked complete: still net profit, from the costs in the list.
   const open = overview(profit, { expenses: { total: 300, complete: false } });
-  const left = leftOverOf(open, costsOf(open, "AUD", false), "AUD", noAds, true);
+  assert.equal(leftOverOf(open, costsOf(open, "AUD", false), "AUD", noAds, true).value, 1100);
+  // Some sales with no cost per item: net sales less what is known (2,000 − 650 − 300), never called profit.
+  const partial = overview({ ...profit, netSalesWithCost: 1500, netSalesWithoutCost: 500 });
+  const left = leftOverOf(partial, costsOf(partial, "AUD", false), "AUD", noAds, true);
   assert.equal(left.isNet, false);
   assert.equal(left.value, 1050);
   assert.equal(left.base, 2000);

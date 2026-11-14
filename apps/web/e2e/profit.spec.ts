@@ -37,9 +37,9 @@ test("the owner manages the store's expenses on Profit & Loss, and the statement
   await expect(page.getByRole("heading", { name: "Profit & Loss", exact: true })).toBeVisible();
   await expect(page.getByTestId("pl-card-total-sales-value")).toHaveText("$550.00");
   await expect(page.getByTestId("pl-card-revenue-value")).toHaveText("$500.00");
-  // No costs list marked complete yet: profit isn't given, and the page says what is missing.
-  await expect(page.getByTestId("pl-card-profit-value")).toHaveText("Missing data");
+  // No costs list marked complete yet: profit isn't held back for it, and the page asks the owner to check the list.
   await expect(page.getByTestId("pl-complete")).toBeVisible();
+  await expect(page.getByText("isn't marked complete")).toHaveCount(0);
   // The Overview: what stands out, and the statement against the dates compared with.
   await expect(page.getByTestId("pl-tab-overview")).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("pl-insight-ads")).toContainText("No advertising spend in this period.");

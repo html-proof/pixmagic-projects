@@ -83,15 +83,13 @@ test("lays the store out day by day, and marks, filters and compares business ev
   await expect(totalOf(page, "after_ads")).toHaveText("$1,800.00");
   await expect(page.getByTestId("sheet-no-events")).toBeVisible();
 
-  // Profit and loss: revenue on the sheet's own rows; no costs list marked complete yet, so no
-  // operating profit, and the statement above the sheet says what is missing rather than show a figure.
+  // Profit and loss: revenue on the sheet's own rows. No costs list marked complete yet: that never
+  // holds profit back on its own, it is only asked about above the statement.
   await expect(totalOf(page, "revenue")).toHaveText("$2,100.00");
-  await expect(totalOf(page, "operating_profit")).toHaveText("—");
-  await expect(page.getByTestId("pl-card-profit-value")).toHaveText("Missing data");
-  await expect(page.getByTestId("pl-statement-gaps")).toContainText("Your costs list isn't marked complete");
-  // The same on Profit Analysis, which also says cash flow isn't read.
+  await expect(page.getByTestId("pl-complete")).toBeVisible();
+  await expect(page.getByText("isn't marked complete")).toHaveCount(0);
+  // Profit Analysis also says cash flow isn't read.
   await page.getByTestId("pl-tab-analysis").click();
-  await expect(page.getByTestId("pl-analysis-total")).toContainText("Missing data");
   await expect(page.getByTestId("pl-cash-flow")).toContainText("Not connected");
   await page.getByTestId("pl-tab-table").click();
 

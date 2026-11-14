@@ -86,16 +86,16 @@ async function brief() {
 describe("the profit and loss of a month", () => {
   it("takes each day's variable costs and its share of the month's fixed costs off its sales", async () => {
     const { a, ws, store } = await brief();
-    // Not complete yet: what is left after the known costs, never called profit.
+    // Not marked complete yet: profit from the costs in the list, and the list said not to be complete.
     let pl = ok(await call("GET", url(ws, store.id, `/profit?month=${MONTH}`), a.headers));
     expect(pl).toMatchObject({ currency: "INR", month: MONTH, setup: { productCosts: "known", ads: "none", completeFrom: null, costsCount: 5 } });
     const good = () => pl.days.find((d: { from: string }) => d.from === GOOD_DAY);
-    expect(good()).toMatchObject({ revenue: 10_000, productCosts: 3_000, variableCosts: 4_000, fixedCosts: 1666.67, grossProfit: 7_000, operatingProfit: null, gaps: ["costs_not_complete"], afterKnownCosts: 4333.33 });
+    expect(good()).toMatchObject({ revenue: 10_000, productCosts: 3_000, variableCosts: 4_000, fixedCosts: 1666.67, grossProfit: 7_000, operatingProfit: 4333.33, gaps: [], costsComplete: false, afterKnownCosts: null });
 
     ok(await call("PUT", url(ws, store.id, "/expenses/settings"), a.headers, { completeFrom: "2025-01-01" }));
     pl = ok(await call("GET", url(ws, store.id, `/profit?month=${MONTH}`), a.headers));
     // The brief: ₹10,000 − ₹4,000 − ₹50,000 ÷ 30 = ₹4,333.33.
-    expect(good()).toMatchObject({ revenue: 10_000, variableCosts: 4_000, fixedCosts: 1666.67, operatingProfit: 4333.33, netProfit: 4333.33, gaps: [] });
+    expect(good()).toMatchObject({ revenue: 10_000, variableCosts: 4_000, fixedCosts: 1666.67, operatingProfit: 4333.33, netProfit: 4333.33, gaps: [], costsComplete: true });
     // ₹2,000 − ₹600 − ₹1,666.67: a loss.
     expect(pl.days.find((d: { from: string }) => d.from === BAD_DAY)).toMatchObject({ revenue: 2_000, variableCosts: 600, operatingProfit: -266.67 });
     // A day with no sales still carries its share of the fixed costs.

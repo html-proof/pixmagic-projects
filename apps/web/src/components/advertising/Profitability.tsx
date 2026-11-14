@@ -137,7 +137,7 @@ export function ProfitSummary({ ov, full = false }: { ov: Overview; full?: boole
               testid="profit-net"
             />
             {profit.value === null && <p className="px-0.5 text-[11px] text-muted">{profit.gaps.map((g) => PROFIT_GAP_WORDS[g]).join(" ")}</p>}
-            {manageCosts && (ov.modules.expenses?.count === 0 || profit.gaps.includes("costs_not_complete")) && (
+            {manageCosts && (ov.modules.expenses?.count === 0 || ov.modules.expenses?.complete === false) && (
               <Link href="/settings/costs" className="px-0.5 text-xs font-medium text-accent hover:underline print:hidden">
                 {ov.modules.expenses?.count === 0 ? "Add your costs" : "Review your costs"}
               </Link>

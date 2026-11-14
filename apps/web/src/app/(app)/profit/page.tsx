@@ -318,24 +318,24 @@ function Tabs({ tab, onTab, actions }: { tab: Tab; onTab: (t: Tab) => void; acti
   );
 }
 
-/** Whether the costs list holds every cost: profit is called profit only for dates from that day. */
+/** Whether the costs list holds every cost: profit takes off the costs in it either way; this asks the owner to say so. */
 function Completeness({ s }: { s: StatementState }) {
   const data = s.data!;
   const [from, setFrom] = useState(data.setup.completeFrom ?? data.range.from);
   const { busy, run } = useAction();
-  if (!data.total.gaps.includes("costs_not_complete")) return null;
+  if (data.total.costsComplete) return null;
   async function save() {
     const ok = await run("complete", "mark your costs list complete", async () => {
       await api(`${s.base}/expenses/settings`, { method: "PUT", body: { completeFrom: from } });
-      return `Profit can now be shown for dates from ${fmtDay(from)}.`;
+      return `Costs list marked complete from ${fmtDay(from)}.`;
     });
     if (ok) await s.changed();
   }
   return (
     <div className="card border-warn/30 bg-warn/5 text-sm" data-testid="pl-complete">
-      <p className="font-medium">Profit shows once your expenses list is complete</p>
+      <p className="font-medium">Is your expenses list complete?</p>
       <p className="mt-0.5 text-muted">
-        Until you say the list holds every cost your store has, bizinsights shows what is left after the costs it knows and never calls it profit.
+        Profit here takes off the costs in your list. If a cost your store has isn&apos;t in it yet, add it so profit isn&apos;t overstated, then mark the list complete.
         {data.setup.completeFrom ? ` It is marked complete from ${fmtDay(data.setup.completeFrom)}, after these dates start.` : ""}
       </p>
       {s.canManage ? (

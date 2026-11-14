@@ -384,7 +384,10 @@ export function ProfitOverview({ ov, currency, adsOn, adsOffered, costsOn, manag
       </div>
       <p className="mt-4 text-xs text-muted" data-testid="profit-note">
         {isNet ? (
-          <>Revenue less {k.productSource === "cost_per_item" ? "product costs" : "Shopify's product costs"}, your ad spend and your costs (Settings → Costs), which you&apos;ve marked complete for these dates.</>
+          <>
+            Revenue less {k.productSource === "cost_per_item" ? "product costs" : "Shopify's product costs"}, your ad spend and your costs (Settings → Costs)
+            {ov.modules.expenses?.complete ? ", which you've marked complete for these dates." : ". Only the costs in your list are taken off."}
+          </>
         ) : (
           <>
             Not net profit
@@ -393,7 +396,7 @@ export function ProfitOverview({ ov, currency, adsOn, adsOffered, costsOn, manag
           </>
         )}
         {costsOn && k.productState === "known" && k.productSource === "cost_per_item" && <> {PER_ITEM_WORDS}</>}
-        {profit && manageCosts && (ov.modules.expenses!.count === 0 || gaps.includes("costs_not_complete")) && (
+        {profit && manageCosts && (ov.modules.expenses!.count === 0 || !ov.modules.expenses!.complete) && (
           <>
             {" "}
             <Link href="/settings/costs" className="font-medium text-accent hover:underline">{ov.modules.expenses!.count === 0 ? "Add your costs" : "Review your costs"}</Link>
