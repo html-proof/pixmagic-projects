@@ -84,12 +84,13 @@ test("lays the store out day by day, and marks, filters and compares business ev
   await expect(page.getByTestId("sheet-no-events")).toBeVisible();
 
   // Profit and loss: revenue on the sheet's own rows. No costs list marked complete yet: that never
-  // holds profit back on its own, it is only asked about above the statement.
+  // holds profit back on its own, it is only asked about (above Profit Analysis, not the table).
   await expect(totalOf(page, "revenue")).toHaveText("$2,100.00");
+  await expect(page.getByText("isn't marked complete")).toHaveCount(0);
+  // Profit Analysis asks about the list, and says cash flow isn't read.
+  await page.getByTestId("pl-tab-analysis").click();
   await expect(page.getByTestId("pl-complete")).toBeVisible();
   await expect(page.getByText("isn't marked complete")).toHaveCount(0);
-  // Profit Analysis also says cash flow isn't read.
-  await page.getByTestId("pl-tab-analysis").click();
   await expect(page.getByTestId("pl-cash-flow")).toContainText("Not connected");
   await page.getByTestId("pl-tab-table").click();
 
