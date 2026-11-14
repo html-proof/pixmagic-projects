@@ -98,7 +98,8 @@ Checked and written down in [MIGRATION_TEST_REPORT.md](MIGRATION_TEST_REPORT.md)
 ## Rehearsed before cutover
 
 - Restore of the latest off-server backup into a fresh container (stage C, weekly after that).
-- The DNS switch and its reverse, on `staging.bizinsights.io`.
+- The DNS switch and its reverse, on `staging.bizinsights.io`. (Not done: that name never got a
+  DNS record, and the staging copy was deleted on 2026-11-14.)
 - The copy back, timed, as a full-size round trip: `copy-db.mjs --rehearsal --keep` (production's
   copy kept in the staging project), then `copy-db-back.mjs --rehearsal` (that copy into throwaway
   databases on RDS, compared, dropped). Built and tested against PostgreSQL on the owner's PC
