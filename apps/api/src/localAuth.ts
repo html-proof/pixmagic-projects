@@ -444,7 +444,8 @@ export function localAuth(deps: LocalAuthDeps): LocalAuth {
         if (!a || !sub || sub !== a.sub) throw err("NotAuthorizedException", "Invalid session for the user.");
         await checkCode(a, "otp", code);
         await coord.take(`la:otp:${session}`);
-        return { tokens: await tokensFor(a) };
+        // The emailed code stands in for the password only: two-step verification still asks.
+        return signedIn(a);
       }),
     refresh: (refreshToken, username) =>
       guard(async () => {

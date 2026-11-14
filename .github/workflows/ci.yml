@@ -93,8 +93,11 @@ jobs:
   tested:
     name: Already passed on this code?
     # Not on a draft pull request (top of this file): it would wait for the PC's runner, and the
-    # checks and e2e jobs skip there anyway.
-    if: ${{ !github.event.pull_request.draft }}
+    # checks and e2e jobs skip there anyway. Nor, while SELF_HOSTED_RUNNER is set, on a pull request
+    # from a fork: the repository is public, and its code would run on the owner's PC.
+    if: >-
+      ${{ !github.event.pull_request.draft
+      && (vars.SELF_HOSTED_RUNNER == '' || github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
     timeout-minutes: 5
     # This job failing only means nothing was confirmed: the checks and e2e jobs then run in full,
@@ -206,8 +209,11 @@ jobs:
   checks:
     name: Lint, typecheck, unit & integration tests, build
     needs: tested
-    # Not on a draft pull request (top of this file); the e2e job then skips too.
-    if: ${{ !cancelled() && needs.tested.outputs.checks != 'true' && !github.event.pull_request.draft }}
+    # Not on a draft pull request (top of this file); the e2e job then skips too. Nor on a fork's
+    # pull request while SELF_HOSTED_RUNNER is set (tested job).
+    if: >-
+      ${{ !cancelled() && needs.tested.outputs.checks != 'true' && !github.event.pull_request.draft
+      && (vars.SELF_HOSTED_RUNNER == '' || github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ${{ fromJSON(vars.SELF_HOSTED_RUNNER && (github.event_name == 'push' && vars.SELF_HOSTED_MAIN_RUNNER || vars.SELF_HOSTED_RUNNER) || '"ubuntu-latest"') }}
     # statuses: write for the pass records (ci/passed-checks, ci/passed-integration); actions: write
     # for the step that stops this run when a newer push makes it useless.
@@ -438,7 +444,8 @@ jobs:
     # tests passed on this code too, or a pull request doesn't need them (tested job).
     if: >-
       ${{ !cancelled() && needs.tested.outputs.e2e != 'true'
-      && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.tested.outputs.checks == 'true')) }}
+      && (needs.checks.result == 'success' || (needs.checks.result == 'skipped' && needs.tested.outputs.checks == 'true'))
+      && (vars.SELF_HOSTED_RUNNER == '' || github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     # statuses: write for the pass record (ci/passed-e2e); pull-requests: read and actions: write as
     # in the checks job (a job's own list leaves out everything it doesn't name, the workflow's too).
     permissions:
