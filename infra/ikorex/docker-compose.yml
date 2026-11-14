@@ -195,8 +195,8 @@ services:
     mem_limit: 1g
     cpus: 1.0
 
-  # The only way in: an outbound tunnel to Cloudflare. Its public hostnames (bizinsights.io → http://web:8080,
-  # staging and Grafana behind Cloudflare Access) are set on the tunnel in Cloudflare's dashboard.
+  # The only way in: an outbound tunnel to Cloudflare. TUNNEL_URL (env/cloudflared.env) sends every name
+  # it receives to http://web:8080; the zone's DNS records (the apex and www) say which names those are.
   cloudflared:
     image: cloudflare/cloudflared:2026.10.7
     command: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run"]
