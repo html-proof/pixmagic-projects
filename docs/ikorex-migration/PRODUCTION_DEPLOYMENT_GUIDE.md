@@ -25,8 +25,7 @@ Accounts and keys (owner, in each provider's console):
 | What | Where | Goes into |
 | --- | --- | --- |
 | A tunnel named `bizinsights` | Cloudflare → Zero Trust → Networks → Tunnels → Docker | `env/cloudflared.env` `TUNNEL_TOKEN` |
-| Public hostname `staging.bizinsights.io` → `http://web:8080` (staging project), behind a Cloudflare Access policy (owner's email) | the tunnel's Public Hostnames; Zero Trust → Access → Applications | — |
-| Public hostname `grafana.bizinsights.io` → `http://grafana:3000`, behind Access | same | — |
+| Public hostnames `staging.bizinsights.io` and `grafana.bizinsights.io`, behind Cloudflare Access. **Never made**: the tunnel runs by token with `TUNNEL_URL=http://web:8080`, so it has no public hostnames in the dashboard (every name pointed at it reaches production's `web`), Zero Trust Access was never set up on the account, and monitoring doesn't fit on the server. The zone's tunnel records are the apex and `www` only | — | — |
 | An R2 bucket `bizinsights-backups` and an API token (Object Read & Write, this bucket only). **Not made: production keeps its backups on the server's own disk ([Backups](#backups))** | Cloudflare → R2 | `env/postgres.env` `PGBACKREST_REPO1_*` |
 | A backup passphrase (`openssl rand -base64 48`), also in the owner's password manager | — | `env/postgres.env` `PGBACKREST_REPO1_CIPHER_PASS` |
 | Two checks: the nightly backup ping, and `https://bizinsights.io/api/readyz` every 5 minutes | healthchecks.io / UptimeRobot (free tiers) | `env/postgres.env` `BACKUP_PING_URL` |
@@ -126,7 +125,8 @@ chmod 600 *.env
   Merge them into `app.env` / `evolution.env` on the server, then delete the `.from-aws` files.
 
 `infra/ikorex/scripts/setup-env.sh` does the copying, the passwords and the merge in one go, and
-prints names and counts only (how the staging copy was set up on 2026-11-13). After the two
+prints names and counts only (how the staging copy was set up on 2026-11-13; that copy was deleted
+on 2026-11-14, see [Deploying a commit](#deploying-a-commit)). After the two
 `export-env.mjs` commands above:
 
 ```bash
@@ -150,7 +150,7 @@ ARCHIVE_MODE=off
 PostgreSQL keeps every write-ahead log file for a bucket that isn't there, until the disk is full.
 Remove that line when the bucket is set, and restart `postgres`. With these limits two full copies
 don't fit side by side: stop staging (`docker compose -p bizinsights-staging stop`) before
-production starts. Monitoring (`docker-compose.monitoring.yml`, another 1.5 GB of limits) doesn't
+production starts (done at the cutover on 2026-11-13; the stopped copy was deleted on 2026-11-14). Monitoring (`docker-compose.monitoring.yml`, another 1.5 GB of limits) doesn't
 fit either; the external checks in the table above stand in for it.
 
 **From a Windows PC.** `ship.sh` sends the working copy, so `infra/ikorex/**` is pinned to Unix line
@@ -180,6 +180,12 @@ health, `/api/readyz`, `/api/version`. A failure puts the previous image back an
 
 Staging is the same with the project name: `ship.sh deployer@103.146.112.176 bizinsights-staging`
 (its own folder `~/bizinsights-staging`, its own env files and volumes; `SCHEDULES=off` always).
+**There is no staging copy now.** The one set up on 2026-11-13 was stopped at the cutover, and the
+owner had it deleted on 2026-11-14 (its six containers, five volumes, network and folder, by name;
+production's untouched). It held a copy of production's data. A new one starts from `setup-env.sh`
+again, needs production stopped first (the two don't fit side by side), and reaching it on
+`staging.bizinsights.io` needs a DNS record and a tunnel of its own: production's tunnel sends every
+name it receives to production's `web`.
 
 Monitoring, once:
 
@@ -196,7 +202,8 @@ hand: Actions → Deploy to iKorex → Run workflow, from `main`, target staging
 variable must be on too).
 
 **Production is on since 2026-11-13** (the owner: "Yes, set it up"; the setup below, done that day
-from the owner's PC). Staging stays off: the two copies don't fit on the server together. So:
+from the owner's PC). Staging stays off: the two copies don't fit on the server together, and since
+2026-11-14 there is no staging copy on the server to deploy to (`IKOREX_STAGING` stays unset). So:
 
 - A merge to `main` that starts a CI run is deployed by the workflow when that run passes, about
   two minutes after it: no ship by hand. Check `https://bizinsights.io/api/version` as before.

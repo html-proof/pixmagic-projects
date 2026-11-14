@@ -211,8 +211,11 @@ Same rule as today: everything reaches the server from GitHub `main`, never by h
 
 The runner's SSH key is added only after the server's administrator agrees, restricted to this. The
 GitHub workflow that calls `ship.sh` from `main` comes with stage B, once there is a server to reach.
-Staging is a second Compose project (`bizinsights-staging`, its own volumes and database) on
-`staging.bizinsights.io` behind Cloudflare Access.
+Staging was planned as a second Compose project (`bizinsights-staging`, its own volumes and
+database) on `staging.bizinsights.io` behind Cloudflare Access. The project ran on the server on
+2026-11-13 without the hostname (never given a DNS record; Access never set up), was stopped for the
+cutover and deleted on 2026-11-14; there is no staging now
+([PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE.md#deploying-a-commit)).
 
 ## Isolation from the other workloads
 
